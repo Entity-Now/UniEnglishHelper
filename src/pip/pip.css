@@ -1,0 +1,68 @@
+html,
+body,
+#root {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--ueh-bg, #0b0d12);
+  color: var(--ueh-fg, #f5f7fb);
+  font-family: var(--ueh-font, system-ui, sans-serif);
+}
+
+.ueh-pip {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 12px;
+  box-sizing: border-box;
+  gap: 8px;
+}
+
+.ueh-cue-en {
+  font-size: 18px;
+  line-height: 1.4;
+}
+
+.ueh-cue-tr {
+  font-size: 15px;
+  color: #9ecbff;
+  opacity: 0.9;
+}
+
+.ueh-word {
+  cursor: pointer;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.3);
+}
+
+.ueh-word:hover {
+  background: rgba(31, 111, 235, 0.35);
+}
+
+.ueh-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ueh-toolbar button {
+  background: #1f6feb;
+  color: #fff;
+  border: 0;
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.ueh-meta {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.ueh-panel {
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  padding: 8px;
+  font-size: 13px;
+  white-space: pre-wrap;
+}

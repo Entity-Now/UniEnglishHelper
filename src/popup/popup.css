@@ -1,0 +1,264 @@
+body {
+  margin: 0;
+  width: 360px;
+  min-height: 280px;
+  max-height: 560px;
+  font-family: var(--rf-font-sans);
+  background: var(--rf-background);
+  color: var(--rf-foreground);
+}
+
+.popup {
+  display: flex;
+  flex-direction: column;
+  min-height: 280px;
+}
+
+.popup-main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 20px 14px;
+}
+
+.popup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.popup-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.popup-brand img {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+}
+
+.popup-version {
+  font-size: 12px;
+  color: var(--rf-muted-foreground);
+}
+
+.popup .status {
+  font-size: 12px;
+  line-height: 1.45;
+  min-height: 2.6em;
+  color: var(--rf-muted-foreground);
+  background: var(--rf-secondary);
+  border: 1px solid var(--rf-border);
+  border-radius: var(--rf-radius);
+  padding: 8px 10px;
+}
+
+.popup .row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.popup button {
+  flex: 1;
+  min-width: 0;
+  background: var(--rf-primary);
+  color: var(--rf-primary-foreground);
+  border: 0;
+  border-radius: var(--rf-radius);
+  padding: 9px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.popup button.brand {
+  background: var(--rf-brand);
+  color: var(--rf-brand-foreground);
+}
+
+.popup button.secondary {
+  background: var(--rf-secondary);
+  color: var(--rf-secondary-foreground);
+  border: 1px solid var(--rf-border);
+  font-weight: 500;
+}
+
+.popup button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.popup button:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.popup-hints {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 11px;
+  color: var(--rf-muted-foreground);
+  line-height: 1.5;
+}
+
+.popup-footer {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--rf-footer);
+  border-top: 1px solid var(--rf-border);
+}
+
+.popup-footer a,
+.popup-footer button.linkish {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--rf-foreground);
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 500;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+
+.popup-footer a:hover,
+.popup-footer button.linkish:hover {
+  background: color-mix(in srgb, var(--rf-foreground) 8%, transparent);
+}
+
+.banner-warn {
+  background: color-mix(in srgb, var(--rf-brand) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--rf-brand) 45%, transparent);
+  border-radius: var(--rf-radius);
+  padding: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* Vocab panel */
+.popup-vocab .popup-main {
+  max-height: 480px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.vocab-stats {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--rf-muted-foreground);
+}
+
+.vocab-stats span {
+  background: var(--rf-secondary);
+  border: 1px solid var(--rf-border);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.vocab-search {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--rf-border);
+  background: var(--rf-secondary);
+  color: var(--rf-foreground);
+  border-radius: var(--rf-radius);
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.vocab-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.vocab-filters button {
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  font-size: 11px;
+}
+
+.vocab-list {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 120px;
+  max-height: 320px;
+  padding-right: 2px;
+}
+
+.vocab-item {
+  border: 1px solid var(--rf-border);
+  border-radius: var(--rf-radius);
+  padding: 8px 10px;
+  background: var(--rf-card);
+}
+
+.vocab-item-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.vocab-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 999px;
+}
+
+.vocab-badge-new {
+  background: color-mix(in srgb, #f5c542 28%, transparent);
+  color: #f5c542;
+}
+
+.vocab-badge-learning {
+  background: color-mix(in srgb, #5b9fff 28%, transparent);
+  color: #5b9fff;
+}
+
+.vocab-badge-learned {
+  background: color-mix(in srgb, #3ddc97 28%, transparent);
+  color: #3ddc97;
+}
+
+.vocab-tr {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.vocab-ctx {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--rf-muted-foreground);
+  line-height: 1.35;
+}
+
+.vocab-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.vocab-actions button {
+  flex: 1;
+  padding: 5px 4px;
+  font-size: 11px;
+}

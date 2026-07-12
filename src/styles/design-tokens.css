@@ -1,0 +1,63 @@
+/**
+ * UI tokens aligned with read-frog brand (gold brand / neutral surfaces).
+ * See read-frog host-theme + theme.css.
+ */
+:root {
+  --rf-font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --rf-background: oklch(1 0 0);
+  --rf-foreground: oklch(0.141 0.005 285.823);
+  --rf-card: oklch(1 0 0);
+  --rf-card-foreground: oklch(0.141 0.005 285.823);
+  --rf-primary: oklch(0.205 0 0);
+  --rf-primary-foreground: oklch(0.985 0 0);
+  --rf-brand: oklch(76.034% 0.12361 82.191);
+  --rf-brand-foreground: oklch(0.205 0 0);
+  --rf-secondary: oklch(0.967 0.001 286.375);
+  --rf-secondary-foreground: oklch(0.47 0.006 285.885);
+  --rf-muted: oklch(0.967 0.001 286.375);
+  --rf-muted-foreground: oklch(0.552 0.016 285.938);
+  --rf-border: oklch(0.92 0.004 286.32);
+  --rf-input: oklch(0.92 0.004 286.32);
+  --rf-ring: oklch(0.705 0.015 286.067);
+  --rf-destructive: oklch(0.577 0.245 27.325);
+  --rf-radius: 0.625rem;
+  --rf-footer: oklch(0.92 0.004 286.32);
+
+  --ueh-bg: var(--rf-background);
+  --ueh-fg: var(--rf-foreground);
+  --ueh-accent: var(--rf-brand);
+  --ueh-muted: var(--rf-muted-foreground);
+  --ueh-font: var(--rf-font-sans);
+  --ueh-radius: var(--rf-radius);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --rf-background: oklch(0.141 0.005 285.823);
+    --rf-foreground: oklch(0.985 0 0);
+    --rf-card: oklch(0.21 0.006 285.885);
+    --rf-card-foreground: oklch(0.985 0 0);
+    --rf-primary: oklch(0.922 0 0);
+    --rf-primary-foreground: oklch(0.205 0 0);
+    --rf-brand: oklch(76.034% 0.12361 82.191);
+    --rf-brand-foreground: oklch(0.205 0 0);
+    --rf-secondary: oklch(0.274 0.006 286.033);
+    --rf-secondary-foreground: oklch(0.775 0 0);
+    --rf-muted: oklch(0.274 0.006 286.033);
+    --rf-muted-foreground: oklch(0.705 0.015 286.067);
+    --rf-border: oklch(1 0 0 / 10%);
+    --rf-input: oklch(1 0 0 / 15%);
+    --rf-ring: oklch(0.552 0.016 285.938);
+    --rf-destructive: oklch(0.704 0.191 22.216);
+    --rf-footer: oklch(0.21 0.006 285.885);
+  }
+}
+
+body {
+  font-family: var(--rf-font-sans);
+  font-size: 14px;
+  color: var(--rf-foreground);
+  background: var(--rf-background);
+  margin: 0;
+}

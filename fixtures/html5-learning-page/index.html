@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>UEH Fixture — HTML5 Learning Page</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 840px;
+        margin: 32px auto;
+        padding: 0 16px;
+        background: #111;
+        color: #eee;
+      }
+      video {
+        width: 100%;
+        background: #000;
+        border-radius: 12px;
+      }
+      pre {
+        background: #1b1f24;
+        padding: 12px;
+        border-radius: 8px;
+        overflow: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>UniEnglishHelper fixture</h1>
+    <p>
+      Open this file via a local static server (or file URL). Load the extension, click
+      <strong>UEH PiP</strong>, then use the popup to <strong>Start capture</strong> if testing audio.
+    </p>
+    <video id="player" controls crossorigin="anonymous">
+      <source
+        src="https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4"
+        type="video/mp4"
+      />
+      <track
+        kind="subtitles"
+        srclang="en"
+        label="English"
+        src="./sample.vtt"
+        default
+      />
+    </video>
+
+    <!-- Fallback cues for when track fetch is blocked -->
+    <script type="text/vtt" id="ueh-subtitles">
+WEBVTT
+
+1
+00:00:00.000 --> 00:00:02.500
+Welcome to the English learning demo.
+
+2
+00:00:02.500 --> 00:00:05.500
+Please listen carefully to each sentence.
+
+3
+00:00:05.500 --> 00:00:09.000
+You can save audio clips and add words to your dictionary.
+    </script>
+
+    <h2>Sample VTT (inline mirror)</h2>
+    <pre id="preview"></pre>
+    <script>
+      document.getElementById('preview').textContent =
+        document.getElementById('ueh-subtitles').textContent;
+    </script>
+  </body>
+</html>
