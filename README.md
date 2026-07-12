@@ -125,6 +125,20 @@ API keys live in `chrome.storage.local` and never go into content globals.
 | `pnpm build` | Typecheck + production build |
 | `pnpm test` | Vitest unit tests |
 | `pnpm typecheck` | `tsc --noEmit` |
+| `pnpm pack:zip` | Build + zip `dist/` as `uni-english-helper-<version>.zip` |
+
+## Release (GitHub Actions)
+
+Push a version tag to create a GitHub Release with the packed extension:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Workflow: [`.github/workflows/release.yml`](./.github/workflows/release.yml)  
+Store publishing (Chrome Web Store / Edge Add-ons) is optional and documented in
+[`DOCS/release.md`](./DOCS/release.md).
 
 ## Project map
 
@@ -164,3 +178,6 @@ fixtures/       HTML5 learning demo
 - Optional unofficial free MT / Edge TTS are explicit user choices
 - Capture records **tab mix** (ads may be included)
 - DRM sites (Netflix, etc.) are out of scope
+
+Full Chrome Web Store **隐私权规范** copy (single purpose, remote code, host & API permission justifications):  
+[`DOCS/privacy.md`](./DOCS/privacy.md)

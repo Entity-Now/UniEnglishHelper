@@ -12,7 +12,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit --pretty false",
-    "fixture": "npx --yes serve fixtures/html5-learning-page -p 4173"
+    "fixture": "npx --yes serve fixtures/html5-learning-page -p 4173",
+    "pack:zip": "pnpm build && node -e \"const{execSync}=require('child_process');const{version}=require('./package.json');const z='uni-english-helper-'+version+'.zip';execSync('cd dist && zip -r -q ../'+z+' .',{stdio:'inherit'});console.log('Wrote',z);\""
   },
   "dependencies": {
     "dexie": "^4.0.11",
