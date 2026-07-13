@@ -25,7 +25,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  NODE_VERSION: '20'
+  # Node 20 is deprecated on GitHub-hosted runners; use current LTS.
+  NODE_VERSION: '22'
   PNPM_VERSION: '9'
 
 jobs:
@@ -54,10 +55,12 @@ jobs:
           echo "zip_name=${ZIP_NAME}" >> "$GITHUB_OUTPUT"
           echo "Resolved version=${VERSION} zip=${ZIP_NAME}"
 
+      # pnpm must be installed before setup-node cache: pnpm
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: ${{ env.PNPM_VERSION }}
+          run_install: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

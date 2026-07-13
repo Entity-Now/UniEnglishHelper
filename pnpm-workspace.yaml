@@ -1,2 +1,8 @@
+# Single-package repo. `packages` is required whenever this file exists;
+# an empty/missing field breaks `pnpm store path` (GitHub Actions cache).
+packages:
+  - '.'
+
+# pnpm 10+: allow native postinstall for esbuild (used by Vite)
 allowBuilds:
   esbuild: true
