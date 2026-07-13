@@ -1,6 +1,8 @@
 /**
- * YouTube subtitles — read-frog style, without page <script> injection
- * (Trusted Types / CSP block that). MAIN world via background scripting.
+ * YouTube subtitles — MAIN-world bridge (read-frog style).
+ *
+ * Critical: timedtext requires page cookies + often a `pot` token captured from
+ * the player's own network calls. Service-worker fetch alone is unreliable.
  */
 import type { SubtitleCue } from '../../shared/domain/types';
 import { sendRuntime } from '../../shared/messaging/client';
@@ -36,10 +38,57 @@ interface TimedEvent {
   dDurationMs?: number;
   aAppend?: number;
   segs?: Array<{ utf8: string; tOffsetMs?: number }>;
+  wWinId?: number;
 }
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function newRequestId(): string {
+  return `ueh_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`;
+}
+
+/**
+ * postMessage bridge to public/inject/youtube-main.js (MAIN world).
+ */
+function mainWorldRequest<T extends Record<string, unknown>>(
+  requestType: string,
+  responseType: string,
+  payload: Record<string, unknown> = {},
+  timeoutMs = 8000,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const requestId = newRequestId();
+    const timer = window.setTimeout(() => {
+      window.removeEventListener('message', onMsg);
+      reject(new Error(`MAIN bridge timeout: ${requestType}`));
+    }, timeoutMs);
+
+    function onMsg(event: MessageEvent) {
+      if (event.source !== window) return;
+      if (event.origin !== window.location.origin) return;
+      const data = event.data as Record<string, unknown> | null;
+      if (!data || data.requestId !== requestId) return;
+      if (data.type !== responseType) return;
+      window.clearTimeout(timer);
+      window.removeEventListener('message', onMsg);
+      resolve(data as T);
+    }
+
+    window.addEventListener('message', onMsg);
+    window.postMessage(
+      { type: requestType, requestId, ...payload },
+      window.location.origin,
+    );
+  });
+}
+
+async function ensureMainInjected(): Promise<void> {
+  // Background injects via chrome.scripting (CSP-safe). Best-effort.
+  await sendRuntime('youtube.injectMain', {}, 'content').catch(() => undefined);
+  // Give the IIFE a tick to install listeners
+  await sleep(30);
 }
 
 export class YoutubeAdapter extends BasePlayerAdapter {
@@ -54,22 +103,52 @@ export class YoutubeAdapter extends BasePlayerAdapter {
     );
   }
 
+  /** Drop cache when SPA navigates to another video. */
+  clearCache(): void {
+    this.cachedCues = null;
+    this.cacheKey = null;
+  }
+
   async getCues(): Promise<SubtitleCue[]> {
     const videoId = extractYoutubeVideoId();
     if (!videoId) return this.readTextTracks();
 
+    // Invalidate if video changed
+    if (this.cacheKey && !this.cacheKey.startsWith(`${videoId}:`)) {
+      this.clearCache();
+    }
+
     try {
-      // Ask background to inject MAIN + return player data / tracks
+      await ensureMainInjected();
+
+      // 1) Turn captions on so YT issues timedtext (with pot)
+      await mainWorldRequest(
+        'UEH_ENSURE_SUBTITLES',
+        'UEH_ENSURE_SUBTITLES_DONE',
+        {},
+        3000,
+      ).catch(() => undefined);
+
+      // 2) Player data + tracks (retry for SPA)
       let playerData = await this.fetchPlayerData(videoId);
       if (!playerData?.captionTracks?.length) {
-        for (let i = 0; i < 10; i++) {
-          await sleep(350);
+        for (let i = 0; i < 12; i++) {
+          await sleep(400);
+          // Re-ensure captions periodically
+          if (i === 3 || i === 7) {
+            await mainWorldRequest(
+              'UEH_ENSURE_SUBTITLES',
+              'UEH_ENSURE_SUBTITLES_DONE',
+              {},
+              2000,
+            ).catch(() => undefined);
+          }
           playerData = await this.fetchPlayerData(videoId);
           if (playerData?.captionTracks?.length) break;
         }
       }
 
-      // Fallback: tracks-only API
+      // 3) BG one-shot MAIN extract fallback
       if (!playerData?.captionTracks?.length) {
         const tr = await sendRuntime<{ tracks: CaptionTrack[] }>(
           'youtube.captionTracks',
@@ -92,32 +171,56 @@ export class YoutubeAdapter extends BasePlayerAdapter {
       }
 
       if (!playerData?.captionTracks?.length) {
+        console.warn('[UEH] No caption tracks on player response');
         return this.readTextTracks();
       }
 
       const track = selectTrack(playerData);
-      if (!track?.baseUrl) return this.readTextTracks();
+      if (!track?.baseUrl) {
+        console.warn('[UEH] No usable caption track baseUrl');
+        return this.readTextTracks();
+      }
 
       const key = `${videoId}:${track.languageCode}:${track.kind ?? ''}:${track.vssId}`;
       if (this.cacheKey === key && this.cachedCues?.length) {
         return this.cachedCues;
       }
 
-      const urls = buildFetchUrls(track, playerData);
+      // 4) Wait for pot-bearing timedtext URL from YT network
+      let liveTimedtext: string | null = playerData.cachedTimedtextUrl;
+      if (!liveTimedtext || !liveTimedtext.includes('pot=')) {
+        const waited = await mainWorldRequest<{ url?: string | null }>(
+          'UEH_WAIT_TIMEDTEXT',
+          'UEH_TIMEDTEXT_READY',
+          { videoId, timeoutMs: 6500 },
+          7000,
+        ).catch(() => null);
+        if (waited?.url) liveTimedtext = waited.url;
+      }
+
+      const urls = buildFetchUrls(track, playerData, liveTimedtext);
       let events: TimedEvent[] | null = null;
       let lastErr = '';
+
       for (const url of urls) {
         try {
-          const text = await fetchCaptionViaBg(url);
+          const text = await fetchCaptionMulti(url);
           events = parseCaptionPayload(text);
           if (events?.length) break;
+          if (text?.trim()) {
+            lastErr = `parsed 0 events (${text.slice(0, 40)}…)`;
+          }
         } catch (e) {
           lastErr = e instanceof Error ? e.message : String(e);
         }
       }
 
       if (!events?.length) {
-        console.warn('[UEH] caption fetch empty', lastErr);
+        console.warn('[UEH] caption fetch empty', lastErr, {
+          tracks: playerData.captionTracks.length,
+          track: track.languageCode,
+          hasPotUrl: Boolean(liveTimedtext?.includes('pot=')),
+        });
         return this.readTextTracks();
       }
 
@@ -125,6 +228,7 @@ export class YoutubeAdapter extends BasePlayerAdapter {
       if (cues.length) {
         this.cachedCues = cues;
         this.cacheKey = key;
+        console.info('[UEH] YouTube cues loaded', cues.length, track.languageCode);
       }
       return cues.length ? cues : this.readTextTracks();
     } catch (err) {
@@ -134,6 +238,19 @@ export class YoutubeAdapter extends BasePlayerAdapter {
   }
 
   private async fetchPlayerData(videoId: string): Promise<PlayerData | null> {
+    // Prefer page postMessage bridge (has timedtext cache)
+    try {
+      const resp = await mainWorldRequest<{
+        success?: boolean;
+        data?: PlayerData;
+        error?: string;
+      }>('UEH_GET_PLAYER_DATA', 'UEH_PLAYER_DATA', { expectedVideoId: videoId }, 5000);
+      if (resp.success && resp.data) return resp.data;
+    } catch {
+      // fall through
+    }
+
+    // Background executeScript fallback
     const res = await sendRuntime<{ data: PlayerData | null }>(
       'youtube.playerData',
       { videoId },
@@ -171,26 +288,53 @@ export class YoutubeAdapter extends BasePlayerAdapter {
   }
 }
 
-async function fetchCaptionViaBg(url: string): Promise<string> {
-  // Prefer SW fetch (extension origin often works better with YT)
+/**
+ * Fetch caption body: MAIN page context → content page fetch → SW.
+ */
+async function fetchCaptionMulti(url: string): Promise<string> {
+  // 1) MAIN world (best cookies)
+  try {
+    const r = await mainWorldRequest<{
+      ok?: boolean;
+      text?: string;
+      error?: string;
+    }>('UEH_FETCH_CAPTION', 'UEH_FETCH_CAPTION_DONE', { url }, 12000);
+    if (r.ok && r.text?.trim()) return r.text;
+  } catch {
+    // continue
+  }
+
+  // 2) Content script (youtube.com origin)
+  try {
+    const r = await fetch(url, {
+      credentials: 'include',
+      cache: 'no-store',
+      mode: 'cors',
+    });
+    if (r.ok) {
+      const text = await r.text();
+      if (text?.trim()) return text;
+    }
+  } catch {
+    // continue
+  }
+
+  // 3) Service worker
   const res = await sendRuntime<{ text: string }>(
     'youtube.fetchCaption',
     { url },
     'content',
   );
   if (res.ok && res.data.text?.trim()) return res.data.text;
-
-  // Page-context fallback
-  const r = await fetch(url, { credentials: 'include', cache: 'no-store' });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  const text = await r.text();
-  if (!text?.trim()) throw new Error('Empty body');
-  return text;
+  throw new Error(
+    res.ok ? 'Empty caption body' : res.error?.message || 'fetch failed',
+  );
 }
 
 function selectTrack(playerData: PlayerData): CaptionTrack | null {
-  const tracks = playerData.captionTracks;
+  const tracks = playerData.captionTracks.filter((t) => t.baseUrl);
   if (!tracks.length) return null;
+
   if (playerData.selectedTrackVssId) {
     const t = tracks.find((x) => x.vssId === playerData.selectedTrackVssId);
     if (t) return t;
@@ -201,55 +345,93 @@ function selectTrack(playerData: PlayerData): CaptionTrack | null {
     );
     if (t) return t;
   }
-  const humanExact = tracks.find((t) => t.kind !== 'asr' && !t.name);
-  if (humanExact) return humanExact;
-  const human = tracks.find((t) => t.kind !== 'asr');
+
+  // Prefer human English, then any human, then English ASR, then any ASR
+  const isAsr = (t: CaptionTrack) =>
+    t.kind === 'asr' || (t.vssId || '').includes('.asr') || (t.vssId || '').startsWith('a.');
+
+  const humanEn = tracks.find(
+    (t) =>
+      !isAsr(t) &&
+      (t.languageCode || '').toLowerCase().startsWith('en'),
+  );
+  if (humanEn) return humanEn;
+
+  const human = tracks.find((t) => !isAsr(t));
   if (human) return human;
+
   const asrEn = tracks.find(
-    (t) => t.kind === 'asr' && t.languageCode.toLowerCase().startsWith('en'),
+    (t) =>
+      isAsr(t) && (t.languageCode || '').toLowerCase().startsWith('en'),
   );
   if (asrEn) return asrEn;
-  return tracks.find((t) => t.kind === 'asr') || tracks[0];
+
+  return tracks[0] ?? null;
 }
 
 function extractPot(
   track: CaptionTrack,
   playerData: PlayerData,
+  liveTimedtext: string | null,
 ): { pot: string | null; potc: string | null } {
+  const tryUrl = (raw: string | null | undefined) => {
+    if (!raw) return null;
+    try {
+      const u = new URL(raw);
+      const pot = u.searchParams.get('pot');
+      if (!pot) return null;
+      return { pot, potc: u.searchParams.get('potc') };
+    } catch {
+      return null;
+    }
+  };
+
+  // Prefer live network URL with pot
+  const fromLive = tryUrl(liveTimedtext);
+  if (fromLive) return fromLive;
+
+  // Matching audio caption track
   for (const t of playerData.audioCaptionTracks) {
     if (
       t.vssId === track.vssId ||
-      t.languageCode === track.languageCode ||
-      true
+      (t.languageCode && t.languageCode === track.languageCode)
     ) {
-      try {
-        const u = new URL(t.url);
-        const pot = u.searchParams.get('pot');
-        const potc = u.searchParams.get('potc');
-        if (pot) return { pot, potc };
-      } catch {
-        // continue
-      }
+      const hit = tryUrl(t.url);
+      if (hit) return hit;
     }
   }
-  if (playerData.cachedTimedtextUrl) {
+  // Any audio caption pot
+  for (const t of playerData.audioCaptionTracks) {
+    const hit = tryUrl(t.url);
+    if (hit) return hit;
+  }
+
+  const fromCache = tryUrl(playerData.cachedTimedtextUrl);
+  if (fromCache) return fromCache;
+
+  return { pot: null, potc: null };
+}
+
+/** Build candidate URLs: live timedtext first, then pot variants, then plain. */
+function buildFetchUrls(
+  track: CaptionTrack,
+  playerData: PlayerData,
+  liveTimedtext: string | null,
+): string[] {
+  const pot = extractPot(track, playerData, liveTimedtext);
+  const urls: string[] = [];
+
+  if (liveTimedtext) {
+    urls.push(liveTimedtext);
+    // Also force json3 on the live URL
     try {
-      const u = new URL(playerData.cachedTimedtextUrl);
-      return {
-        pot: u.searchParams.get('pot'),
-        potc: u.searchParams.get('potc'),
-      };
+      const u = new URL(liveTimedtext);
+      u.searchParams.set('fmt', 'json3');
+      urls.push(u.toString());
     } catch {
       // ignore
     }
   }
-  return { pot: null, potc: null };
-}
-
-/** Build candidate URLs like read-frog (with pot) + plain baseUrl variants. */
-function buildFetchUrls(track: CaptionTrack, playerData: PlayerData): string[] {
-  const pot = extractPot(track, playerData);
-  const urls: string[] = [];
 
   const withParams = (fmt: string, usePot: boolean) => {
     try {
@@ -258,8 +440,7 @@ function buildFetchUrls(track: CaptionTrack, playerData: PlayerData): string[] {
       url.searchParams.set('xorb', '2');
       url.searchParams.set('xobt', '3');
       url.searchParams.set('xovt', '3');
-      url.searchParams.set('c', 'WEB');
-      url.searchParams.set('cplayer', 'UNIPLAYER');
+      if (!url.searchParams.get('c')) url.searchParams.set('c', 'WEB');
       if (playerData.cver) url.searchParams.set('cver', playerData.cver);
       if (playerData.device) {
         const dp = new URLSearchParams(playerData.device);
@@ -285,7 +466,6 @@ function buildFetchUrls(track: CaptionTrack, playerData: PlayerData): string[] {
     }
   };
 
-  // Prefer pot+json3, then without pot, then other fmts, then raw baseUrl
   for (const fmt of ['json3', 'srv3', 'vtt']) {
     if (pot.pot) urls.push(withParams(fmt, true));
     urls.push(withParams(fmt, false));
@@ -307,11 +487,12 @@ function parseCaptionPayload(text: string): TimedEvent[] {
     }
   }
 
-  // srv3 xml
-  if (t.includes('<text')) {
+  // srv3 / xml
+  if (t.includes('<text') || t.includes('<p ')) {
     const events: TimedEvent[] = [];
+    // classic srv3
     const re =
-      /<text\b[^>]*\bstart="([^"]+)"[^>]*\bdur="([^"]+)"[^>]*>([\s\S]*?)<\/text>/gi;
+      /<text\b[^>]*\bstart="([^"]+)"[^>]*\b(?:dur|d)="([^"]+)"[^>]*>([\s\S]*?)<\/text>/gi;
     let m: RegExpExecArray | null;
     while ((m = re.exec(t))) {
       const start = Math.round(parseFloat(m[1]) * 1000);
@@ -330,10 +511,32 @@ function parseCaptionPayload(text: string): TimedEvent[] {
         segs: [{ utf8 }],
       });
     }
+    if (events.length) return events;
+
+    // srv3 p-tags (t= ms)
+    const pre =
+      /<p\b[^>]*\bt="(\d+)"[^>]*(?:\bd="(\d+)")?[^>]*>([\s\S]*?)<\/p>/gi;
+    while ((m = pre.exec(t))) {
+      const start = parseInt(m[1], 10);
+      const dur = m[2] ? parseInt(m[2], 10) : 2000;
+      const utf8 = cleanText(
+        m[3]
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/&#39;/g, "'")
+          .replace(/&quot;/g, '"')
+          .replace(/&amp;/g, '&'),
+      );
+      if (!utf8) continue;
+      events.push({
+        tStartMs: start,
+        dDurationMs: dur,
+        segs: [{ utf8 }],
+      });
+    }
     return events;
   }
 
-  // vtt → pseudo events
+  // vtt
   if (t.includes('-->')) {
     const events: TimedEvent[] = [];
     const blocks = t.replace(/^WEBVTT[^\n]*\n/, '').split(/\n\n+/);
@@ -341,9 +544,7 @@ function parseCaptionPayload(text: string): TimedEvent[] {
       const lines = block.trim().split(/\n/);
       const timeLine = lines.find((l) => l.includes('-->'));
       if (!timeLine) continue;
-      const m = timeLine.match(
-        /([\d:.]+)\s*-->\s*([\d:.]+)/,
-      );
+      const m = timeLine.match(/([\d:.]+)\s*-->\s*([\d:.]+)/);
       if (!m) continue;
       const startMs = vttTime(m[1]);
       const endMs = vttTime(m[2]);
@@ -365,8 +566,9 @@ function parseCaptionPayload(text: string): TimedEvent[] {
 
 function vttTime(ts: string): number {
   const p = ts.trim().replace(',', '.').split(':').map(Number);
-  if (p.length === 3) return Math.round((p[0] * 3600 + p[1] * 60 + p[2]) * 1000);
-  if (p.length === 2) return Math.round((p[0] * 60 + p[1]) * 1000);
+  if (p.length === 3)
+    return Math.round((p[0]! * 3600 + p[1]! * 60 + p[2]!) * 1000);
+  if (p.length === 2) return Math.round((p[0]! * 60 + p[1]!) * 1000);
   return 0;
 }
 
@@ -375,13 +577,16 @@ function eventsToCues(events: TimedEvent[], prefix: string): SubtitleCue[] {
   let idx = 0;
   for (const ev of events) {
     if (ev.tStartMs == null) continue;
+    // json3 window markers without segs — skip
+    if (!ev.segs?.length && !ev.dDurationMs) continue;
+
     const text = cleanText((ev.segs ?? []).map((s) => s.utf8 || '').join(''));
     if (!text) continue;
     if (ev.aAppend === 1 && text.length < 2) continue;
-    // strip noise brackets
+
+    // Keep light cleanup; do NOT strip all parentheses (kills valid lyrics/ASR)
     const cleaned = text
-      .replace(/\[.*?\]/g, '')
-      .replace(/\(.*?\)/g, '')
+      .replace(/\[(?:Music|Applause|Laughter|Silence)\]/gi, '')
       .replace(/\s+/g, ' ')
       .trim();
     if (!cleaned) continue;
@@ -392,7 +597,7 @@ function eventsToCues(events: TimedEvent[], prefix: string): SubtitleCue[] {
     if (
       prev &&
       startMs - prev.endMs < 50 &&
-      prev.text.length + cleaned.length < 90 &&
+      prev.text.length + cleaned.length < 100 &&
       !/[.!?。？！]$/.test(prev.text)
     ) {
       prev.text = `${prev.text} ${cleaned}`.trim();
@@ -408,9 +613,9 @@ function eventsToCues(events: TimedEvent[], prefix: string): SubtitleCue[] {
   }
   for (let i = 0; i < cues.length; i++) {
     const next = cues[i + 1];
-    if (next && cues[i].endMs > next.startMs) cues[i].endMs = next.startMs;
-    if (cues[i].endMs <= cues[i].startMs) {
-      cues[i].endMs = cues[i].startMs + 800;
+    if (next && cues[i]!.endMs > next.startMs) cues[i]!.endMs = next.startMs;
+    if (cues[i]!.endMs <= cues[i]!.startMs) {
+      cues[i]!.endMs = cues[i]!.startMs + 800;
     }
   }
   return cues;
@@ -434,9 +639,11 @@ export function extractYoutubeVideoId(href = location.href): string | null {
     const v = u.searchParams.get('v');
     if (v) return v;
     const shorts = u.pathname.match(/\/shorts\/([^/?]+)/);
-    if (shorts) return shorts[1];
+    if (shorts) return shorts[1]!;
     const embed = u.pathname.match(/\/embed\/([^/?]+)/);
-    if (embed) return embed[1];
+    if (embed) return embed[1]!;
+    const live = u.pathname.match(/\/live\/([^/?]+)/);
+    if (live) return live[1]!;
   } catch {
     // ignore
   }
@@ -450,5 +657,15 @@ export function isYoutubeHost(hostname = location.hostname): boolean {
     hostname === 'm.youtube.com' ||
     hostname === 'youtu.be' ||
     hostname.endsWith('.youtube.com')
+  );
+}
+
+export function isYoutubeWatchLikePath(pathname = location.pathname): boolean {
+  return (
+    pathname === '/watch' ||
+    pathname.startsWith('/watch') ||
+    pathname.startsWith('/shorts/') ||
+    pathname.startsWith('/embed/') ||
+    pathname.startsWith('/live/')
   );
 }

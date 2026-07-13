@@ -4,7 +4,7 @@ import type { AppConfig, SubtitleCue } from '../shared/domain/types';
 import { DEFAULT_APP_CONFIG } from '../shared/domain/types';
 import { createPlayerAdapter } from './players';
 import { PipSessionController } from './pip-session';
-import { isYoutubeHost } from './players/youtube';
+import { isYoutubeHost, isYoutubeWatchLikePath } from './players/youtube';
 import { PlayerChromeButton } from './player-chrome-button';
 import { SelectionToolbar } from './selection-toolbar';
 import { PageSubtitlesOverlay } from './page-subtitles';
@@ -138,8 +138,8 @@ async function boot(): Promise<void> {
   ensureHotkeys();
 }
 
-async function loadPageCues(retryCount = 5): Promise<void> {
-  const isVideoPage = !isYoutubeHost() || location.pathname === '/watch';
+async function loadPageCues(retryCount = 10): Promise<void> {
+  const isVideoPage = !isYoutubeHost() || isYoutubeWatchLikePath();
   if (!isVideoPage) {
     pageCues = [];
     pageCueList?.setCues([]);
@@ -147,6 +147,11 @@ async function loadPageCues(retryCount = 5): Promise<void> {
   }
 
   try {
+    // Ensure MAIN interceptor early (captions / pot capture)
+    if (isYoutubeHost()) {
+      void sendRuntime('youtube.injectMain', {}, 'content');
+    }
+
     const adapter = createPlayerAdapter(config);
     const video = adapter.findVideo();
     if (!video) {
@@ -157,10 +162,15 @@ async function loadPageCues(retryCount = 5): Promise<void> {
     if (pageCues.length > 0) {
       if (pageSubs) {
         pageSubs.setCues(pageCues);
+      } else if (shouldRunPageSubtitles(config)) {
+        pageSubs = new PageSubtitlesOverlay(adapter, config);
+        await pageSubs.start();
+        pageSubs.setCues(pageCues);
       }
       if (pageSubs && !pageSubs.isRunning()) {
         void pageSubs.start();
       }
+      console.info('[UEH] page cues ready', pageCues.length);
       return;
     }
   } catch (e) {
@@ -170,7 +180,9 @@ async function loadPageCues(retryCount = 5): Promise<void> {
   if (retryCount > 0) {
     window.setTimeout(() => {
       void loadPageCues(retryCount - 1);
-    }, 1500);
+    }, 1200);
+  } else {
+    console.warn('[UEH] page cues exhausted retries (0 cues)');
   }
 }
 
@@ -304,11 +316,15 @@ function ensureNavObserver(): void {
     if (location.href !== last) {
       last = location.href;
       tearDownAll();
-      void boot();
+      // Small delay so ytInitialPlayerResponse / player settle after SPA nav
+      window.setTimeout(() => {
+        void boot();
+      }, 400);
     }
   };
-  setInterval(check, 1000);
+  setInterval(check, 800);
   window.addEventListener('yt-navigate-finish', check as EventListener);
+  window.addEventListener('yt-page-data-updated', check as EventListener);
 }
 
 function ensureHotkeys(): void {

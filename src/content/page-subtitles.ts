@@ -74,6 +74,10 @@ export class PageSubtitlesOverlay {
     // Avoid double RAF loops
     if (this.running && this.root) {
       this.applyStyles();
+      // Refresh cues if previously empty
+      if (!this.cues.length) {
+        void this.reloadCues();
+      }
       return;
     }
 
@@ -90,6 +94,32 @@ export class PageSubtitlesOverlay {
     this.setEnabled(this.enabled);
     this.running = true;
     this.tick();
+
+    // YouTube tracks often arrive after first paint — retry a few times
+    if (!this.cues.length) {
+      void this.reloadCuesWithRetry(8);
+    }
+  }
+
+  private async reloadCues(): Promise<void> {
+    try {
+      const cues = await this.adapter.getCues();
+      if (cues.length) {
+        this.cues = cues;
+        this.renderCue(findActiveCue(this.cues, this.mediaTimeMs()));
+      }
+    } catch (e) {
+      console.warn('[UEH] page subtitles reload failed', e);
+    }
+  }
+
+  private async reloadCuesWithRetry(attempts: number): Promise<void> {
+    for (let i = 0; i < attempts; i++) {
+      if (!this.running) return;
+      if (this.cues.length) return;
+      await new Promise((r) => setTimeout(r, 1200));
+      await this.reloadCues();
+    }
   }
 
   stop(): void {

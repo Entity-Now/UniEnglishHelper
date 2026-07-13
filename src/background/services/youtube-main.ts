@@ -216,6 +216,7 @@ export async function getYoutubePlayerData(
             // ignore
           }
 
+          // timedtext cache lives in inject/youtube-main.js (not visible here)
           return {
             videoId: vid,
             captionTracks,
@@ -225,7 +226,7 @@ export async function getYoutubePlayerData(
             playerState,
             selectedTrackLanguageCode,
             selectedTrackVssId,
-            cachedTimedtextUrl: null,
+            cachedTimedtextUrl: null as string | null,
           };
         } catch {
           return null;
@@ -240,13 +241,22 @@ export async function getYoutubePlayerData(
   }
 }
 
-/** Fetch caption body from SW (avoids page CORS edge cases). */
+/**
+ * Fetch caption body from SW (fallback only).
+ * Prefer MAIN-world / page fetch — SW lacks YouTube session cookies + pot.
+ */
 export async function fetchCaptionText(url: string): Promise<string> {
   const res = await fetch(url, {
-    credentials: 'include',
+    // omit: SW cannot usefully send youtube.com cookies; include can confuse CORS
+    credentials: 'omit',
     cache: 'no-store',
     headers: {
       Accept: '*/*',
+      // Some timedtext endpoints accept extension origin with pot token
+      'User-Agent':
+        typeof navigator !== 'undefined'
+          ? navigator.userAgent
+          : 'Mozilla/5.0',
     },
   });
   if (!res.ok) {
