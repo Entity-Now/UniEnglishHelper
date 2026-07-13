@@ -5,6 +5,8 @@ export interface PlayerAdapter {
   readonly supportsMove: boolean;
   findVideo(): HTMLVideoElement | null;
   getCues(): Promise<SubtitleCue[]>;
+  /** Drop in-memory caption cache (e.g. after YouTube ad ends). */
+  clearCache?(): void;
   onCuesChanged?(cb: (cues: SubtitleCue[]) => void): () => void;
 }
 

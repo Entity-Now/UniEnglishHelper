@@ -63,6 +63,10 @@ export function buildPipStyles(opts: {
       /* keep subtitles clear of the side panel */
       padding-right: min(300px, 42vw);
       padding-left: 12px;
+      z-index: 6;
+    }
+    #ueh-pip-root.ueh-word-open #ueh-chrome {
+      z-index: 8;
     }
     #ueh-sub-en, #ueh-sub-tr {
       max-width: min(920px, 94%);
@@ -142,32 +146,39 @@ export function buildPipStyles(opts: {
       font-size: 10px; color: rgba(255,255,255,.55); margin-left: 6px;
       max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
-    /* Side dictionary panel — does not cover bottom subtitles */
+    /* Side dictionary panel — above cue list / chrome so it is never obscured */
     #ueh-word-panel {
       position: absolute;
       top: 10px;
       right: 10px;
       bottom: 78px;
       width: min(${panelWidth}px, 38vw);
-      z-index: 10;
+      z-index: 30;
       display: flex;
       flex-direction: column;
       gap: 0;
-      background: rgba(16, 17, 22, 0.94);
-      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(16, 17, 22, 0.96);
+      border: 1px solid rgba(255,255,255,.14);
       border-radius: 14px;
-      box-shadow: -8px 0 28px rgba(0,0,0,.35);
-      backdrop-filter: blur(10px);
+      box-shadow: -10px 0 32px rgba(0,0,0,.5);
+      backdrop-filter: blur(12px);
       transform: translateX(calc(100% + 16px));
       opacity: 0;
       pointer-events: none;
-      transition: transform .2s ease, opacity .2s ease;
+      transition: transform .2s ease, opacity .2s ease, right .2s ease, width .2s ease;
       overflow: hidden;
+      isolation: isolate;
     }
     #ueh-pip-root.ueh-word-open #ueh-word-panel {
       transform: translateX(0);
       opacity: 1;
       pointer-events: auto;
+    }
+    /* When cue list is open on the right, keep word panel on top and slightly inset */
+    #ueh-pip-root.ueh-word-open.ueh-cue-list-open #ueh-word-panel {
+      right: 12px;
+      width: min(${panelWidth}px, 36vw);
+      z-index: 32;
     }
     #ueh-word-panel-head {
       display: flex; align-items: flex-start; gap: 8px;
@@ -188,17 +199,37 @@ export function buildPipStyles(opts: {
     #ueh-word-panel-close:hover { background: rgba(255,255,255,.16); }
     #ueh-word-panel-ctx {
       padding: 8px 12px 0;
-      font-size: 11px; line-height: 1.4;
-      color: rgba(255,255,255,.55);
-      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-      overflow: hidden;
+      font-size: 11px; line-height: 1.45;
+      color: rgba(255,255,255,.72);
+      white-space: pre-wrap;
+      max-height: 4.5em;
+      overflow-y: auto;
     }
     #ueh-word-panel-body {
-      flex: 1; min-height: 0; overflow: auto;
+      flex: 1; min-height: 0;
+      overflow-x: hidden;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
       padding: 10px 12px 12px;
       font-size: 13px; line-height: 1.5;
       color: rgba(255,255,255,.92);
       white-space: pre-wrap; word-break: break-word;
+      scrollbar-width: thin;
+      scrollbar-color: transparent transparent;
+    }
+    #ueh-word-panel-body:hover,
+    #ueh-word-panel-body:focus-within {
+      scrollbar-color: rgba(255,255,255,.28) transparent;
+    }
+    #ueh-word-panel-body::-webkit-scrollbar { width: 5px; }
+    #ueh-word-panel-body::-webkit-scrollbar-track { background: transparent; }
+    #ueh-word-panel-body::-webkit-scrollbar-thumb {
+      background: transparent; border-radius: 999px;
+    }
+    #ueh-word-panel-body:hover::-webkit-scrollbar-thumb,
+    #ueh-word-panel-body:focus-within::-webkit-scrollbar-thumb {
+      background: rgba(255,255,255,.22);
     }
     #ueh-word-panel-actions {
       display: flex; flex-wrap: wrap; gap: 6px;
@@ -267,6 +298,45 @@ export function buildPipStyles(opts: {
     #ueh-pip-root.ueh-cue-list-open #ueh-chrome {
       right: min(280px, 42%);
     }
+    #ueh-pip-root.ueh-recap-open #ueh-video-slot {
+      left: min(260px, 38%);
+    }
+    #ueh-pip-root.ueh-recap-open #ueh-sub-layer {
+      padding-left: min(270px, 40%);
+    }
+    #ueh-pip-root.ueh-recap-open #ueh-chrome {
+      left: min(260px, 38%);
+    }
+    #ueh-pip-root.ueh-recap-open.ueh-cue-list-open #ueh-video-slot {
+      left: min(260px, 38%);
+      right: min(280px, 42%);
+    }
+    #ueh-pip-root.ueh-recap-open.ueh-cue-list-open #ueh-sub-layer {
+      padding-left: min(270px, 40%);
+      padding-right: min(290px, 44%);
+    }
+    #ueh-pip-root.ueh-recap-open.ueh-cue-list-open #ueh-chrome {
+      left: min(260px, 38%);
+      right: min(280px, 42%);
+    }
+    .ueh-ico.recap-wrap {
+      position: relative;
+    }
+    .ueh-recap-badge {
+      position: absolute;
+      top: 2px; right: 2px;
+      min-width: 14px; height: 14px;
+      padding: 0 3px;
+      border-radius: 999px;
+      background: oklch(76% 0.12 82);
+      color: #1a1a1a;
+      font-size: 8px; font-weight: 800;
+      line-height: 14px;
+      text-align: center;
+      pointer-events: none;
+      display: none;
+    }
+    .ueh-recap-badge.on { display: block; }
 
     /* Subtitle visibility toggles in chrome */
     .ueh-chip {
@@ -293,7 +363,10 @@ export function buildPipStyles(opts: {
       z-index: 14;
       width: min(280px, 88vw);
       max-height: min(70%, 360px);
-      overflow: auto;
+      overflow-x: hidden;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
       padding: 12px;
       border-radius: 12px;
       background: rgba(16,17,22,.96);
@@ -303,6 +376,19 @@ export function buildPipStyles(opts: {
       pointer-events: auto;
       font-size: 12px;
       color: #f5f5f5;
+      scrollbar-width: thin;
+      scrollbar-color: transparent transparent;
+    }
+    #ueh-pip-settings:hover {
+      scrollbar-color: rgba(255,255,255,.28) transparent;
+    }
+    #ueh-pip-settings::-webkit-scrollbar { width: 5px; }
+    #ueh-pip-settings::-webkit-scrollbar-track { background: transparent; }
+    #ueh-pip-settings::-webkit-scrollbar-thumb {
+      background: transparent; border-radius: 999px;
+    }
+    #ueh-pip-settings:hover::-webkit-scrollbar-thumb {
+      background: rgba(255,255,255,.22);
     }
     #ueh-pip-settings.ueh-open { display: block; }
     #ueh-pip-settings h3 {
@@ -364,6 +450,8 @@ export const ICONS = {
     '<circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/>',
   list:
     '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>',
+  book:
+    '<path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a2.5 2.5 0 0 1 0-5H20"/><path d="M8 11h8"/><path d="M8 7h6"/>',
   volume:
     '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>',
   mic: '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/>',
@@ -449,6 +537,10 @@ export function buildPipMarkup(): string {
           ${iconButton('next', ICONS.next, '下一句')}
           ${iconButton('translate', ICONS.translate, '翻译当前句', 'brand')}
           ${iconButton('tts', ICONS.volume, '朗读')}
+          <span class="ueh-ico recap-wrap">
+            ${iconButton('recap', ICONS.book, '生词回顾')}
+            <span class="ueh-recap-badge" id="ueh-recap-badge"></span>
+          </span>
           ${iconButton('list', ICONS.list, '字幕列表')}
           ${iconButton('settings', ICONS.settings, 'PiP 字幕设置')}
           ${iconButton('export', ICONS.save, '保存原声')}

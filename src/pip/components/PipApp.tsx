@@ -98,6 +98,7 @@ export function PipApp() {
           onAdd={() => {
             /* parent handles via explain surface */
           }}
+          onClose={() => setExplain(null)}
         />
       )}
     </div>

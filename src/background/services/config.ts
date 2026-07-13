@@ -18,11 +18,13 @@ function deepMerge<T extends object>(base: T, partial: Partial<T>): T {
   for (const key of Object.keys(partial) as (keyof T)[]) {
     const pv = partial[key];
     const bv = base[key];
+    // Use nullish check so `false` / `0` / `''` still overwrite (critical for
+    // feature flags like enableLlmTranslate / autoExplain / autoTranslate).
     if (
-      pv &&
+      pv !== null &&
       typeof pv === 'object' &&
       !Array.isArray(pv) &&
-      bv &&
+      bv !== null &&
       typeof bv === 'object' &&
       !Array.isArray(bv)
     ) {

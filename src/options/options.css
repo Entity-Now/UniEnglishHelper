@@ -443,6 +443,7 @@ input[type='number'] {
   color: #ffb4a9;
 }
 
+/* Legacy class kept for any external refs */
 .preview-sub {
   margin-top: 12px;
   padding: 28px 16px;
@@ -451,16 +452,133 @@ input[type='number'] {
   text-align: center;
 }
 
-.preview-sub .en {
-  color: #fff;
+/* ── PiP-matched subtitle stage preview (VideoSubtitlesPage) ── */
+.ueh-sub-preview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px 12px;
+  margin-bottom: 8px;
+  font-size: 12px;
   font-weight: 600;
-  text-shadow: 0 1px 2px #000;
+  color: var(--rf-muted-foreground);
 }
 
-.preview-sub .tr {
+.ueh-sub-preview-stage {
+  position: relative;
+  width: 100%;
+  height: 220px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #0a0a0b;
+  border: 1px solid color-mix(in srgb, var(--rf-border) 80%, #000);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.ueh-sub-preview-stage-label {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  z-index: 3;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.55);
+  background: rgba(0, 0, 0, 0.45);
+  padding: 3px 8px;
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+.ueh-sub-preview-fake-video {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 80% 60% at 50% 40%, #1c2430 0%, transparent 70%),
+    linear-gradient(160deg, #12151a 0%, #0a0a0b 55%, #151820 100%);
+}
+
+.ueh-sub-preview-fake-chrome {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 36px;
+  z-index: 2;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.72), transparent);
+  pointer-events: none;
+}
+
+/* Same layout contract as #ueh-sub-layer in pip-ui-shell */
+.ueh-sub-preview-layer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 0 16px;
+  pointer-events: none;
+  box-sizing: border-box;
+}
+
+/*
+ * Cue chips: block-level centered, wrap long text (NOT inline-block).
+ * Mirrors #ueh-sub-en / #ueh-sub-tr.
+ */
+.ueh-sub-preview-line {
+  display: block;
+  box-sizing: border-box;
+  max-width: min(920px, 94%);
+  width: fit-content;
+  text-align: center;
+  line-height: 1.35;
+  padding: 4px 10px;
+  border-radius: 6px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+  /* Critical: long cues wrap inside the chip (settings "换行") */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  pointer-events: auto;
+}
+
+.ueh-sub-preview-en {
+  color: #fff;
+  font-weight: 600;
+}
+
+.ueh-sub-preview-tr {
   color: oklch(88% 0.08 82);
-  margin-top: 4px;
-  font-size: 0.92em;
+  font-weight: 500;
+}
+
+/* Word chips like PiP .ueh-word (inline spans inside the block line) */
+.ueh-sub-preview-word {
+  display: inline;
+  cursor: default;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.35);
+  padding: 0 1px;
+}
+
+.ueh-sub-preview-word:hover {
+  background: color-mix(in srgb, oklch(76% 0.12 82) 45%, transparent);
+  border-radius: 3px;
+}
+
+.ueh-sub-preview-off {
+  position: absolute;
+  left: 50%;
+  bottom: 28%;
+  transform: translateX(-50%);
+  z-index: 4;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.45);
+  letter-spacing: 0.04em;
 }
 
 /* Premium AI Study explanation content styling */

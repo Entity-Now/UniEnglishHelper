@@ -2,6 +2,13 @@ import type { AppConfig, WordExplainResult } from '../shared/domain/types';
 import { AppError } from '../shared/messages/errors';
 import { getWordExplainPrompt } from '../utils/prompts/word-explain';
 import { translateFree } from './translate';
+import {
+  isLlmCircuitOpen,
+  LLM_WORD_EXPLAIN_TIMEOUT_MS,
+  recordLlmFailure,
+  recordLlmSuccess,
+  withAbortTimeout,
+} from './llm-circuit';
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -33,7 +40,7 @@ function resolveBaseUrl(config: AppConfig, providerId: string): string {
 export async function chatCompletion(
   config: AppConfig,
   messages: ChatMessage[],
-  opts?: { temperature?: number },
+  opts?: { temperature?: number; signal?: AbortSignal; timeoutMs?: number },
 ): Promise<string> {
   const providerId = config.ai.providerId;
   const apiKey = config.ai.apiKeys[providerId];
@@ -42,32 +49,46 @@ export async function chatCompletion(
   }
 
   const baseUrl = resolveBaseUrl(config, providerId);
+  const run = async (signal?: AbortSignal) => {
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: config.ai.model,
+        messages,
+        temperature: opts?.temperature ?? 0.3,
+        stream: false,
+      }),
+      signal,
+    });
 
-  const res = await fetch(`${baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: config.ai.model,
-      messages,
-      temperature: opts?.temperature ?? 0.3,
-      stream: false,
-    }),
-  });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new AppError(
+        'AI_FAILED',
+        `LLM HTTP ${res.status}: ${body.slice(0, 200)}`,
+      );
+    }
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new AppError('AI_FAILED', `LLM HTTP ${res.status}: ${body.slice(0, 200)}`);
-  }
-
-  const json = (await res.json()) as {
-    choices?: { message?: { content?: string } }[];
+    const json = (await res.json()) as {
+      choices?: { message?: { content?: string } }[];
+    };
+    const text = json.choices?.[0]?.message?.content?.trim();
+    if (!text) throw new AppError('AI_FAILED', 'Empty LLM response');
+    return text;
   };
-  const text = json.choices?.[0]?.message?.content?.trim();
-  if (!text) throw new AppError('AI_FAILED', 'Empty LLM response');
-  return text;
+
+  if (opts?.timeoutMs && opts.timeoutMs > 0) {
+    return withAbortTimeout(
+      opts.timeoutMs,
+      (signal) => run(opts.signal ?? signal),
+      'LLM chat',
+    );
+  }
+  return run(opts?.signal);
 }
 
 export async function* chatCompletionStream(
@@ -129,8 +150,96 @@ export async function* chatCompletionStream(
   }
 }
 
+function resolveFreeMtPreferred(config: AppConfig) {
+  return config.freeMtProvider && config.freeMtProvider !== 'auto'
+    ? config.freeMtProvider
+    : ('auto' as const);
+}
+
 /**
- * Structured word explain — never dumps meta notes into `definition`.
+ * Free-MT word explain — always available as word-popup fallback so UX
+ * stays snappy even when LLM is down / circuit is open.
+ */
+async function explainWithFreeMt(
+  config: AppConfig,
+  surface: string,
+  context: string,
+  note: string,
+): Promise<WordExplainResult> {
+  const preferred = resolveFreeMtPreferred(config);
+  const word = await translateFree(
+    surface,
+    config.sourceLang,
+    config.targetLang,
+    preferred,
+  );
+  let contextTranslation: string | undefined;
+  if (context.trim()) {
+    try {
+      const ctx = await translateFree(
+        context,
+        config.sourceLang,
+        config.targetLang,
+        preferred,
+      );
+      contextTranslation = ctx.text;
+    } catch {
+      // context is optional
+    }
+  }
+  return {
+    surface,
+    definition: word.text,
+    context,
+    contextTranslation,
+    engine: 'free_mt',
+    provider: word.provider,
+    note,
+  };
+}
+
+async function explainWithLlm(
+  config: AppConfig,
+  surface: string,
+  context: string,
+): Promise<WordExplainResult> {
+  const system = getWordExplainPrompt(
+    config.sourceLang,
+    config.targetLang,
+    config.wordShow?.langLevel ?? 'intermediate',
+  );
+  const explanation = await chatCompletion(
+    config,
+    [
+      { role: 'system', content: system },
+      { role: 'user', content: `Query: ${surface}\nContext: ${context}` },
+    ],
+    { timeoutMs: LLM_WORD_EXPLAIN_TIMEOUT_MS },
+  );
+  const definition =
+    explanation
+      .split('\n')
+      .map((l) => l.replace(/^[#*\s-]+/, '').trim())
+      .find((l) => l && !l.startsWith('{{') && l.length < 200) ||
+    explanation.slice(0, 200);
+  return {
+    surface,
+    definition,
+    context,
+    explanation,
+    engine: 'llm',
+    provider: config.ai.providerId,
+  };
+}
+
+/**
+ * Structured word explain with **fast free-MT fallback**.
+ *
+ * Strategy:
+ * 1. Start free MT immediately (parallel) so the user is never blocked on a hung LLM.
+ * 2. Try LLM with a hard ~3.5s timeout when a key is present and the circuit is closed.
+ * 3. Prefer LLM if it wins; otherwise return free MT.
+ * 4. After repeated LLM failures, open a short circuit → free MT only (instant path).
  */
 export async function explainWord(
   config: AppConfig,
@@ -138,98 +247,67 @@ export async function explainWord(
   context: string,
 ): Promise<WordExplainResult> {
   const key = config.ai.apiKeys[config.ai.providerId];
-  if (key) {
-    try {
-      const system = getWordExplainPrompt(
-        config.sourceLang,
-        config.targetLang,
-        config.wordShow?.langLevel ?? 'intermediate',
-      );
-      const explanation = await chatCompletion(config, [
-        {
-          role: 'system',
-          content: system,
-        },
-        {
-          role: 'user',
-          content: `Query: ${surface}\nContext: ${context}`,
-        },
-      ]);
-      // First non-empty line as short definition when possible
-      const definition =
-        explanation
-          .split('\n')
-          .map((l) => l.replace(/^[#*\s-]+/, '').trim())
-          .find((l) => l && !l.startsWith('{{') && l.length < 200) ||
-        explanation.slice(0, 200);
-      return {
-        surface,
-        definition,
-        context,
-        explanation,
-        engine: 'llm',
-        provider: config.ai.providerId,
-      };
-    } catch (err) {
-      console.warn('[UEH] AI explain failed, trying free MT', err);
-    }
+  const circuitOpen = isLlmCircuitOpen();
+
+  // Free MT always starts for word popup (UX) — not gated on feature flags.
+  // Feature flags still apply to bulk subtitle translation elsewhere.
+  const freeNoteNoKey = '未配置 AI API Key，已使用免费翻译';
+  const freeNoteCircuit = 'AI 暂时不可用（已熔断），已使用免费翻译';
+  const freeNoteFail = 'AI 请求失败或超时，已回退免费翻译';
+
+  const freePromise = explainWithFreeMt(
+    config,
+    surface,
+    context,
+    !key ? freeNoteNoKey : circuitOpen ? freeNoteCircuit : freeNoteFail,
+  ).then(
+    (r) => ({ ok: true as const, r }),
+    (e) => ({
+      ok: false as const,
+      err: e instanceof Error ? e : new Error(String(e)),
+    }),
+  );
+
+  // No key or circuit open → free MT only (do not wait on LLM)
+  if (!key || circuitOpen) {
+    const free = await freePromise;
+    if (free.ok) return free.r;
+    return {
+      surface,
+      definition: '',
+      context,
+      engine: 'none',
+      note: !key
+        ? '未配置 AI API Key，且免费翻译失败'
+        : `AI 熔断中且免费翻译失败：${free.err.message}`,
+    };
   }
 
-  const freeOk =
-    config.features.enableUnofficialFreeMt ||
-    config.translateEngine === 'free_mt' ||
-    config.translateEngine === 'unofficial_free' ||
-    config.translateEngine === 'google_free' ||
-    config.translateEngine === 'microsoft_free' ||
-    config.translateEngine === 'mymemory_free';
+  // Race: free runs in parallel while LLM has a hard deadline
+  const llmPromise = explainWithLlm(config, surface, context).then(
+    (r) => ({ ok: true as const, r }),
+    (e) => ({
+      ok: false as const,
+      err: e instanceof Error ? e : new Error(String(e)),
+    }),
+  );
 
-  if (freeOk) {
-    try {
-      const preferred =
-        config.freeMtProvider && config.freeMtProvider !== 'auto'
-          ? config.freeMtProvider
-          : 'auto';
-      const word = await translateFree(
-        surface,
-        config.sourceLang,
-        config.targetLang,
-        preferred,
-      );
-      let contextTranslation: string | undefined;
-      if (context.trim()) {
-        try {
-          const ctx = await translateFree(
-            context,
-            config.sourceLang,
-            config.targetLang,
-            preferred,
-          );
-          contextTranslation = ctx.text;
-        } catch {
-          // ignore
-        }
-      }
-      return {
-        surface,
-        definition: word.text,
-        context,
-        contextTranslation,
-        engine: 'free_mt',
-        provider: word.provider,
-        note: key
-          ? 'AI 请求失败，已回退免费翻译'
-          : '未配置 AI API Key，已使用免费翻译',
-      };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return {
-        surface,
-        definition: '',
-        context,
-        engine: 'none',
-        note: `翻译失败：${msg}`,
-      };
-    }
+  const llm = await llmPromise;
+  if (llm.ok) {
+    recordLlmSuccess();
+    return llm.r;
+  }
+
+  // LLM failed / timed out → free path (already running)
+  recordLlmFailure();
+  console.warn('[UEH] AI explain failed, using free MT', llm.err.message);
+
+  const free = await freePromise;
+  if (free.ok) {
+    return {
+      ...free.r,
+      note: freeNoteFail,
+    };
   }
 
   return {
@@ -237,7 +315,7 @@ export async function explainWord(
     definition: '',
     context,
     engine: 'none',
-    note: '未配置 AI API Key，且免费翻译已关闭',
+    note: `AI 与免费翻译均失败：${llm.err.message} / ${free.err.message}`,
   };
 }
 
@@ -247,8 +325,9 @@ export function formatWordExplainForDisplay(r: WordExplainResult): string {
   if (r.definition) parts.push(r.definition);
   if (r.phonetic) parts.push(r.phonetic);
   if (r.explanation && r.engine === 'llm') {
-    // Prefer full AI markdown when available
-    return r.explanation;
+    // Prefer full AI markdown when available; still surface note if present
+    const body = r.explanation;
+    return r.note ? `${body}\n\n（${r.note}）` : body;
   }
   if (r.contextTranslation) {
     parts.push(`句子译文：${r.contextTranslation}`);

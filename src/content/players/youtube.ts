@@ -96,6 +96,8 @@ export class YoutubeAdapter extends BasePlayerAdapter {
   readonly supportsMove = false;
   private cachedCues: SubtitleCue[] | null = null;
   private cacheKey: string | null = null;
+  /** When true, next getCues ignores in-memory cache (e.g. after ad ends). */
+  private forceRefresh = false;
 
   findVideo(): HTMLVideoElement | null {
     return document.querySelector(
@@ -103,10 +105,11 @@ export class YoutubeAdapter extends BasePlayerAdapter {
     );
   }
 
-  /** Drop cache when SPA navigates to another video. */
+  /** Drop cache when SPA navigates to another video or ad ends. */
   clearCache(): void {
     this.cachedCues = null;
     this.cacheKey = null;
+    this.forceRefresh = true;
   }
 
   async getCues(): Promise<SubtitleCue[]> {
@@ -182,12 +185,19 @@ export class YoutubeAdapter extends BasePlayerAdapter {
       }
 
       const key = `${videoId}:${track.languageCode}:${track.kind ?? ''}:${track.vssId}`;
-      if (this.cacheKey === key && this.cachedCues?.length) {
+      if (
+        !this.forceRefresh &&
+        this.cacheKey === key &&
+        this.cachedCues?.length
+      ) {
         return this.cachedCues;
       }
 
-      // 4) Wait for pot-bearing timedtext URL from YT network
-      let liveTimedtext: string | null = playerData.cachedTimedtextUrl;
+      // 4) Wait for pot-bearing timedtext URL from YT network (must match main video)
+      let liveTimedtext = filterTimedtextForVideo(
+        playerData.cachedTimedtextUrl,
+        videoId,
+      );
       if (!liveTimedtext || !liveTimedtext.includes('pot=')) {
         const waited = await mainWorldRequest<{ url?: string | null }>(
           'UEH_WAIT_TIMEDTEXT',
@@ -195,7 +205,8 @@ export class YoutubeAdapter extends BasePlayerAdapter {
           { videoId, timeoutMs: 6500 },
           7000,
         ).catch(() => null);
-        if (waited?.url) liveTimedtext = waited.url;
+        const waitedUrl = filterTimedtextForVideo(waited?.url ?? null, videoId);
+        if (waitedUrl) liveTimedtext = waitedUrl;
       }
 
       const urls = buildFetchUrls(track, playerData, liveTimedtext);
@@ -228,6 +239,7 @@ export class YoutubeAdapter extends BasePlayerAdapter {
       if (cues.length) {
         this.cachedCues = cues;
         this.cacheKey = key;
+        this.forceRefresh = false;
         console.info('[UEH] YouTube cues loaded', cues.length, track.languageCode);
       }
       return cues.length ? cues : this.readTextTracks();
@@ -410,6 +422,31 @@ function extractPot(
   if (fromCache) return fromCache;
 
   return { pot: null, potc: null };
+}
+
+/**
+ * Accept a network timedtext URL only if it belongs to the main video.
+ * Rejects ad timedtext (different `v` / `video_id`) so we never cache ad cues
+ * under the main video's track key.
+ *
+ * - Matching v=videoId → accept
+ * - Explicit other video id → reject (ads)
+ * - No video id (pot-only) → accept as pot carrier (baseUrl still from main track)
+ */
+export function filterTimedtextForVideo(
+  url: string | null | undefined,
+  videoId: string,
+): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url, typeof location !== 'undefined' ? location.href : 'https://www.youtube.com');
+    const v =
+      u.searchParams.get('v') || u.searchParams.get('video_id') || null;
+    if (v && v !== videoId) return null;
+    return u.toString();
+  } catch {
+    return null;
+  }
 }
 
 /** Build candidate URLs: live timedtext first, then pot variants, then plain. */

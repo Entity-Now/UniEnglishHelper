@@ -4,9 +4,15 @@
  * - PiP: injected into PiP document as right panel
  */
 
-import type { SubtitleCue } from '../shared/domain/types';
+import type { SubtitleCue, VocabHighlightConfig } from '../shared/domain/types';
+import { DEFAULT_VOCAB_HIGHLIGHT } from '../shared/domain/types';
 import { sendRuntime } from '../shared/messaging/client';
 import { isClickableWord, segmentWords } from '../utils/segmenter';
+import {
+  buildHighlightCss,
+  decorateWordSpan,
+  type HighlightMap,
+} from '../utils/vocab-highlight';
 
 export type CueListSeekHandler = (cue: SubtitleCue) => void;
 export type CueListWordClickHandler = (word: string, context: string) => void;
@@ -23,6 +29,8 @@ export class CueListSidebar {
   private mode: 'page' | 'pip';
   private hostDoc: Document;
   private onWordClick?: CueListWordClickHandler;
+  private highlightMap: HighlightMap = {};
+  private vocabHighlight: VocabHighlightConfig = DEFAULT_VOCAB_HIGHLIGHT;
 
   private translationListener = (e: Event) => {
     const { cueId, translation } = (e as CustomEvent).detail;
@@ -47,6 +55,26 @@ export class CueListSidebar {
   setCues(cues: SubtitleCue[]): void {
     this.cues = cues;
     if (this.open) this.renderList();
+  }
+
+  setHighlightMap(map: HighlightMap): void {
+    this.highlightMap = map;
+    if (this.open) this.renderList();
+  }
+
+  setVocabHighlight(cfg: VocabHighlightConfig): void {
+    this.vocabHighlight = cfg;
+    this.injectHighlightCss();
+    if (this.open) this.renderList();
+  }
+
+  async refreshHighlights(): Promise<void> {
+    const res = await sendRuntime<HighlightMap>(
+      'word.highlightMap',
+      {},
+      'content',
+    );
+    if (res.ok) this.setHighlightMap(res.data);
   }
 
   setActiveCueId(id: string | null): void {
@@ -150,17 +178,24 @@ export class CueListSidebar {
     if (!this.shadow) return;
     this.shadow.innerHTML = `
       <style>
-        :host, .wrap {
+        :host {
           all: initial;
-          font-family: system-ui, -apple-system, sans-serif;
+          display: block;
+          height: 100%;
+          max-height: inherit;
+          box-sizing: border-box;
+          /* Contain scroll chaining so page/PiP never rubber-bands under the panel */
+          overscroll-behavior: contain;
+        }
+        .wrap {
+          font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
           color: #f0f0f0;
           display: flex;
           flex-direction: column;
           height: 100%;
           max-height: inherit;
+          min-height: 0;
           box-sizing: border-box;
-        }
-        .wrap {
           background: rgba(16,17,22,.97);
           border: 1px solid rgba(255,255,255,.12);
           border-radius: ${this.mode === 'page' ? '12px' : '0'};
@@ -168,6 +203,7 @@ export class CueListSidebar {
           box-shadow: 0 8px 28px rgba(0,0,0,.35);
         }
         .head {
+          flex: 0 0 auto;
           display: flex; align-items: center; gap: 8px;
           padding: 10px 12px;
           border-bottom: 1px solid rgba(255,255,255,.08);
@@ -180,10 +216,44 @@ export class CueListSidebar {
           cursor: pointer; font-size: 14px;
         }
         .list {
-          overflow: auto;
-          flex: 1;
-          max-height: ${this.mode === 'page' ? 'min(62vh, 640px)' : '100%'};
-          padding: 6px;
+          flex: 1 1 auto;
+          min-height: 0;
+          max-height: ${this.mode === 'page' ? 'min(62vh, 640px)' : 'none'};
+          padding: 6px 4px 6px 6px;
+          overflow-x: hidden;
+          overflow-y: auto;
+          overscroll-behavior: contain;
+          -webkit-overflow-scrolling: touch;
+          scrollbar-gutter: stable;
+          /* Firefox: hairline, nearly invisible until hover */
+          scrollbar-width: thin;
+          scrollbar-color: transparent transparent;
+        }
+        .list:hover,
+        .list:focus-within {
+          scrollbar-color: rgba(255,255,255,.28) transparent;
+        }
+        /* Chromium / Safari: hide thick OS scrollbar; show thin overlay thumb on hover */
+        .list::-webkit-scrollbar {
+          width: 5px;
+          height: 5px;
+        }
+        .list::-webkit-scrollbar-track {
+          background: transparent;
+        }
+        .list::-webkit-scrollbar-thumb {
+          background: transparent;
+          border-radius: 999px;
+        }
+        .list:hover::-webkit-scrollbar-thumb,
+        .list:focus-within::-webkit-scrollbar-thumb {
+          background: rgba(255,255,255,.22);
+        }
+        .list::-webkit-scrollbar-thumb:hover {
+          background: rgba(255,255,255,.38);
+        }
+        .list::-webkit-scrollbar-corner {
+          background: transparent;
         }
         .item {
           display: block; width: 100%; text-align: left;
@@ -191,6 +261,7 @@ export class CueListSidebar {
           background: transparent; color: #e8e8e8;
           padding: 8px 10px; margin: 2px 0;
           cursor: pointer; font-size: 12px; line-height: 1.4;
+          box-sizing: border-box;
         }
         .item:hover { background: rgba(255,255,255,.08); }
         .item.active {
@@ -198,7 +269,7 @@ export class CueListSidebar {
           outline: 1px solid color-mix(in srgb, oklch(76% 0.12 82) 55%, transparent);
         }
         .t { opacity: .55; font-size: 10px; font-variant-numeric: tabular-nums; margin-bottom: 2px; }
-        .txt { word-break: break-word; }
+        .txt { word-break: break-word; overflow-wrap: anywhere; }
         .ueh-word {
           cursor: pointer;
           border-bottom: 1px dashed rgba(255,255,255,.35);
@@ -209,8 +280,8 @@ export class CueListSidebar {
           background: rgba(255, 255, 255, 0.15);
           border-radius: 2px;
         }
-        .tr { color: oklch(88% 0.08 82); margin-top: 2px; font-size: 11px; }
-        .row-act { display: flex; gap: 6px; margin-top: 6px; }
+        .tr { color: oklch(88% 0.08 82); margin-top: 2px; font-size: 11px; word-break: break-word; }
+        .row-act { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
         .row-act button {
           border: 0; border-radius: 6px; padding: 4px 8px;
           font-size: 11px; font-weight: 600; cursor: pointer;
@@ -221,12 +292,13 @@ export class CueListSidebar {
         }
         .empty { padding: 16px; opacity: .6; font-size: 12px; }
       </style>
+      <style id="hl"></style>
       <div class="wrap">
         <div class="head">
           <span>字幕列表</span>
           <button type="button" id="close" title="关闭">×</button>
         </div>
-        <div class="list" id="list"></div>
+        <div class="list" id="list" tabindex="-1"></div>
       </div>
     `;
     this.shadow.getElementById('close')?.addEventListener('click', () => {
@@ -237,6 +309,34 @@ export class CueListSidebar {
           ?.classList.remove('ueh-cue-list-open');
       }
     });
+
+    // Block scroll chaining at edges (overscroll-behavior is not enough on all hosts)
+    const list = this.shadow.getElementById('list');
+    list?.addEventListener(
+      'wheel',
+      (e) => {
+        const el = e.currentTarget as HTMLElement;
+        const dy = e.deltaY;
+        if (dy === 0) return;
+        const max = el.scrollHeight - el.clientHeight;
+        if (max <= 0) {
+          e.preventDefault();
+          return;
+        }
+        const top = el.scrollTop;
+        const atTop = top <= 0 && dy < 0;
+        const atBottom = top >= max - 0.5 && dy > 0;
+        if (atTop || atBottom) e.preventDefault();
+      },
+      { passive: false },
+    );
+    this.injectHighlightCss();
+  }
+
+  private injectHighlightCss(): void {
+    const el = this.shadow?.getElementById('hl');
+    if (!el) return;
+    el.textContent = buildHighlightCss(this.vocabHighlight);
   }
 
   private renderList(): void {
@@ -269,6 +369,7 @@ export class CueListSidebar {
           const span = this.hostDoc.createElement('span');
           span.className = 'ueh-word';
           span.textContent = seg.text;
+          decorateWordSpan(span, seg.text, this.highlightMap, this.vocabHighlight);
           span.addEventListener('click', (e) => {
             e.stopPropagation();
             if (this.onWordClick) {
@@ -302,6 +403,7 @@ export class CueListSidebar {
 
   private highlightActive(): void {
     if (!this.shadow) return;
+    const list = this.shadow.getElementById('list');
     const items = Array.from(
       this.shadow.querySelectorAll<HTMLElement>('.item'),
     );
@@ -311,7 +413,10 @@ export class CueListSidebar {
       el.classList.toggle('active', on);
       if (on) activeEl = el;
     }
-    activeEl?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    if (!activeEl || !list) return;
+    // Only scroll when the active cue is outside the visible list — avoids
+    // constant smooth-scroll / overscroll bounce while playing.
+    scrollChildIntoListView(list, activeEl);
   }
 
   private async starCue(
@@ -367,4 +472,37 @@ function formatMs(ms: number): string {
   const m = Math.floor(s / 60);
   const r = s % 60;
   return `${m}:${String(r).padStart(2, '0')}`;
+}
+
+/**
+ * Scroll `child` into `list` only if clipped. Uses list.scrollBy instead of
+ * scrollIntoView so outer ancestors (page / PiP root) never move.
+ */
+function scrollChildIntoListView(
+  list: HTMLElement,
+  child: HTMLElement,
+  margin = 8,
+): void {
+  const listRect = list.getBoundingClientRect();
+  const childRect = child.getBoundingClientRect();
+
+  if (
+    childRect.top >= listRect.top + margin &&
+    childRect.bottom <= listRect.bottom - margin
+  ) {
+    return;
+  }
+
+  let delta = 0;
+  if (childRect.top < listRect.top + margin) {
+    delta = childRect.top - listRect.top - margin;
+  } else if (childRect.bottom > listRect.bottom - margin) {
+    delta = childRect.bottom - listRect.bottom + margin;
+  }
+  if (delta === 0) return;
+
+  list.scrollBy({
+    top: delta,
+    behavior: Math.abs(delta) < list.clientHeight * 1.5 ? 'smooth' : 'auto',
+  });
 }

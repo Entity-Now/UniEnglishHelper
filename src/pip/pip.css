@@ -13,29 +13,108 @@ body,
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
   padding: 12px;
   box-sizing: border-box;
   gap: 8px;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+/* Scrollable cue block — thin overlay scrollbar, no chain to document */
+.ueh-subtitle-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 4px 2px 4px 0;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.ueh-subtitle-panel:hover,
+.ueh-subtitle-panel:focus-within {
+  scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
+}
+
+.ueh-subtitle-panel::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+.ueh-subtitle-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.ueh-subtitle-panel::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 999px;
+}
+
+.ueh-subtitle-panel:hover::-webkit-scrollbar-thumb,
+.ueh-subtitle-panel:focus-within::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.ueh-subtitle-panel::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.38);
+}
+
+.ueh-subtitle-panel::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 .ueh-cue-en {
   font-size: 18px;
   line-height: 1.4;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.ueh-cue-en.ueh-cue-empty {
+  opacity: 0.55;
+  font-size: 14px;
+  font-weight: 500;
 }
 
 .ueh-cue-tr {
+  margin-top: 6px;
   font-size: 15px;
   color: #9ecbff;
   opacity: 0.9;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .ueh-word {
   cursor: pointer;
   border-bottom: 1px dashed rgba(255, 255, 255, 0.3);
+  padding: 0 1px;
 }
 
 .ueh-word:hover {
   background: rgba(31, 111, 235, 0.35);
+  border-radius: 2px;
+}
+
+.ueh-word.ueh-hl-new {
+  background: color-mix(in srgb, #f5c542 42%, transparent);
+  border-bottom-color: #f5c542 !important;
+  border-radius: 3px;
+}
+
+.ueh-word.ueh-hl-learning {
+  background: color-mix(in srgb, #5b9fff 42%, transparent);
+  border-bottom-color: #5b9fff !important;
+  border-radius: 3px;
+}
+
+.ueh-word.ueh-hl-learned {
+  background: color-mix(in srgb, #3ddc97 38%, transparent);
+  border-bottom-color: #3ddc97 !important;
+  border-radius: 3px;
 }
 
 .ueh-toolbar {
@@ -65,4 +144,184 @@ body,
   padding: 8px;
   font-size: 13px;
   white-space: pre-wrap;
+}
+
+/* Floating word tooltip — always above PiP chrome / cues */
+.ueh-word-popup {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 1000;
+  width: min(300px, calc(100vw - 24px));
+  max-height: min(70vh, 420px);
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(16, 17, 22, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(12px);
+  isolation: isolate;
+  overflow: hidden;
+  overscroll-behavior: contain;
+  pointer-events: auto;
+}
+
+.ueh-word-popup-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.ueh-word-popup-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.ueh-word-popup-surface {
+  font-size: 18px;
+  font-weight: 700;
+  color: oklch(88% 0.08 82);
+  word-break: break-word;
+  line-height: 1.25;
+}
+
+.ueh-word-popup-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  line-height: 1.3;
+}
+
+.ueh-word-popup-badge.llm {
+  background: color-mix(in srgb, oklch(76% 0.12 82) 35%, transparent);
+  color: oklch(92% 0.06 82);
+  border: 1px solid color-mix(in srgb, oklch(76% 0.12 82) 55%, transparent);
+}
+
+.ueh-word-popup-badge.free {
+  background: color-mix(in srgb, oklch(72% 0.14 145) 28%, transparent);
+  color: oklch(88% 0.08 145);
+  border: 1px solid color-mix(in srgb, oklch(72% 0.14 145) 50%, transparent);
+}
+
+.ueh-word-popup-badge.none {
+  background: rgba(255, 80, 80, 0.18);
+  color: #ffb4a9;
+  border: 1px solid rgba(255, 100, 100, 0.35);
+}
+
+.ueh-word-popup-note {
+  margin-top: 8px;
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 1.35;
+  color: oklch(88% 0.08 82 / 0.9);
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.ueh-word-popup-close {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.ueh-word-popup-close:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.ueh-word-popup-ctx-tr {
+  margin-top: 6px;
+  color: #9ecbff;
+  opacity: 0.92;
+}
+
+.ueh-word-popup-ctx {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  opacity: 0.65;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+
+.ueh-word-popup-body {
+  margin-top: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+}
+
+.ueh-word-popup-body::-webkit-scrollbar {
+  width: 5px;
+}
+
+.ueh-word-popup-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+}
+
+.ueh-word-popup-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+}
+
+.ueh-word-popup-actions button {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ueh-word-popup-actions button.primary {
+  background: oklch(76% 0.12 82);
+  color: #1a1a1a;
+}
+
+.ueh-word-popup-actions button.secondary {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font-weight: 500;
+}
+
+.ueh-word-popup-actions button:hover {
+  filter: brightness(1.06);
 }

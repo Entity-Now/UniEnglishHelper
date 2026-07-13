@@ -10,6 +10,11 @@ import type {
 } from './schema';
 import type { ReviewResult, WordCreate, WordQuery } from '../shared/domain/types';
 import { WORDS_REVISION_KEY } from '../shared/constants';
+import { normalizeWordKey } from '../utils/vocab-highlight';
+import {
+  classifyVideoVocab,
+  type VideoVocabRecapResult,
+} from '../utils/video-vocab-recap';
 
 /** Notify options/popup UIs that the words table changed. */
 async function bumpWordsRevision(): Promise<void> {
@@ -111,7 +116,7 @@ const STAGE_INTERVALS_MS = [
 
 export async function addWord(input: WordCreate): Promise<WordRecord> {
   const now = Date.now();
-  const wordKey = input.surface.toLowerCase().trim();
+  const wordKey = normalizeWordKey(input.surface);
   const existing = await db.words.where('wordKey').equals(wordKey).first();
   if (existing) {
     const updated: WordRecord = {
@@ -247,6 +252,15 @@ export async function setLearningStatus(
   return updated;
 }
 
+/** Words added in this video vs revisiting from other videos in subtitle corpus. */
+export async function getVideoVocabRecap(
+  videoKey: string,
+  cueWordKeys: string[],
+): Promise<VideoVocabRecapResult> {
+  const rows = await db.words.toArray();
+  return classifyVideoVocab(rows, videoKey, cueWordKeys);
+}
+
 /** Lightweight map for subtitle highlight (wordKey → status). */
 export async function getHighlightMap(): Promise<
   Record<string, import('./schema').LearningStatus>
@@ -255,8 +269,8 @@ export async function getHighlightMap(): Promise<
   const map: Record<string, import('./schema').LearningStatus> = {};
   for (const w of rows) {
     const status = w.learningStatus ?? 'new';
-    map[w.wordKey] = status;
-    map[w.surface.toLowerCase()] = status;
+    const key = normalizeWordKey(w.surface) || normalizeWordKey(w.wordKey);
+    if (key) map[key] = status;
   }
   return map;
 }

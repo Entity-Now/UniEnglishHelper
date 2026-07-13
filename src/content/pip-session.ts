@@ -33,12 +33,21 @@ import {
 import { getPageCues } from './index';
 import {
   buildHighlightCss,
-  colorForStatus,
-  highlightClass,
-  statusForSurface,
+  decorateWordSpan,
   type HighlightMap,
 } from '../utils/vocab-highlight';
 import { CueListSidebar } from './cue-list-sidebar';
+import { CueTranslateScheduler } from './cue-translate';
+import {
+  VideoVocabRecap,
+  formatRecapBadgeFromStats,
+} from './video-vocab-recap';
+import {
+  buildCueWordKeys,
+  formatRecapBadge,
+  normalizeVideoKey,
+  type VideoVocabRecapResult,
+} from '../utils/video-vocab-recap';
 import type { WordExplainResult } from '../shared/domain/types';
 
 declare global {
@@ -70,7 +79,7 @@ export class PipSessionController {
   private raf = 0;
   private config: AppConfig;
   private lastClipId: number | null = null;
-  private prefetching = new Set<string>();
+  private translateScheduler: CueTranslateScheduler;
   private keyHandler: ((e: KeyboardEvent) => void) | null = null;
   private gestureBanner: HTMLElement | null = null;
   private mirrorHandle: MirrorHandle | null = null;
@@ -81,12 +90,24 @@ export class PipSessionController {
   private showTranslationOverride: boolean | null = null;
   private highlightMap: HighlightMap = {};
   private cueList: CueListSidebar | null = null;
+  private vocabRecap: VideoVocabRecap | null = null;
 
   constructor(
     private adapter: PlayerAdapter,
     config: AppConfig,
   ) {
     this.config = config;
+    this.translateScheduler = new CueTranslateScheduler({
+      getConfig: () => this.config,
+      getCues: () => this.cues,
+      extraWindows: () => [this.pipWindow],
+      onTranslated: (cueId, translation) => {
+        if (this.currentCue?.id === cueId) {
+          this.currentCue.translation = translation;
+          this.renderCue(this.currentCue);
+        }
+      },
+    });
   }
 
   getState(): PipSessionState {
@@ -101,11 +122,49 @@ export class PipSessionController {
       this.reapplyPipStyles();
       this.syncSubVisibilityChrome();
       this.injectHighlightCss();
+      if (this.config.vocabHighlight) {
+        this.cueList?.setVocabHighlight(this.config.vocabHighlight);
+        this.vocabRecap?.setVocabHighlight(this.config.vocabHighlight);
+      }
+      this.cueList?.setHighlightMap(this.highlightMap);
       if (this.pipWindow?.document) {
         this.syncPipSettingsFields(this.pipWindow.document);
       }
-      this.renderCue(this.currentCue);
+      // Force cue re-sync so autoTranslate / display mode / word underlines
+      // take effect immediately after Settings save (not only on next cue).
+      this.syncCue(true);
+      this.applyAutoTranslateNow();
     });
+  }
+
+  /** If auto-translate is on and the active cue has no translation, request it. */
+  private applyAutoTranslateNow(): void {
+    const autoTr =
+      this.pipSurface().autoTranslate ?? this.config.features.autoTranslate;
+    if (!autoTr) return;
+    const cue =
+      this.currentCue ??
+      (this.video
+        ? findActiveCue(
+            this.cues,
+            Math.round(this.video.currentTime * 1000),
+          )
+        : null);
+    if (cue && !cue.translation) {
+      void this.translateScheduler.translateMany([cue]);
+    }
+    if (cue) this.translateScheduler.prefetchAround(cue, 8);
+  }
+
+  private wantsAutoTranslate(): boolean {
+    return (
+      this.pipSurface().autoTranslate ?? this.config.features.autoTranslate
+    );
+  }
+
+  private startBackgroundTranslate(): void {
+    if (!this.wantsAutoTranslate() || !this.cues.length) return;
+    void this.translateScheduler.drainAll();
   }
 
   private pipSurface() {
@@ -149,6 +208,85 @@ export class PipSessionController {
       'content',
     );
     if (res.ok) this.highlightMap = res.data;
+  }
+
+  /** Refresh highlight map and re-render subtitle panel + cue list. */
+  private async refreshWordHighlights(): Promise<void> {
+    await this.refreshHighlightMap();
+    this.renderCue(this.currentCue);
+    this.cueList?.setHighlightMap(this.highlightMap);
+    void this.refreshRecapBadge();
+    if (this.vocabRecap?.isOpen()) void this.vocabRecap.refresh();
+  }
+
+  private async refreshRecapBadge(): Promise<void> {
+    const doc = this.pipWindow?.document;
+    if (!doc) return;
+    const badge = doc.getElementById('ueh-recap-badge');
+    if (!badge) return;
+    const res = await sendRuntime<VideoVocabRecapResult>(
+      'word.videoRecap',
+      {
+        videoKey: normalizeVideoKey(location.href),
+        cueWordKeys: buildCueWordKeys(this.cues),
+      },
+      'content',
+    );
+    if (!res.ok) return;
+    const text = formatRecapBadge(res.data.stats);
+    badge.textContent = text;
+    badge.classList.toggle('on', text.length > 0);
+  }
+
+  private async toggleVocabRecap(): Promise<void> {
+    const doc = this.pipWindow?.document;
+    if (!doc) return;
+
+    if (!this.vocabRecap) {
+      this.vocabRecap = new VideoVocabRecap('pip', doc, {
+        getVideoKey: () => normalizeVideoKey(location.href),
+        onSeek: (ms) => {
+          if (this.video) {
+            this.video.currentTime = ms / 1000 + 0.01;
+            void this.video.play().catch(() => undefined);
+          }
+        },
+        onExplain: (surface, context) => {
+          void this.handleWordClick(surface, context);
+        },
+        onTts: (surface) => {
+          void this.handleTts(surface);
+        },
+        onMarkLearned: async (id) => {
+          await sendRuntime(
+            'word.setStatus',
+            { id, learningStatus: 'learned' },
+            'content',
+          );
+          void this.refreshWordHighlights();
+        },
+        onStatsChange: (stats) => {
+          const badge = doc.getElementById('ueh-recap-badge');
+          if (!badge) return;
+          const text = formatRecapBadgeFromStats(stats);
+          badge.textContent = text;
+          badge.classList.toggle('on', text.length > 0);
+        },
+      });
+      this.vocabRecap.setVocabHighlight(
+        this.config.vocabHighlight ?? {
+          enabled: true,
+          newColor: '#F5C542',
+          learningColor: '#5B9FFF',
+          learnedColor: '#3DDC97',
+        },
+      );
+      this.vocabRecap.setCues(this.cues);
+    } else {
+      this.vocabRecap.setCues(this.cues);
+    }
+
+    this.vocabRecap.toggle();
   }
 
   private injectHighlightCss(): void {
@@ -268,18 +406,18 @@ export class PipSessionController {
       });
 
       const loadCuesForPip = async () => {
+        const wantsAutoTr = () =>
+          this.pipSurface().autoTranslate ??
+          this.config.features.autoTranslate;
+
         let cues = getPageCues();
         if (cues.length > 0) {
           this.cues = cues;
           this.cueList?.setCues(cues);
+          this.vocabRecap?.setCues(cues);
+          void this.refreshRecapBadge();
           this.syncCue(true);
-          if (this.config.features.autoTranslate) {
-            const active = findActiveCue(
-              cues,
-              Math.round((this.video?.currentTime ?? 0) * 1000),
-            );
-            if (active) void this.translateCue(active);
-          }
+          if (wantsAutoTr()) this.startBackgroundTranslate();
           return;
         }
 
@@ -289,14 +427,10 @@ export class PipSessionController {
           if (cues.length > 0) {
             this.cues = cues;
             this.cueList?.setCues(cues);
+            this.vocabRecap?.setCues(cues);
+            void this.refreshRecapBadge();
             this.syncCue(true);
-            if (this.config.features.autoTranslate) {
-              const active = findActiveCue(
-                cues,
-                Math.round((this.video?.currentTime ?? 0) * 1000),
-              );
-              if (active) void this.translateCue(active);
-            }
+            if (wantsAutoTr()) this.startBackgroundTranslate();
             return;
           }
           await new Promise((r) => setTimeout(r, 1000));
@@ -438,6 +572,8 @@ export class PipSessionController {
     this.adPhase = 'none';
     this.cueList?.destroy();
     this.cueList = null;
+    this.vocabRecap?.destroy();
+    this.vocabRecap = null;
     this.clipPlayer.stop();
     this.unbindHotkeys();
     this.bridge?.close();
@@ -540,9 +676,13 @@ export class PipSessionController {
           this.togglePipSettingsPanel(doc);
         } else if (act === 'list') {
           this.toggleCueList();
+        } else if (act === 'recap') {
+          void this.toggleVocabRecap();
         }
       });
     });
+
+    void this.refreshRecapBadge();
 
     // YouTube ad skip from PiP
     doc.getElementById('ueh-ad-skip')?.addEventListener('click', (e) => {
@@ -723,10 +863,23 @@ export class PipSessionController {
   }
 
   private closeWordPanel(): void {
-    const root = this.pipWindow?.document.getElementById('ueh-pip-root');
-    const panel = this.pipWindow?.document.getElementById('ueh-word-panel');
+    const doc = this.pipWindow?.document;
+    const root = doc?.getElementById('ueh-pip-root');
+    const panel = doc?.getElementById('ueh-word-panel');
     root?.classList.remove('ueh-word-open');
     panel?.setAttribute('aria-hidden', 'true');
+    if (doc) this.resetWordPanelActions(doc);
+  }
+
+  /** Restore action buttons to default when the word panel closes or switches word. */
+  private resetWordPanelActions(doc: Document): void {
+    const addBtn = doc.querySelector(
+      '#ueh-word-panel-actions [data-word-act="add"]',
+    ) as HTMLButtonElement | null;
+    if (addBtn) {
+      addBtn.textContent = '加生词本';
+      addBtn.disabled = false;
+    }
   }
 
   private updatePlayIcon(): void {
@@ -863,8 +1016,8 @@ export class PipSessionController {
       banner?.classList.remove('ueh-ad-visible', 'ueh-ad-skippable');
       if (skipBtn) skipBtn.disabled = true;
       if (prev !== 'none') {
-        // Ad ended — refresh cue
-        this.syncCue(true);
+        // Ad ended — swap to main-video captions (not just re-sync old ad cues)
+        void this.reloadCuesAfterAd();
       }
       return;
     }
@@ -903,8 +1056,58 @@ export class PipSessionController {
       // Re-check shortly after click
       window.setTimeout(() => this.syncYoutubeAdUi(), 300);
       window.setTimeout(() => this.syncYoutubeAdUi(), 900);
+      // Also schedule a caption reload in case phase detection is delayed
+      window.setTimeout(() => {
+        if (detectYoutubeAdStatus().phase === 'none') {
+          void this.reloadCuesAfterAd();
+        }
+      }, 1200);
     } else {
       this.toast('warn', '未找到跳过按钮，请在原页面点击 Skip');
+    }
+  }
+
+  /**
+   * Called from content script after host-page ad ends, or from PiP ad watch.
+   * Pulls fresh page cues / re-fetches via adapter.
+   */
+  onMainCuesReloaded(cues: SubtitleCue[]): void {
+    if (!cues.length) return;
+    this.cues = cues;
+    this.currentCue = null;
+    this.cueList?.setCues(cues);
+    this.vocabRecap?.setCues(cues);
+    void this.refreshRecapBadge();
+    this.syncCue(true);
+    if (this.wantsAutoTranslate()) this.startBackgroundTranslate();
+  }
+
+  private async reloadCuesAfterAd(): Promise<void> {
+    try {
+      this.adapter.clearCache?.();
+      // Prefer shared page cues if content script already reloaded them
+      let cues = getPageCues();
+      if (!cues.length) {
+        cues = await this.adapter.getCues();
+      }
+      // If still empty, brief retry (player / pot may not be ready yet)
+      if (!cues.length) {
+        for (let i = 0; i < 4; i++) {
+          await new Promise((r) => setTimeout(r, 800));
+          cues = getPageCues();
+          if (!cues.length) cues = await this.adapter.getCues();
+          if (cues.length) break;
+        }
+      }
+      if (cues.length) {
+        this.onMainCuesReloaded(cues);
+        this.toast('info', '已切换到正片字幕');
+      } else {
+        this.syncCue(true);
+      }
+    } catch (e) {
+      console.warn('[UEH] PiP reload after ad failed', e);
+      this.syncCue(true);
     }
   }
 
@@ -915,8 +1118,11 @@ export class PipSessionController {
     const cue = findActiveCue(this.cues, t);
     // Only re-render when the *active* cue identity changes
     if (!force && cue?.id === this.currentCue?.id) {
-      // still prefetch translation silently
-      if (cue) this.maybePrefetch(cue);
+      if (cue && this.wantsAutoTranslate()) {
+        const ahead = Math.max(5, this.config.features.prefetchCues ?? 3);
+        this.translateScheduler.prefetchAround(cue, ahead);
+        if (!cue.translation) void this.translateScheduler.translateMany([cue]);
+      }
       return;
     }
     this.currentCue = cue;
@@ -931,28 +1137,12 @@ export class PipSessionController {
     const autoTr =
       this.pipSurface().autoTranslate ?? this.config.features.autoTranslate;
     if (cue && autoTr && !cue.translation) {
-      void this.translateCue(cue);
+      void this.translateScheduler.translateMany([cue]);
     }
-    if (cue) this.maybePrefetch(cue);
-  }
-
-  private maybePrefetch(cue: SubtitleCue | null): void {
-    // Prefetch next translations in background only — never show them
-    const autoTr =
-      this.pipSurface().autoTranslate ?? this.config.features.autoTranslate;
-    if (!cue || !autoTr) return;
-    const n = Math.min(3, this.config.features.prefetchCues ?? 2);
-    if (n <= 0) return;
-    const idx = this.cues.findIndex((c) => c.id === cue.id);
-    if (idx < 0) return;
-    const batch: SubtitleCue[] = [];
-    for (let i = 1; i <= n; i++) {
-      const next = this.cues[idx + i];
-      if (next && !next.translation && !this.prefetching.has(next.id)) {
-        batch.push(next);
-      }
+    if (cue && autoTr) {
+      const ahead = Math.max(5, this.config.features.prefetchCues ?? 3);
+      this.translateScheduler.prefetchAround(cue, ahead);
     }
-    if (batch.length) void this.translateMany(batch);
   }
 
   private resolveShowOriginal(): boolean {
@@ -1035,15 +1225,7 @@ export class PipSessionController {
           const span = doc.createElement('span');
           span.className = 'ueh-word';
           span.textContent = seg.text;
-          if (hlCfg?.enabled !== false) {
-            const st = statusForSurface(this.highlightMap, seg.text);
-            const cls = highlightClass(st);
-            if (cls && st) {
-              span.classList.add(cls);
-              span.title = `生词 · ${st}`;
-              span.style.boxShadow = `inset 0 -2px 0 ${colorForStatus(st, hlCfg)}`;
-            }
-          }
+          decorateWordSpan(span, seg.text, this.highlightMap, hlCfg);
           span.addEventListener('click', (e) => {
             e.stopPropagation();
             void this.handleWordClick(seg.text, cue.text);
@@ -1138,6 +1320,7 @@ export class PipSessionController {
           'content',
         );
         this.toast('info', `Added: ${msg.payload.surface}`);
+        void this.refreshWordHighlights();
         break;
       case 'pip.ui.translateRequest':
         if (this.currentCue) await this.translateCue(this.currentCue);
@@ -1155,44 +1338,7 @@ export class PipSessionController {
   }
 
   private async translateCue(cue: SubtitleCue): Promise<void> {
-    await this.translateMany([cue]);
-  }
-
-  private async translateMany(cues: SubtitleCue[]): Promise<void> {
-    const pending = cues.filter((c) => !c.translation && !this.prefetching.has(c.id));
-    if (!pending.length) return;
-    for (const c of pending) this.prefetching.add(c.id);
-    try {
-      const res = await sendRuntime<{ items: { id: string; text: string }[] }>(
-        'translate.cues',
-        {
-          cues: pending.map((c) => ({ id: c.id, text: c.text })),
-          src: this.config.sourceLang,
-          dst: this.config.targetLang,
-          mode: 'llm',
-        },
-        'content',
-      );
-      if (!res.ok) return;
-      for (const item of res.data.items) {
-        const stored = this.cues.find((c) => c.id === item.id);
-        if (stored) {
-          stored.translation = item.text;
-          const win = this.pipWindow || window;
-          win.dispatchEvent(
-            new CustomEvent('ueh:cue-translated', {
-              detail: { cueId: item.id, translation: item.text },
-            })
-          );
-        }
-        if (this.currentCue?.id === item.id) {
-          this.currentCue.translation = item.text;
-          this.renderCue(this.currentCue);
-        }
-      }
-    } finally {
-      for (const c of pending) this.prefetching.delete(c.id);
-    }
+    await this.translateScheduler.translateMany([cue]);
   }
 
   private async handleTranslateCurrent(): Promise<void> {
@@ -1344,10 +1490,20 @@ export class PipSessionController {
         },
       );
       this.cueList.setCues(this.cues);
+      this.cueList.setVocabHighlight(
+        this.config.vocabHighlight ?? {
+          enabled: true,
+          newColor: '#F5C542',
+          learningColor: '#5B9FFF',
+          learnedColor: '#3DDC97',
+        },
+      );
+      this.cueList.setHighlightMap(this.highlightMap);
     }
     this.cueList.toggle();
     if (this.cueList.isOpen()) {
       this.cueList.setActiveCueId(this.currentCue?.id ?? null);
+      if (this.wantsAutoTranslate()) void this.translateScheduler.drainAll();
     }
   }
 
@@ -1366,16 +1522,29 @@ export class PipSessionController {
     const body = doc.getElementById('ueh-word-panel-body');
     const actions = doc.getElementById('ueh-word-panel-actions');
 
+    this.resetWordPanelActions(doc);
+
     if (title) title.textContent = surface;
+    const cueTranslation = this.currentCue?.translation?.trim();
     if (ctxEl) {
-      ctxEl.textContent = context ? `原文：${context}` : '';
+      if (!context) {
+        ctxEl.textContent = '';
+      } else if (cueTranslation) {
+        ctxEl.textContent = `原文：${context}\n译文：${cueTranslation}`;
+      } else {
+        ctxEl.textContent = `原文：${context}`;
+      }
     }
 
     this.openWordPanel();
 
     let explain: WordExplainResult | null = null;
     if (wordShow?.autoExplain !== false) {
-      if (body) body.textContent = '查询中…';
+      if (body) body.textContent = '查询中…（AI 超时将自动免费翻译）';
+      if (title) {
+        // Engine badge next to the word
+        title.dataset.engine = '';
+      }
       const res = await sendRuntime<WordExplainResult & { text?: string }>(
         'word.explain',
         { word: surface, surface, context },
@@ -1385,18 +1554,42 @@ export class PipSessionController {
         explain = res.data;
         if (body) {
           body.innerHTML = '';
+          // Badge for LLM vs free MT fallback
+          const badge = doc.createElement('div');
+          badge.style.cssText =
+            'display:inline-block;font-size:10px;font-weight:700;padding:2px 7px;border-radius:999px;margin-bottom:8px;';
+          if (explain.engine === 'llm') {
+            badge.textContent = 'AI 释义';
+            badge.style.background = 'color-mix(in srgb, oklch(76% 0.12 82) 35%, transparent)';
+            badge.style.color = 'oklch(92% 0.06 82)';
+          } else if (explain.engine === 'free_mt') {
+            badge.textContent = '免费翻译';
+            badge.style.background = 'color-mix(in srgb, oklch(72% 0.14 145) 28%, transparent)';
+            badge.style.color = 'oklch(88% 0.08 145)';
+          } else {
+            badge.textContent = '不可用';
+            badge.style.background = 'rgba(255,80,80,.18)';
+            badge.style.color = '#ffb4a9';
+          }
+          body.appendChild(badge);
+
           if (explain.definition) {
             const def = doc.createElement('div');
             def.style.fontWeight = '600';
             def.textContent = explain.definition;
             body.appendChild(def);
           }
-          if (explain.contextTranslation) {
+          const sentenceTr =
+            explain.contextTranslation?.trim() || cueTranslation;
+          if (sentenceTr) {
             const ct = doc.createElement('div');
             ct.style.marginTop = '8px';
             ct.style.opacity = '0.85';
-            ct.textContent = `句子译文：${explain.contextTranslation}`;
+            ct.textContent = `句子译文：${sentenceTr}`;
             body.appendChild(ct);
+            if (ctxEl && context && !ctxEl.textContent?.includes('译文：')) {
+              ctxEl.textContent = `原文：${context}\n译文：${sentenceTr}`;
+            }
           }
           if (explain.explanation && explain.engine === 'llm') {
             const full = doc.createElement('pre');
@@ -1409,9 +1602,8 @@ export class PipSessionController {
           }
           if (explain.note) {
             const note = doc.createElement('div');
-            note.style.marginTop = '8px';
-            note.style.fontSize = '11px';
-            note.style.opacity = '0.55';
+            note.style.cssText =
+              'margin-top:10px;font-size:11px;line-height:1.35;padding:6px 8px;border-radius:8px;background:rgba(255,255,255,.06);color:oklch(88% 0.08 82)';
             note.textContent = explain.note;
             body.appendChild(note);
           }
@@ -1459,9 +1651,7 @@ export class PipSessionController {
           );
           addBtn.textContent = '已添加';
           this.toast('info', `已加入生词本：${surface}`);
-          void this.refreshHighlightMap().then(() =>
-            this.renderCue(this.currentCue),
-          );
+          void this.refreshWordHighlights();
         };
       }
       if (ttsBtn) {

@@ -57,12 +57,41 @@
           });
           timedtextWaiters.delete(videoId);
         }
+        // Only promote to global "last" when we know the video id —
+        // avoids ad timedtext (different v=) sticking as the fallback.
+        if (pot) {
+          timedtextCache.set("__last_with_pot__", u.toString());
+          timedtextCache.set("__last_with_pot_vid__", videoId);
+        }
+        timedtextCache.set("__last__", u.toString());
+        timedtextCache.set("__last_vid__", videoId);
+      } else if (pot) {
+        // pot-only URL: keep but do not overwrite a known-video pot entry
+        if (!timedtextCache.get("__last_with_pot_vid__")) {
+          timedtextCache.set("__last_with_pot__", u.toString());
+        }
       }
-      if (pot) {
-        timedtextCache.set("__last_with_pot__", u.toString());
-      }
-      timedtextCache.set("__last__", u.toString());
     } catch (e) {}
+  }
+
+  /** Prefer timedtext bound to the expected main video; never return another video's captions (ads). */
+  function pickCachedTimedtext(expectedVideoId) {
+    if (expectedVideoId) {
+      var byId = timedtextCache.get(expectedVideoId);
+      if (byId) return byId;
+      // Global pot fallback only if it belongs to the same video
+      var lastPot = timedtextCache.get("__last_with_pot__");
+      var lastPotVid = timedtextCache.get("__last_with_pot_vid__");
+      if (lastPot && lastPotVid === expectedVideoId) return lastPot;
+      // pot-only (no vid tracked) — allow as last resort for pot token reuse
+      if (lastPot && !lastPotVid) return lastPot;
+      return null;
+    }
+    return (
+      timedtextCache.get("__last_with_pot__") ||
+      timedtextCache.get("__last__") ||
+      null
+    );
   }
 
   // Observe timedtext XHR for pot tokens (read-frog approach)
@@ -269,11 +298,9 @@
         audioTracks = parseAudioTracks(at && at.captionTracks);
       } catch (e) {}
 
-      var cached =
-        (videoId && timedtextCache.get(videoId)) ||
-        timedtextCache.get("__last_with_pot__") ||
-        timedtextCache.get("__last__") ||
-        null;
+      // Prefer expected main video id so ad timedtext is not returned as "live"
+      var cacheKey = expectedVideoId || videoId || "";
+      var cached = pickCachedTimedtext(cacheKey);
 
       return {
         type: RES,
@@ -344,10 +371,7 @@
   }
 
   function waitTimedtext(videoId, timeoutMs) {
-    var cached =
-      (videoId && timedtextCache.get(videoId)) ||
-      timedtextCache.get("__last_with_pot__") ||
-      null;
+    var cached = pickCachedTimedtext(videoId);
     if (cached) return Promise.resolve(cached);
     return new Promise(function (resolve) {
       if (videoId) {
@@ -363,12 +387,9 @@
             if (idx !== -1) cur.splice(idx, 1);
           }
         }
-        resolve(
-          (videoId && timedtextCache.get(videoId)) ||
-            timedtextCache.get("__last_with_pot__") ||
-            timedtextCache.get("__last__") ||
-            null,
-        );
+        // Only resolve with a URL that matches this video (or pot-only).
+        // Never hand back another video's ad timedtext as the main track.
+        resolve(pickCachedTimedtext(videoId));
       }, timeoutMs || 6000);
     });
   }

@@ -10,11 +10,10 @@ import { findActiveCue } from '../utils/subtitles/parser';
 import { isClickableWord, segmentWords } from '../utils/segmenter';
 import {
   buildHighlightCss,
-  colorForStatus,
-  highlightClass,
-  statusForSurface,
+  decorateWordSpan,
   type HighlightMap,
 } from '../utils/vocab-highlight';
+import { CueTranslateScheduler } from './cue-translate';
 import type { PlayerAdapter } from './players';
 
 const ROOT_ID = 'ueh-page-subs-root';
@@ -29,13 +28,23 @@ export class PageSubtitlesOverlay {
   private adapter: PlayerAdapter;
   private video: HTMLVideoElement | null = null;
   private highlightMap: HighlightMap = {};
-  private prefetching = new Set<string>();
+  private translateScheduler: CueTranslateScheduler;
   private enabled = true;
   private running = false;
 
   constructor(adapter: PlayerAdapter, config: AppConfig) {
     this.adapter = adapter;
     this.config = config;
+    this.translateScheduler = new CueTranslateScheduler({
+      getConfig: () => this.config,
+      getCues: () => this.cues,
+      onTranslated: (cueId, translation) => {
+        if (this.currentId === cueId) {
+          const cue = this.cues.find((c) => c.id === cueId) ?? null;
+          this.renderCue(cue);
+        }
+      },
+    });
   }
 
   isRunning(): boolean {
@@ -56,7 +65,28 @@ export class PageSubtitlesOverlay {
     this.applyStyles();
     this.enabled = this.computeVisible(config);
     this.setEnabled(this.enabled);
-    this.renderCue(findActiveCue(this.cues, this.mediaTimeMs()));
+    // Force re-render (word underlines, colors) even if cue id unchanged
+    this.currentId = '';
+    const active = findActiveCue(this.cues, this.mediaTimeMs());
+    this.renderCue(active);
+    this.applyAutoTranslateNow(active);
+  }
+
+  private wantsAutoTranslate(): boolean {
+    return (
+      this.config.pageSubtitles?.autoTranslate ??
+      this.config.features.autoTranslate
+    );
+  }
+
+  /** After Settings save: translate active cue if auto-translate is enabled. */
+  private applyAutoTranslateNow(cue: SubtitleCue | null): void {
+    if (!cue || !this.wantsAutoTranslate()) return;
+    if (!cue.translation) {
+      void this.translateScheduler.translateMany([cue]);
+    }
+    this.translateScheduler.prefetchAround(cue, 8);
+    void this.translateScheduler.drainAll();
   }
 
   private computeVisible(cfg: AppConfig): boolean {
@@ -95,30 +125,55 @@ export class PageSubtitlesOverlay {
     this.running = true;
     this.tick();
 
+    if (this.cues.length) {
+      this.notifyCuesUpdated();
+      if (this.wantsAutoTranslate()) void this.translateScheduler.drainAll();
+    }
+
     // YouTube tracks often arrive after first paint — retry a few times
     if (!this.cues.length) {
       void this.reloadCuesWithRetry(8);
     }
   }
 
-  private async reloadCues(): Promise<void> {
+  private async reloadCues(force = false): Promise<void> {
     try {
+      if (force) this.adapter.clearCache?.();
       const cues = await this.adapter.getCues();
       if (cues.length) {
         this.cues = cues;
+        this.currentId = '';
         this.renderCue(findActiveCue(this.cues, this.mediaTimeMs()));
+        this.notifyCuesUpdated();
+        if (this.wantsAutoTranslate()) void this.translateScheduler.drainAll();
       }
     } catch (e) {
       console.warn('[UEH] page subtitles reload failed', e);
     }
   }
 
-  private async reloadCuesWithRetry(attempts: number): Promise<void> {
+  /**
+   * Force re-fetch captions (used when YouTube ad ends and we may still
+   * hold ad timedtext / stale cache).
+   */
+  async forceReloadCues(): Promise<void> {
+    if (!this.running) return;
+    await this.reloadCues(true);
+    if (!this.cues.length) {
+      void this.reloadCuesWithRetry(6, /* force */ true);
+    }
+  }
+
+  private async reloadCuesWithRetry(
+    attempts: number,
+    force = false,
+  ): Promise<void> {
     for (let i = 0; i < attempts; i++) {
       if (!this.running) return;
-      if (this.cues.length) return;
+      if (!force && this.cues.length) return;
       await new Promise((r) => setTimeout(r, 1200));
-      await this.reloadCues();
+      await this.reloadCues(force);
+      if (this.cues.length) return;
     }
   }
 
@@ -151,9 +206,28 @@ export class PageSubtitlesOverlay {
     this.renderCue(findActiveCue(this.cues, this.mediaTimeMs()));
   }
 
+  /** Update recap toolbar badge (called from content index). */
+  setRecapBadge(text: string): void {
+    const badge = this.shadow?.getElementById('ueh-page-recap-badge');
+    if (!badge) return;
+    badge.textContent = text;
+    badge.classList.toggle('on', text.length > 0);
+  }
+
+  getCues(): SubtitleCue[] {
+    return this.cues;
+  }
+
   setCues(cues: SubtitleCue[]): void {
     this.cues = cues;
     this.renderCue(findActiveCue(this.cues, this.mediaTimeMs()));
+    if (this.wantsAutoTranslate()) void this.translateScheduler.drainAll();
+  }
+
+  private notifyCuesUpdated(): void {
+    window.dispatchEvent(
+      new CustomEvent('ueh:page-cues-updated', { detail: { cues: this.cues } }),
+    );
   }
 
   private mediaTimeMs(): number {
@@ -218,8 +292,22 @@ export class PageSubtitlesOverlay {
           border: 0; border-radius: 8px;
           background: rgba(0,0,0,.72); color: #fff;
           padding: 6px 8px; font-size: 11px; font-weight: 600;
-          cursor: pointer;
+          cursor: pointer; position: relative;
         }
+        #ueh-page-recap-btn { padding-right: 10px; }
+        .ueh-page-recap-badge {
+          display: none;
+          margin-left: 4px;
+          min-width: 14px; height: 14px;
+          padding: 0 3px;
+          border-radius: 999px;
+          background: oklch(76% 0.12 82);
+          color: #1a1a1a;
+          font-size: 8px; font-weight: 800;
+          line-height: 14px;
+          vertical-align: middle;
+        }
+        .ueh-page-recap-badge.on { display: inline-block; }
       </style>
       <style id="hl"></style>
       <div id="layer">
@@ -227,6 +315,9 @@ export class PageSubtitlesOverlay {
         <div id="tr"></div>
       </div>
       <div id="tools">
+        <button type="button" data-act="recap" id="ueh-page-recap-btn">
+          生词<span class="ueh-page-recap-badge" id="ueh-page-recap-badge"></span>
+        </button>
         <button type="button" data-act="translate">译</button>
         <button type="button" data-act="toggle">隐</button>
         <button type="button" data-act="pip">PiP</button>
@@ -237,7 +328,9 @@ export class PageSubtitlesOverlay {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const act = (btn as HTMLElement).dataset.act;
-        if (act === 'translate') {
+        if (act === 'recap') {
+          window.dispatchEvent(new CustomEvent('ueh:toggle-vocab-recap'));
+        } else if (act === 'translate') {
           const cue = findActiveCue(this.cues, this.mediaTimeMs());
           if (cue) void this.translateCue(cue);
         } else if (act === 'toggle') {
@@ -254,9 +347,11 @@ export class PageSubtitlesOverlay {
     const vs = this.config.pageSubtitles?.style;
     const fontSize = Math.round(18 * ((vs?.main.fontScale ?? 110) / 100));
     const bg = (vs?.container.backgroundOpacity ?? 50) / 100;
+    const underline = this.config.wordShow?.underlineWords !== false;
     const en = this.shadow.getElementById('en');
     const tr = this.shadow.getElementById('tr');
     const layer = this.shadow.getElementById('layer');
+    const baseStyle = this.shadow.getElementById('base');
     if (en) {
       en.style.fontSize = `${fontSize}px`;
       en.style.fontWeight = String(vs?.main.fontWeight ?? 600);
@@ -275,6 +370,20 @@ export class PageSubtitlesOverlay {
         vs?.translationPosition === 'above' ? 'column-reverse' : 'column';
       const pct = this.config.pageSubtitles?.position?.percent ?? 10;
       layer.style.bottom = `${Math.max(8, pct)}%`;
+    }
+    // Live-update word underline from wordShow.underlineWords
+    if (baseStyle) {
+      const border = underline
+        ? 'border-bottom: 1px dashed rgba(255,255,255,.35);'
+        : 'border-bottom: none;';
+      // Patch only the .ueh-word rule via a dedicated style tag
+      let dyn = this.shadow.getElementById('dyn-word');
+      if (!dyn) {
+        dyn = document.createElement('style');
+        dyn.id = 'dyn-word';
+        this.shadow.appendChild(dyn);
+      }
+      dyn.textContent = `.ueh-word { ${border} }`;
     }
     const hl = this.shadow.getElementById('hl');
     if (hl) {
@@ -302,20 +411,9 @@ export class PageSubtitlesOverlay {
     if (cue?.id !== this.currentId) {
       this.currentId = cue?.id ?? '';
       this.renderCue(cue);
-      const autoTr =
-        this.config.pageSubtitles?.autoTranslate ??
-        this.config.features.autoTranslate;
-      if (cue && autoTr) {
-        if (!cue.translation) {
-          void this.translateCue(cue);
-        }
-        // Pre-fetch next 3 cues
-        for (let i = 1; i <= 3; i++) {
-          const nextCue = this.cues[cueIndex + i];
-          if (nextCue && !nextCue.translation) {
-            void this.translateCue(nextCue);
-          }
-        }
+      if (cue && this.wantsAutoTranslate()) {
+        if (!cue.translation) void this.translateScheduler.translateMany([cue]);
+        this.translateScheduler.prefetchAround(cue, 8);
       }
     }
     this.raf = requestAnimationFrame(this.tick);
@@ -348,14 +446,7 @@ export class PageSubtitlesOverlay {
           const span = document.createElement('span');
           span.className = 'ueh-word';
           span.textContent = seg.text;
-          if (hl?.enabled) {
-            const st = statusForSurface(this.highlightMap, seg.text);
-            const cls = highlightClass(st);
-            if (cls) {
-              span.classList.add(cls);
-              span.style.boxShadow = `inset 0 -2px 0 ${colorForStatus(st!, hl)}`;
-            }
-          }
+          decorateWordSpan(span, seg.text, this.highlightMap, hl);
           span.addEventListener('click', (e) => {
             e.stopPropagation();
             void this.onWordClick(seg.text, cue.text);
@@ -371,45 +462,27 @@ export class PageSubtitlesOverlay {
   }
 
   private async onWordClick(surface: string, context: string): Promise<void> {
-    await showWordExplainPopup(surface, context, this.root?.ownerDocument || document, async () => {
-      await this.refreshHighlightMap();
-      this.renderCue(findActiveCue(this.cues, this.mediaTimeMs()));
-    });
+    const active = findActiveCue(this.cues, this.mediaTimeMs());
+    const contextTranslation = active?.translation?.trim();
+    await showWordExplainPopup(
+      surface,
+      context,
+      this.root?.ownerDocument || document,
+      async () => {
+        await this.refreshHighlightMap();
+        this.renderCue(findActiveCue(this.cues, this.mediaTimeMs()));
+      },
+      contextTranslation,
+    );
   }
 
-  private async translateCue(cue: SubtitleCue): Promise<void> {
-    if (this.prefetching.has(cue.id)) return;
-    this.prefetching.add(cue.id);
-    try {
-      const res = await sendRuntime<{ items: { id: string; text: string }[] }>(
-        'translate.cues',
-        {
-          cues: [{ id: cue.id, text: cue.text }],
-          src: this.config.sourceLang,
-          dst: this.config.targetLang,
-          mode: 'mt',
-        },
-        'content',
-      );
-      if (!res.ok) return;
-      const item = res.data.items[0];
-      if (!item) return;
-      const stored = this.cues.find((c) => c.id === item.id);
-      if (stored) {
-        stored.translation = item.text;
-        const win = this.root?.ownerDocument.defaultView || window;
-        win.dispatchEvent(
-          new CustomEvent('ueh:cue-translated', {
-            detail: { cueId: item.id, translation: item.text },
-          })
-        );
-      }
-      if (this.currentId === item.id) {
-        this.renderCue(stored ?? cue);
-      }
-    } finally {
-      this.prefetching.delete(cue.id);
-    }
+  async translateCue(cue: SubtitleCue): Promise<void> {
+    await this.translateScheduler.translateMany([cue]);
+  }
+
+  drainTranslations(): void {
+    if (!this.wantsAutoTranslate()) return;
+    void this.translateScheduler.drainAll();
   }
 }
 

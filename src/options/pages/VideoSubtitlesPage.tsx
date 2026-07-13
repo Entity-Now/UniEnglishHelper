@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import type {
   AppConfig,
   PageSubtitlesConfig,
@@ -11,12 +11,27 @@ import type {
   SubtitlesTranslationPosition,
 } from '../../types/config/subtitles';
 import { SUBTITLE_FONT_FAMILIES } from '../../utils/constants/subtitles';
+import { isClickableWord, segmentWords } from '../../utils/segmenter';
+
+/** Sample cue mirrors real PiP content (long enough to show wrap). */
+const PREVIEW_EN =
+  'Hello, how are you today? Learning English is fun when subtitles stay clear.';
+const PREVIEW_TR =
+  '你好，你今天怎么样？字幕清晰时，学英语会更有趣。';
+
+/** Same base px as PiP / page overlay (`18 * fontScale / 100`). */
+const SUBTITLE_BASE_PX = 18;
 
 export function VideoSubtitlesPage(props: {
   config: AppConfig;
   onSave: (p: Partial<AppConfig>) => Promise<void>;
 }) {
   const [form, setForm] = useState(props.config);
+
+  // Keep form in sync when parent reloads config (e.g. after save from elsewhere)
+  useEffect(() => {
+    setForm(props.config);
+  }, [props.config]);
 
   return (
     <div>
@@ -30,6 +45,7 @@ export function VideoSubtitlesPage(props: {
       <SurfaceCard
         title="页内字幕（全屏 / 默认页面）"
         hint="作用于 YouTube / HTML5 播放器叠层，默认字号更大。"
+        stageLabel="页内叠层"
         surface={form.pageSubtitles}
         extra={
           <>
@@ -81,6 +97,7 @@ export function VideoSubtitlesPage(props: {
       <SurfaceCard
         title="PiP 字幕（画中画小窗）"
         hint="仅作用于 Document PiP，默认字号更小；可在 PiP 工具栏齿轮中即时调整。"
+        stageLabel="PiP 小窗"
         surface={form.pipSubtitles}
         extra={
           <div className="row">
@@ -158,7 +175,49 @@ export function VideoSubtitlesPage(props: {
 
       <div className="card">
         <h2>共享引擎（页内 + PiP）</h2>
-        <p className="hint">批处理与 AI 分句对两种表面共用。</p>
+        <p className="hint">
+          批处理、AI 分句与翻译通道对两种表面共用。保存后会立即同步到已打开的
+          YouTube / PiP 标签页。
+        </p>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={form.features.enableLlmTranslate}
+            onChange={(e) =>
+              setForm({
+                ...form,
+                features: {
+                  ...form.features,
+                  enableLlmTranslate: e.target.checked,
+                },
+              })
+            }
+          />
+          允许使用 LLM 翻译字幕（需配置 API Key）
+        </label>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={form.features.autoTranslate}
+            onChange={(e) => {
+              const on = e.target.checked;
+              // Keep legacy global flag in sync with both surfaces when toggled here
+              setForm({
+                ...form,
+                features: { ...form.features, autoTranslate: on },
+                pageSubtitles: {
+                  ...form.pageSubtitles,
+                  autoTranslate: on,
+                },
+                pipSubtitles: {
+                  ...form.pipSubtitles,
+                  autoTranslate: on,
+                },
+              });
+            }}
+          />
+          全局默认自动翻译（同步页内 + PiP）
+        </label>
         <label className="checkbox">
           <input
             type="checkbox"
@@ -418,22 +477,38 @@ function SurfaceCard(props: {
   surface: SubtitleSurfaceConfig;
   onChange: (s: Partial<SubtitleSurfaceConfig>) => void;
   extra?: React.ReactNode;
+  /** Visual chrome label for the mock player stage */
+  stageLabel?: string;
 }) {
   const { surface, onChange } = props;
   const style = surface.style;
-  const previewFont = Math.round(18 * (style.main.fontScale / 100));
-  const previewTrFont = Math.round(
-    18 * ((style.translation.fontScale ?? style.main.fontScale * 0.88) / 100),
-  );
-  const previewBg = style.container.backgroundOpacity / 100;
-  const fontCss =
-    SUBTITLE_FONT_FAMILIES[style.main.fontFamily] ??
-    SUBTITLE_FONT_FAMILIES.system;
 
-  const patchStyle = (partial: Partial<typeof style>) => {
+  type StylePatch = {
+    displayMode?: typeof style.displayMode;
+    translationPosition?: typeof style.translationPosition;
+    main?: Partial<typeof style.main>;
+    translation?: Partial<typeof style.translation>;
+    container?: Partial<typeof style.container>;
+  };
+
+  const patchStyle = (partial: StylePatch) => {
     onChange({
       ...surface,
-      style: { ...style, ...partial },
+      style: {
+        ...style,
+        displayMode: partial.displayMode ?? style.displayMode,
+        translationPosition:
+          partial.translationPosition ?? style.translationPosition,
+        // Deep-merge nested style objects so partial main/translation/container
+        // never wipe sibling fields.
+        main: partial.main ? { ...style.main, ...partial.main } : style.main,
+        translation: partial.translation
+          ? { ...style.translation, ...partial.translation }
+          : style.translation,
+        container: partial.container
+          ? { ...style.container, ...partial.container }
+          : style.container,
+      },
     });
   };
 
@@ -492,7 +567,7 @@ function SurfaceCard(props: {
           </select>
         </div>
         <div>
-          <label>译文位置</label>
+          <label>译文位置（换行堆叠）</label>
           <select
             value={style.translationPosition}
             onChange={(e) =>
@@ -502,7 +577,7 @@ function SurfaceCard(props: {
               })
             }
           >
-            <option value="below">原文下方</option>
+            <option value="below">原文下方（默认）</option>
             <option value="above">原文上方</option>
           </select>
         </div>
@@ -513,8 +588,8 @@ function SurfaceCard(props: {
             onChange={(e) => {
               const fontFamily = e.target.value as SubtitlesFontFamily;
               patchStyle({
-                main: { ...style.main, fontFamily },
-                translation: { ...style.translation, fontFamily },
+                main: { fontFamily },
+                translation: { fontFamily },
               });
             }}
           >
@@ -537,9 +612,8 @@ function SurfaceCard(props: {
             onChange={(e) => {
               const fontScale = Number(e.target.value);
               patchStyle({
-                main: { ...style.main, fontScale },
+                main: { fontScale },
                 translation: {
-                  ...style.translation,
                   fontScale: Math.round(fontScale * 0.88),
                 },
               });
@@ -573,6 +647,7 @@ function SurfaceCard(props: {
             value={surface.position.percent}
             onChange={(e) =>
               onChange({
+                ...surface,
                 position: {
                   ...surface.position,
                   percent: Number(e.target.value),
@@ -588,10 +663,12 @@ function SurfaceCard(props: {
           <label>原文颜色</label>
           <input
             type="color"
-            value={style.main.color}
+            value={
+              style.main.color.startsWith('#') ? style.main.color : '#FFFFFF'
+            }
             onChange={(e) =>
               patchStyle({
-                main: { ...style.main, color: e.target.value },
+                main: { color: e.target.value },
               })
             }
           />
@@ -607,56 +684,149 @@ function SurfaceCard(props: {
             }
             onChange={(e) =>
               patchStyle({
-                translation: {
-                  ...style.translation,
-                  color: e.target.value,
-                },
+                translation: { color: e.target.value },
               })
             }
           />
         </div>
       </div>
 
-      <div className="preview-sub" style={{ marginTop: 16 }}>
-        <div
-          className="en"
-          style={{
-            fontSize: previewFont,
-            fontFamily: fontCss,
-            color: style.main.color,
-            background: `rgba(0,0,0,${previewBg})`,
-            display:
-              style.displayMode === 'translationOnly' ||
-              style.displayMode === 'off'
-                ? 'none'
-                : 'inline-block',
-            padding: '4px 10px',
-            borderRadius: 6,
-            fontWeight: style.main.fontWeight,
-          }}
-        >
-          Hello, how are you today?
-        </div>
-        <div
-          className="tr"
-          style={{
-            fontSize: previewTrFont,
-            fontFamily: fontCss,
-            color: style.translation.color,
-            background: `rgba(0,0,0,${previewBg})`,
-            display:
-              style.displayMode === 'originalOnly' ||
-              style.displayMode === 'off'
-                ? 'none'
-                : 'inline-block',
-            padding: '4px 10px',
-            borderRadius: 6,
-            marginTop: 4,
-            fontWeight: style.translation.fontWeight,
-          }}
-        >
-          你好，你今天怎么样？
-        </div>
+      <PipStyleSubtitlePreview
+        surface={surface}
+        stageLabel={props.stageLabel ?? props.title}
+      />
+    </div>
+  );
+}
+
+/**
+ * Live mock of PiP / page-overlay cue chrome.
+ * Mirrors `buildPipStyles` + `pip-session.renderCue` layout rules so settings
+ * preview matches what users see in Document PiP.
+ */
+function PipStyleSubtitlePreview(props: {
+  surface: SubtitleSurfaceConfig;
+  stageLabel: string;
+}) {
+  const { surface } = props;
+  const style = surface.style;
+  const enabled = surface.enabled && style.displayMode !== 'off';
+
+  const appearance = useMemo(() => {
+    const mainScale = style.main.fontScale ?? 100;
+    const trScale =
+      style.translation.fontScale ?? Math.round(mainScale * 0.88);
+    const bg = Math.max(
+      0,
+      Math.min(1, (style.container.backgroundOpacity ?? 55) / 100),
+    );
+    const fontCss =
+      SUBTITLE_FONT_FAMILIES[style.main.fontFamily] ??
+      SUBTITLE_FONT_FAMILIES.system;
+    const mode = style.displayMode;
+    const showEn =
+      enabled && (mode === 'bilingual' || mode === 'originalOnly');
+    const showTr =
+      enabled && (mode === 'bilingual' || mode === 'translationOnly');
+    // PiP: bottom = max(56, 48 + percent)px on a full window.
+    // Stage mock uses % so vertical slider is visible in the fixed-height box.
+    const bottomPct = Math.max(10, Math.min(46, 14 + surface.position.percent));
+    return {
+      enFontPx: Math.round(SUBTITLE_BASE_PX * (mainScale / 100)),
+      trFontPx: Math.round(SUBTITLE_BASE_PX * (trScale / 100)),
+      bg,
+      fontCss,
+      showEn,
+      showTr,
+      mode,
+      positionAbove: style.translationPosition === 'above',
+      bottomPct,
+      enColor: style.main.color || '#FFFFFF',
+      trColor: style.translation.color || '#E8D5A3',
+      enWeight: style.main.fontWeight ?? 600,
+      trWeight: style.translation.fontWeight ?? 500,
+    };
+  }, [surface, style, enabled]);
+
+  const wordNodes = useMemo(() => {
+    return segmentWords(PREVIEW_EN).map((seg, i) => {
+      if (isClickableWord(seg)) {
+        return (
+          <span key={i} className="ueh-sub-preview-word">
+            {seg.text}
+          </span>
+        );
+      }
+      return <React.Fragment key={i}>{seg.text}</React.Fragment>;
+    });
+  }, []);
+
+  return (
+    <div className="ueh-sub-preview" style={{ marginTop: 16 }}>
+      <div className="ueh-sub-preview-meta">
+        <span>实时预览（与 PiP / 页内叠层同一套规则）</span>
+        <span className="muted">
+          {appearance.mode}
+          {' · '}
+          {appearance.positionAbove ? '译文在上' : '译文在下'}
+          {' · '}
+          底边 {surface.position.percent}%
+        </span>
+      </div>
+
+      <div
+        className="ueh-sub-preview-stage"
+        role="img"
+        aria-label={`字幕预览：${props.stageLabel}`}
+      >
+        <div className="ueh-sub-preview-stage-label">{props.stageLabel}</div>
+        {/* Fake video gradient + chrome bar like PiP */}
+        <div className="ueh-sub-preview-fake-video" />
+        <div className="ueh-sub-preview-fake-chrome" />
+
+        {!enabled || appearance.mode === 'off' ? (
+          <div className="ueh-sub-preview-off">字幕已关闭</div>
+        ) : (
+          <div
+            className="ueh-sub-preview-layer"
+            style={{
+              // Matches PiP: flex column / column-reverse for translationPosition
+              flexDirection: appearance.positionAbove
+                ? 'column-reverse'
+                : 'column',
+              bottom: `${appearance.bottomPct}%`,
+            }}
+          >
+            {appearance.showEn ? (
+              <div
+                className="ueh-sub-preview-line ueh-sub-preview-en"
+                style={{
+                  fontSize: appearance.enFontPx,
+                  fontFamily: appearance.fontCss,
+                  fontWeight: appearance.enWeight,
+                  color: appearance.enColor,
+                  background: `rgba(0,0,0,${appearance.bg})`,
+                }}
+              >
+                {wordNodes}
+              </div>
+            ) : null}
+            {appearance.showTr ? (
+              <div
+                className="ueh-sub-preview-line ueh-sub-preview-tr"
+                style={{
+                  fontSize: appearance.trFontPx,
+                  fontFamily: appearance.fontCss,
+                  fontWeight: appearance.trWeight,
+                  color: appearance.trColor,
+                  background: `rgba(0,0,0,${appearance.bg})`,
+                }}
+              >
+                {PREVIEW_TR}
+              </div>
+            ) : null}
+          </div>
+        )}
       </div>
     </div>
   );

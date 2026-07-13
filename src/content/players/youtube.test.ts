@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   extractYoutubeVideoId,
+  filterTimedtextForVideo,
   isYoutubeHost,
   isYoutubeWatchLikePath,
 } from './youtube';
@@ -30,5 +31,22 @@ describe('youtube helpers', () => {
     expect(isYoutubeWatchLikePath('/watch')).toBe(true);
     expect(isYoutubeWatchLikePath('/shorts/abc')).toBe(true);
     expect(isYoutubeWatchLikePath('/feed/trending')).toBe(false);
+  });
+
+  it('filterTimedtextForVideo rejects ad (other video) URLs', () => {
+    const main = 'dQw4w9WgXcQ';
+    const mainUrl =
+      'https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=en&pot=abc';
+    const adUrl =
+      'https://www.youtube.com/api/timedtext?v=ADVIDEO12345&lang=en&pot=xyz';
+    const potOnly =
+      'https://www.youtube.com/api/timedtext?lang=en&pot=onlypot&fmt=json3';
+
+    expect(filterTimedtextForVideo(mainUrl, main)).toContain(main);
+    expect(filterTimedtextForVideo(adUrl, main)).toBeNull();
+    // pot-only (no v) is allowed as pot carrier
+    expect(filterTimedtextForVideo(potOnly, main)).toContain('pot=onlypot');
+    expect(filterTimedtextForVideo(null, main)).toBeNull();
+    expect(filterTimedtextForVideo(undefined, main)).toBeNull();
   });
 });

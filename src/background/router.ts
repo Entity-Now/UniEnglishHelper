@@ -19,6 +19,7 @@ import {
   updateReview,
   setLearningStatus,
   getHighlightMap,
+  getVideoVocabRecap,
   getClipMeta,
   getDashboardStats,
   trimTranslationCache,
@@ -337,6 +338,12 @@ async function dispatch(
 
     case 'word.highlightMap':
       return getHighlightMap();
+
+    case 'word.videoRecap':
+      return getVideoVocabRecap(
+        String(p.videoKey ?? ''),
+        Array.isArray(p.cueWordKeys) ? (p.cueWordKeys as string[]) : [],
+      );
 
     case 'word.delete':
       await deleteWord(Number(p.id));

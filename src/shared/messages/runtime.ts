@@ -49,6 +49,10 @@ export type RuntimeRequest =
       { id: number; learningStatus: 'new' | 'learning' | 'learned' }
     >
   | Envelope<'word.highlightMap', Record<string, never>>
+  | Envelope<
+      'word.videoRecap',
+      { videoKey: string; cueWordKeys: string[] }
+    >
   | Envelope<'word.delete', { id: number }>
   | Envelope<'skill.list', Record<string, never>>
   | Envelope<'skill.save', SkillRecordInput>

@@ -9,9 +9,20 @@ import { PlayerChromeButton } from './player-chrome-button';
 import { SelectionToolbar } from './selection-toolbar';
 import { PageSubtitlesOverlay } from './page-subtitles';
 import { CueListSidebar } from './cue-list-sidebar';
+import { VideoVocabRecap } from './video-vocab-recap';
 import { showWordExplainPopup } from './word-explain-popup';
+import {
+  buildCueWordKeys,
+  formatRecapBadge,
+  normalizeVideoKey,
+  type VideoVocabRecapResult,
+} from '../utils/video-vocab-recap';
 import { CONFIG_STORAGE_KEY } from '../shared/constants';
 import { isSiteEnabled } from '../utils/site-control';
+import {
+  detectYoutubeAdStatus,
+  type YoutubeAdPhase,
+} from './youtube-ads';
 
 declare global {
   interface Window {
@@ -33,6 +44,7 @@ let chromeBtn: PlayerChromeButton | null = null;
 let selectionToolbar: SelectionToolbar | null = null;
 let pageSubs: PageSubtitlesOverlay | null = null;
 let pageCueList: CueListSidebar | null = null;
+let pageVocabRecap: VideoVocabRecap | null = null;
 let pageCues: SubtitleCue[] = [];
 let activeCueId = '';
 let cueTick = 0;
@@ -40,6 +52,9 @@ let storageListening = false;
 let navObserving = false;
 let hotkeysBound = false;
 let siteDisabled = false;
+let adWatchTimer = 0;
+let lastAdPhase: YoutubeAdPhase = 'none';
+let reloadingAfterAd = false;
 
 async function ensureController(): Promise<PipSessionController> {
   if (siteDisabled) {
@@ -67,11 +82,15 @@ function tearDownAll(): void {
   pageSubs = null;
   pageCueList?.destroy();
   pageCueList = null;
+  pageVocabRecap?.destroy();
+  pageVocabRecap = null;
   controller = null;
   if (cueTick) {
     cancelAnimationFrame(cueTick);
     cueTick = 0;
   }
+  stopAdWatcher();
+  lastAdPhase = 'none';
 }
 
 async function applyConfigLive(next: AppConfig): Promise<void> {
@@ -84,6 +103,7 @@ async function applyConfigLive(next: AppConfig): Promise<void> {
   }
   siteDisabled = false;
 
+  // Propagate full AppConfig (features / wordShow / surfaces) to every live surface
   controller?.updateConfig(config);
   selectionToolbar?.updateConfig(config);
   chromeBtn?.updateConfig(config);
@@ -98,6 +118,23 @@ async function applyConfigLive(next: AppConfig): Promise<void> {
     pageSubs.updateConfig(config);
     if (!pageSubs.isRunning()) await pageSubs.start();
   }
+
+  // Keep sidebar cue list in sync if open (translations may arrive after config flip)
+  if (pageCueList?.isOpen() && pageCues.length) {
+    pageCueList.setCues(pageCues);
+  }
+  pageVocabRecap?.setVocabHighlight(config.vocabHighlight);
+  if (pageCues.length) {
+    pageVocabRecap?.setCues(pageCues);
+    void refreshPageRecapBadge();
+  }
+
+  console.info('[UEH] config applied live', {
+    pageAutoTr: config.pageSubtitles?.autoTranslate,
+    pipAutoTr: config.pipSubtitles?.autoTranslate,
+    llmTr: config.features?.enableLlmTranslate,
+    autoExplain: config.wordShow?.autoExplain,
+  });
 }
 
 function shouldRunPageSubtitles(c: AppConfig): boolean {
@@ -134,8 +171,62 @@ async function boot(): Promise<void> {
   void loadPageCues();
   startPageCueTicker();
   ensureStorageListener();
-  if (isYoutubeHost()) ensureNavObserver();
+  if (isYoutubeHost()) {
+    ensureNavObserver();
+    ensureAdWatcher();
+  }
   ensureHotkeys();
+}
+
+/**
+ * Watch YouTube ad chrome. When an ad ends (skip or natural), force-reload
+ * main-video captions so we don't keep showing ad timedtext.
+ */
+function ensureAdWatcher(): void {
+  if (!isYoutubeHost() || adWatchTimer) return;
+  lastAdPhase = detectYoutubeAdStatus().phase;
+  adWatchTimer = window.setInterval(() => {
+    const phase = detectYoutubeAdStatus().phase;
+    const prev = lastAdPhase;
+    lastAdPhase = phase;
+    if (prev !== 'none' && phase === 'none') {
+      void reloadCuesAfterAd();
+    }
+  }, 450);
+}
+
+function stopAdWatcher(): void {
+  if (adWatchTimer) {
+    clearInterval(adWatchTimer);
+    adWatchTimer = 0;
+  }
+}
+
+async function reloadCuesAfterAd(): Promise<void> {
+  if (reloadingAfterAd || siteDisabled) return;
+  reloadingAfterAd = true;
+  console.info('[UEH] YouTube ad ended — reloading main video captions');
+  try {
+    // Small delay so the player swaps back to the main stream / pot URLs
+    await new Promise((r) => setTimeout(r, 350));
+
+    const adapter = createPlayerAdapter(config);
+    adapter.clearCache?.();
+
+    // Prefer overlay path (keeps its adapter cache in sync)
+    if (pageSubs?.isRunning()) {
+      await pageSubs.forceReloadCues();
+    }
+
+    // Always refresh page cue list + shared pageCues used by PiP
+    pageCues = [];
+    await loadPageCues(8);
+    controller?.onMainCuesReloaded?.(pageCues);
+  } catch (e) {
+    console.warn('[UEH] reload after ad failed', e);
+  } finally {
+    reloadingAfterAd = false;
+  }
 }
 
 async function loadPageCues(retryCount = 10): Promise<void> {
@@ -170,6 +261,9 @@ async function loadPageCues(retryCount = 10): Promise<void> {
       if (pageSubs && !pageSubs.isRunning()) {
         void pageSubs.start();
       }
+      pageVocabRecap?.setCues(pageCues);
+      pageSubs?.drainTranslations();
+      void refreshPageRecapBadge();
       console.info('[UEH] page cues ready', pageCues.length);
       return;
     }
@@ -208,6 +302,91 @@ function startPageCueTicker(): void {
   cueTick = requestAnimationFrame(loop);
 }
 
+async function refreshPageRecapBadge(): Promise<void> {
+  const cues = pageCues.length
+    ? pageCues
+    : (pageSubs?.getCues() ?? []);
+  const res = await sendRuntime<VideoVocabRecapResult>(
+    'word.videoRecap',
+    {
+      videoKey: normalizeVideoKey(location.href),
+      cueWordKeys: buildCueWordKeys(cues),
+    },
+    'content',
+  );
+  if (!res.ok) return;
+  pageSubs?.setRecapBadge(formatRecapBadge(res.data.stats));
+}
+
+async function speakPageWord(text: string): Promise<void> {
+  const res = await sendRuntime<{
+    mode: string;
+    text?: string;
+    voice?: string;
+  }>('tts.synth', { text }, 'content');
+  if (!res.ok) return;
+  if (res.data.mode === 'web-speech' && res.data.text) {
+    const u = new SpeechSynthesisUtterance(res.data.text);
+    u.lang = res.data.voice || 'en-US';
+    speechSynthesis.cancel();
+    speechSynthesis.speak(u);
+  }
+}
+
+function togglePageVocabRecap(): void {
+  const cues = pageCues.length
+    ? pageCues
+    : (pageSubs?.getCues() ?? []);
+  if (!pageVocabRecap) {
+    pageVocabRecap = new VideoVocabRecap('page', document, {
+      getVideoKey: () => normalizeVideoKey(location.href),
+      onSeek: (ms) => {
+        const video = createPlayerAdapter(config).findVideo();
+        if (video) {
+          video.currentTime = ms / 1000 + 0.01;
+          void video.play().catch(() => undefined);
+        }
+      },
+      onExplain: (surface, context) => {
+        const cueTr = pageCues.find((c) => c.text === context)?.translation?.trim();
+        void showWordExplainPopup(
+          surface,
+          context,
+          document,
+          () => {
+            if (pageSubs?.isRunning()) void pageSubs.refreshHighlights();
+            void pageCueList?.refreshHighlights();
+            void refreshPageRecapBadge();
+            if (pageVocabRecap?.isOpen()) void pageVocabRecap.refresh();
+          },
+          cueTr,
+        );
+      },
+      onTts: (surface) => {
+        void speakPageWord(surface);
+      },
+      onMarkLearned: async (id) => {
+        await sendRuntime(
+          'word.setStatus',
+          { id, learningStatus: 'learned' },
+          'content',
+        );
+        if (pageSubs?.isRunning()) void pageSubs.refreshHighlights();
+        void pageCueList?.refreshHighlights();
+        void refreshPageRecapBadge();
+      },
+      onStatsChange: (stats) => {
+        pageSubs?.setRecapBadge(formatRecapBadge(stats));
+      },
+    });
+    pageVocabRecap.setVocabHighlight(config.vocabHighlight);
+    pageVocabRecap.setCues(cues);
+  } else {
+    pageVocabRecap.setCues(cues);
+  }
+  pageVocabRecap.toggle();
+}
+
 function togglePageCueList(): void {
   if (pageCues.length === 0) {
     void loadPageCues(3);
@@ -224,18 +403,32 @@ function togglePageCueList(): void {
       },
       document,
       (word, context) => {
-        void showWordExplainPopup(word, context, document, () => {
-          if (pageSubs && pageSubs.isRunning()) {
-            void pageSubs.refreshHighlights();
-          }
-        });
+        const cueTr = pageCues.find((c) => c.text === context)?.translation?.trim();
+        void showWordExplainPopup(
+          word,
+          context,
+          document,
+          () => {
+            if (pageSubs && pageSubs.isRunning()) {
+              void pageSubs.refreshHighlights();
+            }
+            void pageCueList?.refreshHighlights();
+            void refreshPageRecapBadge();
+            if (pageVocabRecap?.isOpen()) void pageVocabRecap.refresh();
+          },
+          cueTr,
+        );
       }
     );
     pageCueList.setCues(pageCues);
+    pageCueList.setVocabHighlight(config.vocabHighlight);
+    void pageCueList.refreshHighlights();
   }
   pageCueList.toggle();
   if (pageCueList.isOpen()) {
     pageCueList.setActiveCueId(activeCueId || null);
+    void pageCueList.refreshHighlights();
+    pageSubs?.drainTranslations();
   }
 }
 
@@ -327,9 +520,21 @@ function ensureNavObserver(): void {
   window.addEventListener('yt-page-data-updated', check as EventListener);
 }
 
+function onPageCuesUpdated(cues: SubtitleCue[]): void {
+  pageCues = cues;
+  pageCueList?.setCues(cues);
+  pageVocabRecap?.setCues(cues);
+  controller?.onMainCuesReloaded?.(cues);
+  void refreshPageRecapBadge();
+}
+
 function ensureHotkeys(): void {
   if (hotkeysBound) return;
   hotkeysBound = true;
+  window.addEventListener('ueh:page-cues-updated', (e) => {
+    const cues = (e as CustomEvent<{ cues: SubtitleCue[] }>).detail?.cues;
+    if (cues?.length) onPageCuesUpdated(cues);
+  });
   window.addEventListener('keydown', (e) => {
     if (siteDisabled) return;
     if (e.altKey && e.shiftKey && (e.key === 'P' || e.key === 'p')) {
@@ -348,6 +553,10 @@ function ensureHotkeys(): void {
   window.addEventListener('ueh:toggle-cue-list', () => {
     if (siteDisabled) return;
     togglePageCueList();
+  });
+  window.addEventListener('ueh:toggle-vocab-recap', () => {
+    if (siteDisabled) return;
+    togglePageVocabRecap();
   });
 }
 
