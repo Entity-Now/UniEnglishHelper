@@ -169,7 +169,7 @@ export function VideoSubtitlesPage(props: {
               })
             }
           />
-          允许尝试移动 video 节点（通用 HTML5；YouTube 仍用镜像）
+          优先把 video 迁入 PiP（通用 HTML5，显著省性能；YouTube 仍用低分辨率镜像）
         </label>
       </div>
 
@@ -283,51 +283,6 @@ export function VideoSubtitlesPage(props: {
             />
           </div>
         </div>
-      </div>
-
-      <div className="card">
-        <h2>选区悬浮工具栏</h2>
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            checked={form.selectionToolbar?.enabled ?? true}
-            onChange={(e) =>
-              setForm({
-                ...form,
-                selectionToolbar: {
-                  ...form.selectionToolbar,
-                  enabled: e.target.checked,
-                },
-              })
-            }
-          />
-          启用选区工具栏
-        </label>
-        {(
-          [
-            ['showTranslate', '显示「翻译」'],
-            ['showDictionary', '显示「词典」'],
-            ['showTts', '显示「朗读」'],
-            ['showAddWord', '显示「生词」'],
-          ] as const
-        ).map(([key, label]) => (
-          <label className="checkbox" key={key}>
-            <input
-              type="checkbox"
-              checked={Boolean(form.selectionToolbar?.[key])}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  selectionToolbar: {
-                    ...form.selectionToolbar,
-                    [key]: e.target.checked,
-                  },
-                })
-              }
-            />
-            {label}
-          </label>
-        ))}
       </div>
 
       <div className="card">
@@ -462,7 +417,6 @@ export function VideoSubtitlesPage(props: {
             pipSubtitles: form.pipSubtitles,
             wordShow: form.wordShow,
             vocabHighlight: form.vocabHighlight,
-            selectionToolbar: form.selectionToolbar,
             features: form.features,
           })
         }

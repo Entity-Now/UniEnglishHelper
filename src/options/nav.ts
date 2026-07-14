@@ -2,6 +2,7 @@ export type OptionsRoute =
   | 'general'
   | 'translation'
   | 'video-subtitles'
+  | 'selection-toolbar'
   | 'custom-actions'
   | 'tts'
   | 'dictionary'
@@ -21,6 +22,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'general', label: '通用设置', group: 'settings', icon: '⚙️' },
   { id: 'translation', label: '翻译', group: 'settings', icon: '🌐' },
   { id: 'video-subtitles', label: '视频字幕', group: 'settings', icon: '🎬' },
+  { id: 'selection-toolbar', label: '选区工具栏', group: 'settings', icon: '✏️' },
   { id: 'custom-actions', label: '自定义 AI 指令', group: 'settings', icon: '✨' },
   { id: 'tts', label: '朗读 / TTS', group: 'settings', icon: '🔊' },
   { id: 'dictionary', label: '生词本', group: 'tools', icon: '📘' },

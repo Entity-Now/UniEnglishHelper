@@ -285,16 +285,31 @@ export function getPageCues(): SubtitleCue[] {
 }
 
 function startPageCueTicker(): void {
-  if (cueTick) cancelAnimationFrame(cueTick);
-  const loop = () => {
-    const video = createPlayerAdapter(config).findVideo();
-    if (video && pageCues.length) {
-      const t = Math.round(video.currentTime * 1000);
-      const cue = pageCues.find((c) => t >= c.startMs && t < c.endMs);
-      const id = cue?.id ?? '';
-      if (id !== activeCueId) {
-        activeCueId = id;
-        pageCueList?.setActiveCueId(id || null);
+  if (cueTick) {
+    cancelAnimationFrame(cueTick);
+    cueTick = 0;
+  }
+  // 5 Hz is enough for sidebar active-cue highlight; avoid creating adapters every frame.
+  let lastMs = 0;
+  const loop = (now: number) => {
+    if (now - lastMs >= 200) {
+      lastMs = now;
+      // Skip page list work while Document PiP is active (PiP has its own ticker)
+      const pipBusy =
+        controller &&
+        controller.getState() !== 'Idle' &&
+        controller.getState() !== 'Closed';
+      if (!pipBusy && pageCues.length && pageCueList?.isOpen()) {
+        const video = createPlayerAdapter(config).findVideo();
+        if (video) {
+          const t = Math.round(video.currentTime * 1000);
+          const cue = pageCues.find((c) => t >= c.startMs && t < c.endMs);
+          const id = cue?.id ?? '';
+          if (id !== activeCueId) {
+            activeCueId = id;
+            pageCueList.setActiveCueId(id || null);
+          }
+        }
       }
     }
     cueTick = requestAnimationFrame(loop);

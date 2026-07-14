@@ -13,6 +13,11 @@ import {
   prosodyNumberFromConfig,
 } from '../../types/config/tts';
 
+function clampInt(n: number, min: number, max: number): number {
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, Math.round(n)));
+}
+
 function deepMerge<T extends object>(base: T, partial: Partial<T>): T {
   const out = { ...base } as T;
   for (const key of Object.keys(partial) as (keyof T)[]) {
@@ -169,9 +174,35 @@ export async function getConfig(): Promise<AppConfig> {
   if (!merged.vocabHighlight) {
     merged.vocabHighlight = { ...DEFAULT_APP_CONFIG.vocabHighlight };
   }
-  if (!merged.selectionToolbar) {
-    merged.selectionToolbar = { ...DEFAULT_APP_CONFIG.selectionToolbar };
-  }
+  // selection toolbar (v12+ opacity/sites/shortcut; v13 skill pins)
+  merged.selectionToolbar = {
+    ...DEFAULT_APP_CONFIG.selectionToolbar,
+    ...(merged.selectionToolbar ?? {}),
+    disabledSelectionToolbarPatterns: Array.isArray(
+      merged.selectionToolbar?.disabledSelectionToolbarPatterns,
+    )
+      ? merged.selectionToolbar!.disabledSelectionToolbarPatterns
+      : [],
+    opacity: clampInt(
+      merged.selectionToolbar?.opacity ??
+        DEFAULT_APP_CONFIG.selectionToolbar.opacity,
+      1,
+      100,
+    ),
+    translateShortcut:
+      typeof merged.selectionToolbar?.translateShortcut === 'string'
+        ? merged.selectionToolbar.translateShortcut
+        : DEFAULT_APP_CONFIG.selectionToolbar.translateShortcut,
+    showSkills:
+      typeof merged.selectionToolbar?.showSkills === 'boolean'
+        ? merged.selectionToolbar.showSkills
+        : DEFAULT_APP_CONFIG.selectionToolbar.showSkills,
+    pinnedSkillIds: Array.isArray(merged.selectionToolbar?.pinnedSkillIds)
+      ? merged.selectionToolbar!.pinnedSkillIds.filter(
+          (id): id is string => typeof id === 'string' && id.length > 0,
+        )
+      : [],
+  };
   if (!merged.pageSubtitles) {
     merged.pageSubtitles = structuredClone(DEFAULT_PAGE_SUBTITLES);
   }

@@ -109,6 +109,10 @@ export type RuntimeRequest =
   | Envelope<'content.captureLive', { sessionId: string }>
   | Envelope<'content.captureStop', { sessionId: string }>
   | Envelope<'stats.dashboard', Record<string, never>>
+  | Envelope<
+      'ui.openOptions',
+      { route?: 'study' | 'dictionary' | 'general' }
+    >
   | Envelope<'translate.ensureFreeMt', { provider?: string }>
   | Envelope<'youtube.captionTracks', Record<string, never>>
   | Envelope<'youtube.playerData', { videoId: string }>

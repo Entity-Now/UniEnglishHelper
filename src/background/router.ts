@@ -296,6 +296,16 @@ async function dispatch(
     case 'stats.dashboard':
       return getDashboardStats();
 
+    case 'ui.openOptions': {
+      const route = String(p.route ?? '');
+      const hash =
+        route && route !== 'general' ? `#${route}` : '';
+      await chrome.tabs.create({
+        url: chrome.runtime.getURL(`src/options/index.html${hash}`),
+      });
+      return { opened: true };
+    }
+
     case 'tts.voices': {
       try {
         const dynamic = await listEdgeTTSVoices();
@@ -381,14 +391,22 @@ async function dispatch(
       const skills = await listSkills();
       const skill = skills.find((s) => s.id === p.skillId);
       if (!skill) throw new AppError('AI_FAILED', 'Skill not found');
+      if (!skill.enabled) {
+        throw new AppError('AI_FAILED', `Skill「${skill.name}」已禁用`);
+      }
+      const userText = String(p.text ?? '').trim();
+      if (!userText) throw new AppError('AI_FAILED', 'No text to run skill on');
+      const ctx = String(p.context ?? '').trim();
       const text = await chatCompletion(config, [
         { role: 'system', content: skill.systemPrompt },
         {
           role: 'user',
-          content: `${String(p.text)}\n\nContext: ${String(p.context ?? '')}`,
+          content: ctx
+            ? `【选中文本】\n${userText}\n\n【上下文】\n${ctx}`
+            : userText,
         },
       ]);
-      return { text };
+      return { text, skillId: skill.id, skillName: skill.name };
     }
 
     case 'tts.synth': {

@@ -1,5 +1,6 @@
 import { sendRuntime } from '../shared/messaging/client';
 import type { WordExplainResult } from '../shared/domain/types';
+import { ICON_BTN_CSS, iconActionButton } from './ui-icons';
 
 const POPUP_HOST_ID = 'ueh-word-explain-host';
 
@@ -61,6 +62,18 @@ export async function showWordExplainPopup(
         isolation: isolate;
         overflow: hidden;
         overscroll-behavior: contain;
+      }
+      @media (max-height: 400px), (max-width: 420px) {
+        .card {
+          top: 0 !important;
+          right: 0 !important;
+          bottom: 0 !important;
+          left: 0 !important;
+          width: 100% !important;
+          max-height: none !important;
+          height: 100% !important;
+          border-radius: 0;
+        }
       }
       .title-row {
         display: flex;
@@ -139,6 +152,7 @@ export async function showWordExplainPopup(
         border-radius: 999px;
       }
       .ctx-block {
+        flex: 0 0 auto;
         margin-top: 8px;
         font-size: 11px;
         line-height: 1.45;
@@ -146,6 +160,8 @@ export async function showWordExplainPopup(
         border-radius: 8px;
         background: rgba(255,255,255,.06);
         white-space: pre-wrap;
+        word-break: break-word;
+        overflow: visible;
       }
       .ctx-block .orig { opacity: .85; }
       .ctx-block .tr-line {
@@ -158,29 +174,10 @@ export async function showWordExplainPopup(
       .tr { margin-top: 4px; opacity: .9; font-size: 12px; color: oklch(88% 0.08 82); }
       .err { color: #ef4444; }
       .actions {
-        margin-top: 12px;
-        display: flex;
-        gap: 8px;
+        margin-top: 10px;
         flex: 0 0 auto;
       }
-      .actions button {
-        border: 0;
-        border-radius: 8px;
-        padding: 8px 10px;
-        cursor: pointer;
-        font-size: 12px;
-        font-weight: 600;
-      }
-      .actions .add {
-        flex: 1;
-        background: oklch(76% 0.12 82);
-        color: #1a1a1a;
-        font-weight: 700;
-      }
-      .actions .close {
-        background: rgba(255,255,255,.12);
-        color: #fff;
-      }
+      ${ICON_BTN_CSS}
     </style>
     <div class="backdrop"></div>
     <div class="card" role="dialog" aria-label="单词释义">
@@ -192,8 +189,8 @@ export async function showWordExplainPopup(
       <div class="ctx-block" id="ueh-ctx-block" hidden></div>
       <div class="body" id="ueh-popup-body">⏳ 正在查询释义…（AI 超时将自动免费翻译）</div>
       <div class="note" id="ueh-note" hidden></div>
-      <div class="actions" id="ueh-actions">
-        <button type="button" class="close" id="ueh-close-footer">关闭</button>
+      <div class="actions ueh-ibtn-row" id="ueh-actions">
+        <button type="button" class="ueh-ibtn" id="ueh-close-footer" title="关闭" aria-label="关闭">×</button>
       </div>
     </div>
   `;
@@ -334,8 +331,11 @@ export async function showWordExplainPopup(
       const actions = shadow.getElementById('ueh-actions');
       if (actions) {
         actions.innerHTML = `
-          <button type="button" class="add" id="ueh-add">加生词本</button>
-          <button type="button" class="close" id="ueh-close-active">关闭</button>
+          <div class="ueh-ibtn-row">
+            ${iconActionButton('add', '加生词本', 'primary', { id: 'ueh-add' })}
+            ${iconActionButton('tts', '朗读', '', { id: 'ueh-tts' })}
+            <button type="button" class="ueh-ibtn" id="ueh-close-active" title="关闭" aria-label="关闭">×</button>
+          </div>
         `;
         shadow
           .getElementById('ueh-close-active')
@@ -361,6 +361,21 @@ export async function showWordExplainPopup(
             );
             onAddSuccess?.();
             remove();
+          })();
+        });
+        shadow.getElementById('ueh-tts')?.addEventListener('click', () => {
+          void (async () => {
+            const res = await sendRuntime<{
+              mode: string;
+              text?: string;
+              voice?: string;
+            }>('tts.synth', { text: surface }, 'content');
+            if (res.ok && res.data.mode === 'web-speech' && res.data.text) {
+              const u = new SpeechSynthesisUtterance(res.data.text);
+              u.lang = res.data.voice || 'en-US';
+              speechSynthesis.cancel();
+              speechSynthesis.speak(u);
+            }
           })();
         });
       }

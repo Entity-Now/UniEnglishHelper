@@ -13,6 +13,7 @@ import {
   decorateWordSpan,
   type HighlightMap,
 } from '../utils/vocab-highlight';
+import { ICON_BTN_CSS, iconActionButton } from './ui-icons';
 
 export type CueListSeekHandler = (cue: SubtitleCue) => void;
 export type CueListWordClickHandler = (word: string, context: string) => void;
@@ -268,7 +269,22 @@ export class CueListSidebar {
           background: color-mix(in srgb, oklch(76% 0.12 82) 28%, transparent);
           outline: 1px solid color-mix(in srgb, oklch(76% 0.12 82) 55%, transparent);
         }
-        .t { opacity: .55; font-size: 10px; font-variant-numeric: tabular-nums; margin-bottom: 2px; }
+        .item-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 6px;
+          margin-bottom: 2px;
+          min-height: 20px;
+        }
+        .t {
+          opacity: .55;
+          font-size: 10px;
+          font-variant-numeric: tabular-nums;
+          margin: 0;
+          flex: 1 1 auto;
+          min-width: 0;
+        }
         .txt { word-break: break-word; overflow-wrap: anywhere; }
         .ueh-word {
           cursor: pointer;
@@ -281,14 +297,34 @@ export class CueListSidebar {
           border-radius: 2px;
         }
         .tr { color: oklch(88% 0.08 82); margin-top: 2px; font-size: 11px; word-break: break-word; }
-        .row-act { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
-        .row-act button {
-          border: 0; border-radius: 6px; padding: 4px 8px;
-          font-size: 11px; font-weight: 600; cursor: pointer;
-          background: rgba(255,255,255,.1); color: #fff;
+        .row-act {
+          margin: 0;
+          flex: 0 0 auto;
+          gap: 4px;
+          opacity: .72;
         }
-        .row-act button.star {
-          background: oklch(76% 0.12 82); color: #1a1a1a;
+        .item:hover .row-act,
+        .item.active .row-act {
+          opacity: 1;
+        }
+        ${ICON_BTN_CSS}
+        /* Compact action icons — top-right of each cue */
+        .item .ueh-ibtn {
+          width: 20px;
+          height: 20px;
+          border-radius: 5px;
+          background: rgba(255,255,255,.08);
+        }
+        .item .ueh-ibtn:hover {
+          background: rgba(255,255,255,.16);
+        }
+        .item .ueh-ibtn svg {
+          width: 11px;
+          height: 11px;
+          stroke-width: 2.2;
+        }
+        .item .ueh-ibtn.star {
+          background: color-mix(in srgb, oklch(76% 0.12 82) 70%, transparent);
         }
         .empty { padding: 16px; opacity: .6; font-size: 12px; }
       </style>
@@ -353,13 +389,15 @@ export class CueListSidebar {
       item.dataset.cueId = cue.id;
       const t0 = formatMs(cue.startMs);
       item.innerHTML = `
-        <div class="t">${t0}</div>
+        <div class="item-head">
+          <div class="t">${t0}</div>
+          <div class="row-act ueh-ibtn-row">
+            ${iconActionButton('jump', '跳转到此句', '', { 'data-cue-act': 'jump' })}
+            ${iconActionButton('star', '收藏句子', 'star', { 'data-cue-act': 'star' })}
+          </div>
+        </div>
         <div class="txt"></div>
         <div class="tr"></div>
-        <div class="row-act">
-          <button type="button" class="jump">跳转</button>
-          <button type="button" class="star">★ 收藏句子</button>
-        </div>
       `;
       const txtEl = item.querySelector('.txt') as HTMLElement;
       txtEl.innerHTML = '';
@@ -385,7 +423,7 @@ export class CueListSidebar {
       if (cue.translation) tr.textContent = cue.translation;
       else tr.style.display = 'none';
 
-      item.querySelector('.jump')?.addEventListener('click', (e) => {
+      item.querySelector('[data-cue-act="jump"]')?.addEventListener('click', (e) => {
         e.stopPropagation();
         this.onSeek(cue);
       });
@@ -393,7 +431,7 @@ export class CueListSidebar {
         if ((e.target as HTMLElement).closest('button')) return;
         this.onSeek(cue);
       });
-      item.querySelector('.star')?.addEventListener('click', (e) => {
+      item.querySelector('[data-cue-act="star"]')?.addEventListener('click', (e) => {
         e.stopPropagation();
         void this.starCue(cue, e.currentTarget as HTMLButtonElement);
       });
@@ -440,10 +478,12 @@ export class CueListSidebar {
       },
       'content',
     );
-    btn.textContent = res.ok ? '✓ 已收藏' : '失败';
+    btn.title = res.ok ? '已收藏' : '收藏失败';
+    btn.setAttribute('aria-label', btn.title);
     if (res.ok) {
       window.setTimeout(() => {
-        btn.textContent = '★ 收藏句子';
+        btn.title = '收藏句子';
+        btn.setAttribute('aria-label', '收藏句子');
         btn.disabled = false;
       }, 1600);
     } else {

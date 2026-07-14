@@ -150,13 +150,44 @@ export interface VocabHighlightConfig {
   learnedColor: string;
 }
 
-/** Selection toolbar on arbitrary pages (read-frog style, simplified). */
+/**
+ * Selection toolbar on arbitrary pages (read-frog aligned settings).
+ * @see https://github.com/mengxi-ream/read-frog — options/selection-toolbar
+ */
 export interface SelectionToolbarConfig {
+  /** Master switch */
   enabled: boolean;
+  /**
+   * Overlay opacity percent (1–100). Applied to toolbar + result panel.
+   * read-frog: selectionToolbar.opacity
+   */
+  opacity: number;
+  /**
+   * Host/URL patterns where the toolbar is disabled on this site only.
+   * read-frog: disabledSelectionToolbarPatterns
+   */
+  disabledSelectionToolbarPatterns: string[];
+  /**
+   * Keyboard shortcut to translate the current selection (e.g. "Alt+T").
+   * Empty string disables the shortcut.
+   * read-frog: features.translate.shortcut
+   */
+  translateShortcut: string;
+  /** Feature toggles (buttons on the floating bar) */
   showTranslate: boolean;
   showTts: boolean;
   showDictionary: boolean;
   showAddWord: boolean;
+  /**
+   * Show custom AI Skill buttons on the selection bar.
+   * Skills come from the same Skill 体系 as「自定义 AI 指令」.
+   */
+  showSkills: boolean;
+  /**
+   * Skill IDs pinned on the bar (order = display order).
+   * Empty = all enabled skills except study-only built-ins.
+   */
+  pinnedSkillIds: string[];
 }
 
 /** In-page video subtitle overlay (YouTube / HTML5, not only PiP). */
@@ -262,11 +293,20 @@ export const DEFAULT_VOCAB_HIGHLIGHT: VocabHighlightConfig = {
 
 export const DEFAULT_SELECTION_TOOLBAR: SelectionToolbarConfig = {
   enabled: true,
+  opacity: 100,
+  disabledSelectionToolbarPatterns: [],
+  translateShortcut: 'Alt+T',
   showTranslate: true,
   showTts: true,
   showDictionary: true,
   showAddWord: true,
+  showSkills: true,
+  pinnedSkillIds: [],
 };
+
+/** Opacity bounds (read-frog selection constants). */
+export const MIN_SELECTION_OVERLAY_OPACITY = 1;
+export const MAX_SELECTION_OVERLAY_OPACITY = 100;
 
 export const DEFAULT_PAGE_SUBTITLES: PageSubtitlesConfig = {
   ...structuredClone(DEFAULT_PAGE_SUBTITLE_SURFACE),
@@ -278,7 +318,7 @@ export const DEFAULT_PIP_SUBTITLES: PipSubtitlesConfig = structuredClone(
 );
 
 export const DEFAULT_APP_CONFIG: AppConfig = {
-  configVersion: 11,
+  configVersion: 13,
   targetLang: 'zh-CN',
   sourceLang: 'en',
   translateEngine: 'free_mt',

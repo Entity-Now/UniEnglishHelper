@@ -13,6 +13,8 @@ export function CustomActionsPage(props: {
       <h1 className="page-title">自定义 AI 指令</h1>
       <p className="page-desc">
         内置 Skill 首次启动自动写入，名称与提示词可随时修改且不会被升级覆盖；也支持新建自定义指令。
+        <br />
+        已启用的指令会出现在网页<strong>划选工具栏</strong>中（可在「选区工具栏」页固定显示哪些指令）。
       </p>
       <SkillsPage
         skills={props.skills}

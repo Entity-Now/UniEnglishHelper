@@ -16,6 +16,11 @@ import {
 import { buildHighlightCss, highlightClass } from '../utils/vocab-highlight';
 import { DEFAULT_VOCAB_HIGHLIGHT } from '../shared/domain/types';
 import type { VocabHighlightConfig } from '../shared/domain/types';
+import {
+  ICON_BTN_CSS,
+  iconActionButton,
+  openOptionsRoute,
+} from './ui-icons';
 
 export type VideoVocabRecapHandlers = {
   getVideoKey: () => string;
@@ -168,23 +173,45 @@ export class VideoVocabRecap {
         }
         .head {
           flex: 0 0 auto;
-          padding: 10px 12px;
+          padding: 8px 10px;
           border-bottom: 1px solid rgba(255,255,255,.08);
         }
         .head-row {
-          display: flex; align-items: center; gap: 8px;
+          display: flex; align-items: center; gap: 6px;
         }
         .head-title {
           font-size: 13px; font-weight: 700;
           color: oklch(88% 0.08 82);
+          flex: 1 1 auto;
+          min-width: 0;
         }
         .head-stats {
           font-size: 11px; opacity: .65; margin-top: 4px;
         }
+        .head-actions {
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          flex: 0 0 auto;
+          margin-left: auto;
+        }
         .head button.close {
-          margin-left: auto; border: 0; background: rgba(255,255,255,.08);
-          color: #fff; border-radius: 8px; width: 28px; height: 28px;
-          cursor: pointer; font-size: 14px;
+          border: 0; background: rgba(255,255,255,.08);
+          color: #fff; border-radius: 6px; width: 24px; height: 24px;
+          cursor: pointer; font-size: 14px; line-height: 1;
+          display: inline-flex; align-items: center; justify-content: center;
+          padding: 0;
+        }
+        .head button.close:hover { background: rgba(255,255,255,.16); }
+        /* Compact header action icons */
+        .head-actions .ueh-ibtn {
+          width: 24px;
+          height: 24px;
+          border-radius: 6px;
+        }
+        .head-actions .ueh-ibtn svg {
+          width: 13px;
+          height: 13px;
         }
         .body {
           flex: 1 1 auto; min-height: 0;
@@ -213,22 +240,33 @@ export class VideoVocabRecap {
           border-radius: 10px;
           background: rgba(255,255,255,.05);
           border: 1px solid rgba(255,255,255,.08);
-          padding: 8px 10px;
+          padding: 7px 8px;
           margin: 4px 0;
         }
         .card-top {
-          display: flex; align-items: center; gap: 6px;
+          display: flex;
+          align-items: flex-start;
+          gap: 6px;
+        }
+        .card-meta {
+          flex: 1 1 auto;
+          min-width: 0;
+          display: flex;
+          align-items: center;
+          gap: 5px;
           flex-wrap: wrap;
         }
         .surface {
-          font-size: 14px; font-weight: 700;
+          font-size: 13px; font-weight: 700;
           color: oklch(92% 0.06 82);
           cursor: pointer;
+          line-height: 1.3;
         }
         .surface:hover { text-decoration: underline; }
         .badge {
-          font-size: 10px; font-weight: 700;
-          padding: 1px 6px; border-radius: 999px;
+          font-size: 9px; font-weight: 700;
+          padding: 1px 5px; border-radius: 999px;
+          line-height: 1.3;
         }
         .badge.new {
           background: color-mix(in srgb, #F5C542 35%, transparent);
@@ -242,61 +280,60 @@ export class VideoVocabRecap {
           background: color-mix(in srgb, #3DDC97 28%, transparent);
           color: #3DDC97;
         }
-        .due { font-size: 11px; }
+        .due { font-size: 10px; line-height: 1; }
         .time {
-          margin-left: auto; font-size: 10px; opacity: .55;
+          font-size: 10px; opacity: .55;
           font-variant-numeric: tabular-nums; cursor: pointer;
         }
         .def {
-          margin-top: 4px; font-size: 11px; line-height: 1.4;
+          margin-top: 3px; font-size: 11px; line-height: 1.35;
           opacity: .85; display: -webkit-box;
           -webkit-line-clamp: 2; -webkit-box-orient: vertical;
           overflow: hidden;
         }
         .src {
-          margin-top: 4px; font-size: 10px; opacity: .5;
+          margin-top: 3px; font-size: 10px; opacity: .5;
           white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
+        /* Compact per-word actions — top-right, no extra row */
         .acts {
-          display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px;
-        }
-        .acts button {
-          border: 0; border-radius: 6px; padding: 4px 8px;
-          font-size: 10px; font-weight: 600; cursor: pointer;
-          background: rgba(255,255,255,.1); color: #fff;
-        }
-        .acts button.primary {
-          background: oklch(76% 0.12 82); color: #1a1a1a;
-        }
-        .foot {
           flex: 0 0 auto;
-          padding: 8px 10px;
-          border-top: 1px solid rgba(255,255,255,.08);
-          display: flex; gap: 6px;
+          margin: 0;
+          gap: 3px;
+          opacity: .72;
         }
-        .foot button {
-          flex: 1; border: 0; border-radius: 8px; padding: 8px;
-          font-size: 11px; font-weight: 600; cursor: pointer;
-          background: rgba(255,255,255,.1); color: #fff;
+        .card:hover .acts { opacity: 1; }
+        .card .ueh-ibtn {
+          width: 20px;
+          height: 20px;
+          border-radius: 5px;
+          background: rgba(255,255,255,.08);
         }
-        .foot button.primary {
-          background: oklch(76% 0.12 82); color: #1a1a1a;
+        .card .ueh-ibtn:hover { background: rgba(255,255,255,.16); }
+        .card .ueh-ibtn svg {
+          width: 11px;
+          height: 11px;
+          stroke-width: 2.2;
         }
+        .card .ueh-ibtn.primary {
+          background: color-mix(in srgb, oklch(76% 0.12 82) 75%, transparent);
+        }
+        ${ICON_BTN_CSS}
       </style>
       <style id="hl"></style>
       <div class="wrap">
         <div class="head">
           <div class="head-row">
             <span class="head-title">生词回顾</span>
-            <button type="button" class="close" id="close" title="关闭" aria-label="关闭">×</button>
+            <div class="head-actions">
+              ${iconActionButton('study', '开始复习', 'primary', { id: 'open-study' })}
+              ${iconActionButton('dictionary', '生词本', '', { id: 'open-dict' })}
+              <button type="button" class="close" id="close" title="关闭" aria-label="关闭">×</button>
+            </div>
           </div>
           <div class="head-stats" id="stats"></div>
         </div>
         <div class="body" id="body"></div>
-        <div class="foot">
-          <button type="button" class="primary" id="open-study">开始复习</button>
-          <button type="button" id="open-dict">生词本</button>
-        </div>
       </div>
     `;
 
@@ -304,14 +341,10 @@ export class VideoVocabRecap {
       this.close();
     });
     this.shadow.getElementById('open-study')?.addEventListener('click', () => {
-      void chrome.tabs.create({
-        url: chrome.runtime.getURL('options/index.html#study'),
-      });
+      void openOptionsRoute('study');
     });
     this.shadow.getElementById('open-dict')?.addEventListener('click', () => {
-      void chrome.tabs.create({
-        url: chrome.runtime.getURL('options/index.html#dictionary'),
-      });
+      void openOptionsRoute('dictionary');
     });
 
     const body = this.shadow.getElementById('body');
@@ -443,6 +476,9 @@ export class VideoVocabRecap {
     const top = this.hostDoc.createElement('div');
     top.className = 'card-top';
 
+    const meta = this.hostDoc.createElement('div');
+    meta.className = 'card-meta';
+
     const surface = this.hostDoc.createElement('span');
     surface.className = `surface${hlCls ? ` ${hlCls}` : ''}`;
     surface.textContent = w.surface;
@@ -451,30 +487,57 @@ export class VideoVocabRecap {
         this.handlers.onSeek(cue.startMs);
       });
     }
-    top.appendChild(surface);
+    meta.appendChild(surface);
 
     const badge = this.hostDoc.createElement('span');
     badge.className = `badge ${status}`;
     badge.textContent = STATUS_LABEL[status] ?? status;
-    top.appendChild(badge);
+    meta.appendChild(badge);
 
     if (isDue) {
       const due = this.hostDoc.createElement('span');
       due.className = 'due';
       due.textContent = '⏰';
       due.title = '待复习';
-      top.appendChild(due);
+      meta.appendChild(due);
     }
 
     if (timeLabel) {
       const time = this.hostDoc.createElement('span');
       time.className = 'time';
       time.textContent = timeLabel;
+      time.title = '跳转到此句';
       time.addEventListener('click', () => {
         if (cue) this.handlers.onSeek(cue.startMs);
       });
-      top.appendChild(time);
+      meta.appendChild(time);
     }
+
+    top.appendChild(meta);
+
+    const acts = this.hostDoc.createElement('div');
+    acts.className = 'acts ueh-ibtn-row';
+    acts.innerHTML = `
+      ${iconActionButton('tts', '朗读', '', { 'data-recap-act': 'tts' })}
+      ${iconActionButton('explain', '释义', '', { 'data-recap-act': 'explain' })}
+      ${status !== 'learned' && w.id != null ? iconActionButton('learned', '标记掌握', 'primary', { 'data-recap-act': 'learned' }) : ''}
+    `;
+    acts.querySelector('[data-recap-act="tts"]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.handlers.onTts(w.surface);
+    });
+    acts.querySelector('[data-recap-act="explain"]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const ctx = cue?.text ?? w.context ?? w.surface;
+      this.handlers.onExplain(w.surface, ctx);
+    });
+    acts.querySelector('[data-recap-act="learned"]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (w.id != null) {
+        void this.handlers.onMarkLearned(w.id).then(() => this.refresh());
+      }
+    });
+    top.appendChild(acts);
 
     card.appendChild(top);
 
@@ -494,41 +557,6 @@ export class VideoVocabRecap {
       card.appendChild(src);
     }
 
-    const acts = this.hostDoc.createElement('div');
-    acts.className = 'acts';
-
-    const ttsBtn = this.hostDoc.createElement('button');
-    ttsBtn.type = 'button';
-    ttsBtn.textContent = '朗读';
-    ttsBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this.handlers.onTts(w.surface);
-    });
-    acts.appendChild(ttsBtn);
-
-    const explainBtn = this.hostDoc.createElement('button');
-    explainBtn.type = 'button';
-    explainBtn.textContent = '释义';
-    explainBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const ctx = cue?.text ?? w.context ?? w.surface;
-      this.handlers.onExplain(w.surface, ctx);
-    });
-    acts.appendChild(explainBtn);
-
-    if (status !== 'learned' && w.id != null) {
-      const learnBtn = this.hostDoc.createElement('button');
-      learnBtn.type = 'button';
-      learnBtn.className = 'primary';
-      learnBtn.textContent = '掌握';
-      learnBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        void this.handlers.onMarkLearned(w.id!).then(() => this.refresh());
-      });
-      acts.appendChild(learnBtn);
-    }
-
-    card.appendChild(acts);
     return card;
   }
 }

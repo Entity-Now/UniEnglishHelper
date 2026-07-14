@@ -2,6 +2,40 @@ import React from 'react';
 
 export type WordPopupEngine = 'llm' | 'free_mt' | 'none';
 
+function IconBtn(props: {
+  label: string;
+  onClick?: () => void;
+  primary?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      className={`ueh-ibtn${props.primary ? ' primary' : ''}`}
+      title={props.label}
+      aria-label={props.label}
+      onClick={props.onClick}
+    >
+      {props.children}
+    </button>
+  );
+}
+
+const IcoAdd = () => (
+  <svg viewBox="0 0 24 24" aria-hidden>
+    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+    <line x1="12" x2="12" y1="11" y2="17" />
+    <line x1="9" x2="15" y1="14" y2="14" />
+  </svg>
+);
+
+const IcoTts = () => (
+  <svg viewBox="0 0 24 24" aria-hidden>
+    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none" />
+    <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+  </svg>
+);
+
 /**
  * Floating word-explain card for the React PiP shell.
  * Fixed overlay + high z-index so it is never clipped by the flex layout
@@ -81,16 +115,16 @@ export function WordPopup(props: {
         </div>
       ) : null}
       {(props.onAdd || props.onTts) && (
-        <div className="ueh-word-popup-actions">
+        <div className="ueh-word-popup-actions ueh-ibtn-row">
           {props.onAdd ? (
-            <button type="button" className="primary" onClick={props.onAdd}>
-              加生词本
-            </button>
+            <IconBtn label="加生词本" primary onClick={props.onAdd}>
+              <IcoAdd />
+            </IconBtn>
           ) : null}
           {props.onTts ? (
-            <button type="button" className="secondary" onClick={props.onTts}>
-              朗读
-            </button>
+            <IconBtn label="朗读" onClick={props.onTts}>
+              <IcoTts />
+            </IconBtn>
           ) : null}
         </div>
       )}

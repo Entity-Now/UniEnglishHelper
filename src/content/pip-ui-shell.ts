@@ -3,6 +3,8 @@
  * Controls drive the *page* <video> (YouTube native chrome stays on the tab).
  */
 
+import { ICON_BTN_CSS, iconActionButton } from './ui-icons';
+
 export function buildPipStyles(opts: {
   fontSize: number;
   bgOpacity: number;
@@ -41,15 +43,20 @@ export function buildPipStyles(opts: {
       width: 100%; height: 100%;
       display: flex; flex-direction: column;
       background: #000;
+      /* Isolate layout during window resize/move */
+      contain: layout style;
     }
     #ueh-video-slot {
       position: absolute; inset: 0;
       display: flex; align-items: center; justify-content: center;
       background: #000; overflow: hidden;
+      contain: strict;
     }
     #ueh-video-slot video, #ueh-video-slot canvas {
       width: 100% !important; height: 100% !important;
       object-fit: contain; display: block; background: #000;
+      /* Avoid layout thrash while the OS resizes the PiP window */
+      pointer-events: none;
     }
     /* Current cue only — YouTube-like bottom center */
     #ueh-sub-layer {
@@ -198,58 +205,52 @@ export function buildPipStyles(opts: {
     }
     #ueh-word-panel-close:hover { background: rgba(255,255,255,.16); }
     #ueh-word-panel-ctx {
+      flex: 0 0 auto;
       padding: 8px 12px 0;
       font-size: 11px; line-height: 1.45;
       color: rgba(255,255,255,.72);
       white-space: pre-wrap;
-      max-height: 4.5em;
-      overflow-y: auto;
+      word-break: break-word;
+      overflow: visible;
+    }
+    #ueh-word-panel-main {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
     }
     #ueh-word-panel-body {
-      flex: 1; min-height: 0;
+      flex: 1 1 auto;
+      min-height: 0;
       overflow-x: hidden;
       overflow-y: auto;
       overscroll-behavior: contain;
-      -webkit-overflow-scrolling: touch;
-      padding: 10px 12px 12px;
+      padding: 10px 12px 8px;
       font-size: 13px; line-height: 1.5;
       color: rgba(255,255,255,.92);
-      white-space: pre-wrap; word-break: break-word;
-      scrollbar-width: thin;
-      scrollbar-color: transparent transparent;
-    }
-    #ueh-word-panel-body:hover,
-    #ueh-word-panel-body:focus-within {
-      scrollbar-color: rgba(255,255,255,.28) transparent;
-    }
-    #ueh-word-panel-body::-webkit-scrollbar { width: 5px; }
-    #ueh-word-panel-body::-webkit-scrollbar-track { background: transparent; }
-    #ueh-word-panel-body::-webkit-scrollbar-thumb {
-      background: transparent; border-radius: 999px;
-    }
-    #ueh-word-panel-body:hover::-webkit-scrollbar-thumb,
-    #ueh-word-panel-body:focus-within::-webkit-scrollbar-thumb {
-      background: rgba(255,255,255,.22);
+      white-space: pre-wrap;
+      word-break: break-word;
     }
     #ueh-word-panel-actions {
-      display: flex; flex-wrap: wrap; gap: 6px;
-      padding: 10px 12px 12px;
+      flex: 0 0 auto;
+      padding: 8px 12px 12px;
       border-top: 1px solid rgba(255,255,255,.08);
     }
-    #ueh-word-panel-actions button {
-      flex: 1 1 auto;
-      min-width: 0;
-      border: 0; border-radius: 8px;
-      padding: 8px 10px; cursor: pointer;
-      font-size: 12px; font-weight: 600;
+    ${ICON_BTN_CSS}
+    /* Small PiP window: word panel goes full-screen */
+    @media (max-height: 400px), (max-width: 420px) {
+      #ueh-pip-root.ueh-word-open #ueh-word-panel {
+        top: 0 !important;
+        right: 0 !important;
+        bottom: 0 !important;
+        left: 0 !important;
+        width: 100% !important;
+        max-width: none !important;
+        border-radius: 0;
+        z-index: 50;
+      }
     }
-    #ueh-word-panel-actions .primary {
-      background: oklch(76% 0.12 82); color: #1a1a1a;
-    }
-    #ueh-word-panel-actions .secondary {
-      background: rgba(255,255,255,.1); color: #fff; font-weight: 500;
-    }
-    #ueh-word-panel-actions button:hover { filter: brightness(1.06); }
 
     /* YouTube ad banner */
     #ueh-ad-banner {
@@ -491,11 +492,13 @@ export function buildPipMarkup(): string {
           <div id="ueh-word-panel-title"></div>
           <button type="button" id="ueh-word-panel-close" title="关闭" aria-label="关闭">×</button>
         </div>
-        <div id="ueh-word-panel-ctx"></div>
-        <div id="ueh-word-panel-body"></div>
-        <div id="ueh-word-panel-actions">
-          <button type="button" class="primary" data-word-act="add">加生词本</button>
-          <button type="button" class="secondary" data-word-act="tts">朗读</button>
+        <div id="ueh-word-panel-main">
+          <div id="ueh-word-panel-ctx"></div>
+          <div id="ueh-word-panel-body"></div>
+        </div>
+        <div id="ueh-word-panel-actions" class="ueh-ibtn-row">
+          ${iconActionButton('add', '加生词本', 'primary', { 'data-word-act': 'add' })}
+          ${iconActionButton('tts', '朗读', '', { 'data-word-act': 'tts' })}
         </div>
       </aside>
       <div id="ueh-pip-settings" aria-label="PiP 字幕设置">

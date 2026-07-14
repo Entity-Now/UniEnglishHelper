@@ -7,6 +7,7 @@ import { NAV_ITEMS, type OptionsRoute } from './nav';
 import { GeneralPage } from './pages/GeneralPage';
 import { TranslationPage } from './pages/TranslationPage';
 import { VideoSubtitlesPage } from './pages/VideoSubtitlesPage';
+import { SelectionToolbarPage } from './pages/SelectionToolbarPage';
 import { CustomActionsPage } from './pages/CustomActionsPage';
 import { TtsPage } from './pages/TtsPage';
 import { DictionaryPage } from './pages/Dictionary';
@@ -223,6 +224,13 @@ export function OptionsApp() {
         )}
         {route === 'video-subtitles' && (
           <VideoSubtitlesPage config={config} onSave={saveConfig} />
+        )}
+        {route === 'selection-toolbar' && (
+          <SelectionToolbarPage
+            config={config}
+            skills={skills}
+            onSave={saveConfig}
+          />
         )}
         {route === 'custom-actions' && (
           <CustomActionsPage

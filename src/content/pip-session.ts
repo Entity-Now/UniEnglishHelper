@@ -91,6 +91,15 @@ export class PipSessionController {
   private highlightMap: HighlightMap = {};
   private cueList: CueListSidebar | null = null;
   private vocabRecap: VideoVocabRecap | null = null;
+  /** Throttle PiP chrome / bridge UI updates (ms timestamp). */
+  private lastUiPushMs = 0;
+  private lastUiKey = '';
+  /** Last cue id we already scheduled translate prefetch for. */
+  private lastPrefetchCueId = '';
+  /** mousemove chrome reveal throttle */
+  private lastChromeShowMs = 0;
+  /** Avoid rewriting play SVG every UI tick */
+  private lastPlayIconPaused: boolean | null = null;
 
   constructor(
     private adapter: PlayerAdapter,
@@ -460,8 +469,10 @@ export class PipSessionController {
 
   /**
    * Fill video slot so PiP is never empty black.
-   * YouTube: canvas drawImage mirror (captureStream is often black).
-   * Generic: canvas first, then move node fallback.
+   *
+   * Prefer **moving** the real <video> into PiP when the adapter allows it
+   * (generic HTML5). That avoids dual decode + canvas copy and is far smoother
+   * on resize/move. YouTube cannot move the node safely → low-res canvas mirror.
    */
   private setupVideoInPip(
     pipWindow: Window,
@@ -471,23 +482,64 @@ export class PipSessionController {
     if (!slot) return 'mirror';
 
     this.teardownVideoMirror();
-    this.mirrorHandle = startVideoMirror(source, pipWindow, slot);
 
-    if (this.mirrorHandle.mode !== 'none') {
-      return 'mirror';
-    }
-
-    // Last attempt: move node for simple HTML5 players only
-    if (this.adapter.supportsMove && this.config.pip.preferMove) {
+    // Prefer real node transfer when safe — biggest perf win (no dual render).
+    if (this.adapter.supportsMove && this.config.pip.preferMove !== false) {
       try {
         this.moveVideoToPip(source, pipWindow);
+        this.setPagePlayerDimmed(true);
         return 'move';
       } catch (err) {
-        console.warn('[UEH] move video failed', err);
+        console.warn('[UEH] move video failed, falling back to mirror', err);
       }
     }
 
+    this.mirrorHandle = startVideoMirror(source, pipWindow, slot);
+    if (this.mirrorHandle.mode !== 'none') {
+      // Page still decodes; dim/cover the heavy player chrome to cut compositor work.
+      this.setPagePlayerDimmed(true);
+      return 'mirror';
+    }
+
     return 'mirror';
+  }
+
+  /**
+   * While PiP is open, cut compositor work on the opener tab.
+   * Does not pause media (mirror still needs decoded frames from <video>).
+   */
+  private setPagePlayerDimmed(on: boolean): void {
+    const STYLE_ID = 'ueh-pip-page-dim';
+    if (!on) {
+      document.getElementById(STYLE_ID)?.remove();
+      document.documentElement.classList.remove('ueh-pip-active');
+      return;
+    }
+    document.documentElement.classList.add('ueh-pip-active');
+    if (document.getElementById(STYLE_ID)) return;
+    const style = document.createElement('style');
+    style.id = STYLE_ID;
+    // Hide heavy secondary UI / player chrome while learning in PiP.
+    // Keep the <video> itself (required for canvas mirror & timeline).
+    style.textContent = `
+      html.ueh-pip-active ytd-watch-flexy #secondary,
+      html.ueh-pip-active ytd-watch-flexy #below,
+      html.ueh-pip-active ytd-watch-flexy #chat,
+      html.ueh-pip-active ytd-watch-flexy #comments {
+        content-visibility: auto;
+        contain-intrinsic-size: 1px 500px;
+      }
+      html.ueh-pip-active #movie_player .ytp-chrome-top,
+      html.ueh-pip-active #movie_player .ytp-chrome-bottom,
+      html.ueh-pip-active #movie_player .ytp-gradient-top,
+      html.ueh-pip-active #movie_player .ytp-gradient-bottom,
+      html.ueh-pip-active #movie_player .ytp-cards-teaser,
+      html.ueh-pip-active #movie_player .ytp-ce-element {
+        visibility: hidden !important;
+        pointer-events: none !important;
+      }
+    `;
+    document.head.appendChild(style);
   }
 
   private teardownVideoMirror(): void {
@@ -567,7 +619,17 @@ export class PipSessionController {
   async close(): Promise<void> {
     if (this.state === 'Idle' || this.state === 'Closed') return;
     this.state = 'Restoring';
-    cancelAnimationFrame(this.raf);
+    try {
+      cancelAnimationFrame(this.raf);
+    } catch {
+      // ignore
+    }
+    try {
+      this.pipWindow?.cancelAnimationFrame(this.raf);
+    } catch {
+      // ignore
+    }
+    this.raf = 0;
     this.stopAdWatch();
     this.adPhase = 'none';
     this.cueList?.destroy();
@@ -580,7 +642,13 @@ export class PipSessionController {
     this.bridge = null;
     this.teardownVideoMirror();
     this.restoreVideo();
+    this.setPagePlayerDimmed(false);
     this.hideClickToOpenBanner();
+    this.lastUiPushMs = 0;
+    this.lastUiKey = '';
+    this.lastPrefetchCueId = '';
+    this.lastPlayIconPaused = null;
+    this.lastChromeShowMs = 0;
     try {
       this.pipWindow?.close();
     } catch {
@@ -634,16 +702,26 @@ export class PipSessionController {
     const root = doc.getElementById('ueh-pip-root');
     const progress = doc.getElementById('ueh-progress') as HTMLInputElement | null;
 
-    // Show chrome while interacting
+    // Show chrome while interacting (throttle mousemove — fires dozens/sec while dragging/resizing)
     let hideTimer = 0;
     const showChrome = () => {
+      const now = performance.now();
+      if (now - this.lastChromeShowMs < 120) {
+        // Still refresh hide timer lightly without class thrash
+        window.clearTimeout(hideTimer);
+        hideTimer = window.setTimeout(() => {
+          root?.classList.remove('ueh-show-chrome');
+        }, 2500);
+        return;
+      }
+      this.lastChromeShowMs = now;
       root?.classList.add('ueh-show-chrome');
       window.clearTimeout(hideTimer);
       hideTimer = window.setTimeout(() => {
         root?.classList.remove('ueh-show-chrome');
       }, 2500);
     };
-    root?.addEventListener('mousemove', showChrome);
+    root?.addEventListener('mousemove', showChrome, { passive: true });
     root?.addEventListener('click', showChrome);
     showChrome();
 
@@ -877,8 +955,10 @@ export class PipSessionController {
       '#ueh-word-panel-actions [data-word-act="add"]',
     ) as HTMLButtonElement | null;
     if (addBtn) {
-      addBtn.textContent = '加生词本';
+      addBtn.title = '加生词本';
+      addBtn.setAttribute('aria-label', '加生词本');
       addBtn.disabled = false;
+      addBtn.style.opacity = '';
     }
   }
 
@@ -887,7 +967,10 @@ export class PipSessionController {
       'button[data-act="play"] svg',
     );
     if (!btn || !this.video) return;
-    btn.innerHTML = this.video.paused ? ICONS.play : ICONS.pause;
+    const paused = this.video.paused;
+    if (this.lastPlayIconPaused === paused) return;
+    this.lastPlayIconPaused = paused;
+    btn.innerHTML = paused ? ICONS.play : ICONS.pause;
   }
 
   private bindHotkeys(win: Window): void {
@@ -953,17 +1036,31 @@ export class PipSessionController {
     const slot = pipWindow.document.getElementById('ueh-video-slot');
     if (!slot) throw new AppError('MOVE_FAILED', 'No video slot in PiP');
     slot.innerHTML = '';
+    // Preserve inline styles so restore is clean
+    if (!video.dataset.uehPrevStyle) {
+      video.dataset.uehPrevStyle = video.getAttribute('style') ?? '';
+      video.dataset.uehPrevControls = video.controls ? '1' : '0';
+    }
     slot.appendChild(video);
     video.style.cssText =
       'width:100% !important;height:100% !important;max-width:100%;max-height:100%;object-fit:contain;display:block;background:#000;';
-    video.controls = true;
+    // Custom chrome already provides controls; native controls add hit-test cost
+    video.controls = false;
     void video.play().catch(() => undefined);
   }
 
   private restoreVideo(): void {
     if (!this.video || !this.placeholder || !this.originalParent) return;
     try {
-      this.originalParent.insertBefore(this.video, this.placeholder);
+      const v = this.video;
+      if (v.dataset.uehPrevStyle !== undefined) {
+        if (v.dataset.uehPrevStyle) v.setAttribute('style', v.dataset.uehPrevStyle);
+        else v.removeAttribute('style');
+        v.controls = v.dataset.uehPrevControls === '1';
+        delete v.dataset.uehPrevStyle;
+        delete v.dataset.uehPrevControls;
+      }
+      this.originalParent.insertBefore(v, this.placeholder);
       this.placeholder.remove();
     } catch {
       // node may be gone
@@ -973,12 +1070,26 @@ export class PipSessionController {
   }
 
   private startTicker(): void {
-    const loop = () => {
-      this.syncCue(false);
-      this.pushPlaybackState();
-      this.raf = requestAnimationFrame(loop);
+    // Drive ticker from PiP window when possible so cue sync stays timely
+    // while the opener tab is backgrounded (page rAF is heavily throttled).
+    const animWin = this.pipWindow ?? window;
+    const schedule = (cb: FrameRequestCallback) => {
+      try {
+        return animWin.requestAnimationFrame(cb);
+      } catch {
+        return requestAnimationFrame(cb);
+      }
     };
-    this.raf = requestAnimationFrame(loop);
+    const loop = (now: number) => {
+      this.syncCue(false);
+      // UI + bridge at ~8 Hz — full 60 Hz DOM/MessagePort spam is a major lag source
+      if (now - this.lastUiPushMs >= 125) {
+        this.lastUiPushMs = now;
+        this.pushPlaybackState();
+      }
+      this.raf = schedule(loop);
+    };
+    this.raf = schedule(loop);
     this.startAdWatch();
   }
 
@@ -1118,7 +1229,13 @@ export class PipSessionController {
     const cue = findActiveCue(this.cues, t);
     // Only re-render when the *active* cue identity changes
     if (!force && cue?.id === this.currentCue?.id) {
-      if (cue && this.wantsAutoTranslate()) {
+      // Prefetch only once per cue id (was every rAF → wasted work)
+      if (
+        cue &&
+        this.wantsAutoTranslate() &&
+        cue.id !== this.lastPrefetchCueId
+      ) {
+        this.lastPrefetchCueId = cue.id;
         const ahead = Math.max(5, this.config.features.prefetchCues ?? 3);
         this.translateScheduler.prefetchAround(cue, ahead);
         if (!cue.translation) void this.translateScheduler.translateMany([cue]);
@@ -1136,10 +1253,9 @@ export class PipSessionController {
 
     const autoTr =
       this.pipSurface().autoTranslate ?? this.config.features.autoTranslate;
-    if (cue && autoTr && !cue.translation) {
-      void this.translateScheduler.translateMany([cue]);
-    }
     if (cue && autoTr) {
+      this.lastPrefetchCueId = cue.id;
+      if (!cue.translation) void this.translateScheduler.translateMany([cue]);
       const ahead = Math.max(5, this.config.features.prefetchCues ?? 3);
       this.translateScheduler.prefetchAround(cue, ahead);
     }
@@ -1242,22 +1358,31 @@ export class PipSessionController {
 
   private pushPlaybackState(): void {
     if (!this.video) return;
-    this.bridge?.send({
-      type: 'pip.playbackState',
-      payload: {
-        mediaTimeMs: Math.round(this.video.currentTime * 1000),
-        paused: this.video.paused,
-        rate: this.video.playbackRate,
-        captureState: this.captureState,
-        sessionId: this.captureSessionId ?? undefined,
-        epoch: this.sampler.getEpoch(),
-      },
-    });
+    const mediaTimeMs = Math.round(this.video.currentTime * 1000);
+    const paused = this.video.paused;
+    const rate = this.video.playbackRate;
+    const epoch = this.sampler.getEpoch();
+    // Skip identical bridge payloads (MessagePort traffic during drag/resize hurts)
+    const key = `${mediaTimeMs}|${paused ? 1 : 0}|${rate}|${this.captureState}|${epoch}`;
+    if (key !== this.lastUiKey) {
+      this.lastUiKey = key;
+      this.bridge?.send({
+        type: 'pip.playbackState',
+        payload: {
+          mediaTimeMs,
+          paused,
+          rate,
+          captureState: this.captureState,
+          sessionId: this.captureSessionId ?? undefined,
+          epoch,
+        },
+      });
+    }
 
     const doc = this.pipWindow?.document;
     if (!doc) return;
 
-    // Progress + time (drive UI from original video)
+    // Progress + time (drive UI from original / moved video)
     const progress = doc.getElementById('ueh-progress') as HTMLInputElement | null;
     const timeEl = doc.getElementById('ueh-time');
     const dur = this.video.duration;
@@ -1265,20 +1390,21 @@ export class PipSessionController {
     if (progress && Number.isFinite(dur) && dur > 0) {
       // Avoid fighting user scrub if focused
       if (doc.activeElement !== progress) {
-        progress.value = String(Math.round((cur / dur) * 1000));
+        const next = String(Math.round((cur / dur) * 1000));
+        if (progress.value !== next) progress.value = next;
       }
     }
     if (timeEl) {
-      timeEl.textContent = `${formatTime(cur)} / ${formatTime(
+      const text = `${formatTime(cur)} / ${formatTime(
         Number.isFinite(dur) ? dur : 0,
       )}`;
+      if (timeEl.textContent !== text) timeEl.textContent = text;
     }
     this.updatePlayIcon();
 
     const status = doc.getElementById('ueh-status');
-    if (status) {
-      status.textContent =
-        this.captureState === 'CaptureLive' ? '● REC' : '';
+    if (status && this.captureState === 'CaptureLive') {
+      if (status.textContent !== '● REC') status.textContent = '● REC';
     }
   }
 
@@ -1649,7 +1775,9 @@ export class PipSessionController {
             },
             'content',
           );
-          addBtn.textContent = '已添加';
+          addBtn.title = '已添加';
+          addBtn.setAttribute('aria-label', '已添加');
+          addBtn.style.opacity = '0.55';
           this.toast('info', `已加入生词本：${surface}`);
           void this.refreshWordHighlights();
         };
