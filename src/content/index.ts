@@ -4,7 +4,15 @@ import type { AppConfig, SubtitleCue } from '../shared/domain/types';
 import { DEFAULT_APP_CONFIG } from '../shared/domain/types';
 import { createPlayerAdapter } from './players';
 import { PipSessionController } from './pip-session';
-import { isYoutubeHost, isYoutubeWatchLikePath } from './players/youtube';
+import {
+  clearPreloadedMainCues,
+  extractYoutubeVideoId,
+  isYoutubeHost,
+  isYoutubeWatchLikePath,
+  peekPreloadedMainCues,
+  storePreloadedMainCues,
+  YoutubeAdapter,
+} from './players/youtube';
 import { PlayerChromeButton } from './player-chrome-button';
 import { SelectionToolbar } from './selection-toolbar';
 import { PageSubtitlesOverlay } from './page-subtitles';
@@ -55,6 +63,24 @@ let siteDisabled = false;
 let adWatchTimer = 0;
 let lastAdPhase: YoutubeAdPhase = 'none';
 let reloadingAfterAd = false;
+/** In-flight main-caption prefetch while an ad is playing */
+let prefetchingDuringAd = false;
+let lastPrefetchVideoId: string | null = null;
+/** Full location.href last seen by the nav watcher */
+let lastNavHref = '';
+/** YouTube video id last seen (autoplay next may change v= without full remount) */
+let lastNavVideoId: string | null = null;
+/** Debounced navigation / video-switch handler */
+let navHandleTimer = 0;
+/** Serializes soft video-switch reloads */
+let videoSwitching = false;
+/** Bound main video element for emptied/loadstart monitoring */
+let watchedMainVideo: HTMLVideoElement | null = null;
+/** Bumps on video switch so in-flight loadPageCues retries are abandoned */
+let cueLoadGeneration = 0;
+const onMainVideoMediaReset = (): void => {
+  scheduleYoutubeNavHandle('video-media-reset');
+};
 
 async function ensureController(): Promise<PipSessionController> {
   if (siteDisabled) {
@@ -84,13 +110,31 @@ function tearDownAll(): void {
   pageCueList = null;
   pageVocabRecap?.destroy();
   pageVocabRecap = null;
+  // Close Document PiP cleanly (do not orphan an open window on SPA leave)
+  const pip = controller;
   controller = null;
+  if (pip) {
+    void pip.close().catch(() => undefined);
+  }
+  pageCues = [];
+  activeCueId = '';
+  cueLoadGeneration += 1;
   if (cueTick) {
     cancelAnimationFrame(cueTick);
     cueTick = 0;
   }
   stopAdWatcher();
   lastAdPhase = 'none';
+  // Keep media listeners only if element still valid; rebind on next boot
+  if (watchedMainVideo) {
+    watchedMainVideo.removeEventListener('emptied', onMainVideoMediaReset);
+    watchedMainVideo.removeEventListener('loadstart', onMainVideoMediaReset);
+    watchedMainVideo.removeEventListener(
+      'loadedmetadata',
+      onMainVideoMediaReset,
+    );
+    watchedMainVideo = null;
+  }
 }
 
 async function applyConfigLive(next: AppConfig): Promise<void> {
@@ -174,23 +218,40 @@ async function boot(): Promise<void> {
   if (isYoutubeHost()) {
     ensureNavObserver();
     ensureAdWatcher();
+    ensureMainVideoWatch();
+    // Keep video-id cursor in sync after full boot / reboot
+    lastNavHref = location.href;
+    lastNavVideoId = extractYoutubeVideoId();
   }
   ensureHotkeys();
 }
 
 /**
- * Watch YouTube ad chrome. When an ad ends (skip or natural), force-reload
- * main-video captions so we don't keep showing ad timedtext.
+ * Watch YouTube ad chrome:
+ * - Ad starts → prefetch main-video captions in the background (no long pot wait)
+ * - Ad ends → apply preloaded cues instantly; fall back to full reload if cold
  */
 function ensureAdWatcher(): void {
   if (!isYoutubeHost() || adWatchTimer) return;
   lastAdPhase = detectYoutubeAdStatus().phase;
+  // Already in an ad on boot (pre-roll) — warm captions immediately
+  if (lastAdPhase !== 'none') {
+    void prefetchMainCuesDuringAd();
+  }
   adWatchTimer = window.setInterval(() => {
     const phase = detectYoutubeAdStatus().phase;
     const prev = lastAdPhase;
     lastAdPhase = phase;
-    if (prev !== 'none' && phase === 'none') {
+    if (prev === 'none' && phase !== 'none') {
+      void prefetchMainCuesDuringAd();
+    } else if (prev !== 'none' && phase === 'none') {
       void reloadCuesAfterAd();
+    } else if (phase !== 'none') {
+      // Stay warm if video id changed mid-ad or first prefetch missed
+      const vid = extractYoutubeVideoId();
+      if (vid && !peekPreloadedMainCues(vid) && !prefetchingDuringAd) {
+        void prefetchMainCuesDuringAd();
+      }
     }
   }, 450);
 }
@@ -200,25 +261,103 @@ function stopAdWatcher(): void {
     clearInterval(adWatchTimer);
     adWatchTimer = 0;
   }
+  prefetchingDuringAd = false;
+}
+
+/**
+ * While an ad plays, fetch main-video timedtext via playerResponse track
+ * baseUrl (no long pot wait). Result lands in shared preload cache.
+ * Do not mount onto the overlay yet — ad timeline ≠ main cue times.
+ */
+async function prefetchMainCuesDuringAd(): Promise<void> {
+  if (!isYoutubeHost() || siteDisabled || prefetchingDuringAd) return;
+  const videoId = extractYoutubeVideoId();
+  if (!videoId || !isYoutubeWatchLikePath()) return;
+
+  // Already warm for this video
+  if (peekPreloadedMainCues(videoId)?.length) return;
+  if (
+    pageCues.length &&
+    pageCues[0]?.id?.startsWith(`${videoId}-`)
+  ) {
+    storePreloadedMainCues(videoId, pageCues, `${videoId}:page`);
+    return;
+  }
+
+  prefetchingDuringAd = true;
+  lastPrefetchVideoId = videoId;
+  console.info('[UEH] prefetching main captions during ad', videoId);
+  try {
+    void sendRuntime('youtube.injectMain', {}, 'content');
+    const adapter = createPlayerAdapter(config);
+    // Do not clearPreload — we are filling it
+    const cues = await adapter.getCues({ purpose: 'preload' });
+    if (extractYoutubeVideoId() !== videoId) return;
+    if (cues.length) {
+      console.info('[UEH] main captions prefetched during ad', cues.length);
+    } else {
+      console.warn('[UEH] ad-time caption prefetch returned 0 cues');
+    }
+  } catch (e) {
+    console.warn('[UEH] ad-time caption prefetch failed', e);
+  } finally {
+    prefetchingDuringAd = false;
+  }
+}
+
+/** Push cues to page overlay, list, recap, and open PiP. */
+function applyPageCues(cues: SubtitleCue[]): void {
+  pageCues = cues;
+  pageCueList?.setCues(cues);
+  pageVocabRecap?.setCues(cues);
+  if (cues.length) {
+    if (pageSubs) {
+      pageSubs.setCues(cues);
+      if (!pageSubs.isRunning()) void pageSubs.start();
+    } else if (shouldRunPageSubtitles(config)) {
+      pageSubs = new PageSubtitlesOverlay(createPlayerAdapter(config), config);
+      void pageSubs.start().then(() => pageSubs?.setCues(cues));
+    }
+    pageSubs?.drainTranslations();
+    void refreshPageRecapBadge();
+  }
+  controller?.onMainCuesReloaded?.(cues);
 }
 
 async function reloadCuesAfterAd(): Promise<void> {
   if (reloadingAfterAd || siteDisabled) return;
   reloadingAfterAd = true;
-  console.info('[UEH] YouTube ad ended — reloading main video captions');
+  const videoId = extractYoutubeVideoId();
+  console.info('[UEH] YouTube ad ended — applying main video captions');
   try {
-    // Small delay so the player swaps back to the main stream / pot URLs
+    // Fast path: cues prefetched while the ad was playing
+    const preloaded =
+      videoId != null ? peekPreloadedMainCues(videoId) : null;
+    if (videoId && preloaded?.length) {
+      console.info(
+        '[UEH] applying preloaded captions after ad',
+        preloaded.length,
+      );
+      const adapter = createPlayerAdapter(config);
+      if (adapter instanceof YoutubeAdapter) {
+        adapter.adoptPreloaded(videoId);
+      }
+      applyPageCues(preloaded);
+      // Optional quiet revalidate in background (does not block first paint)
+      void revalidateCuesAfterAd(videoId);
+      return;
+    }
+
+    // Cold path: wait briefly for main stream / pot, then full reload
     await new Promise((r) => setTimeout(r, 350));
 
     const adapter = createPlayerAdapter(config);
     adapter.clearCache?.();
 
-    // Prefer overlay path (keeps its adapter cache in sync)
     if (pageSubs?.isRunning()) {
       await pageSubs.forceReloadCues();
     }
 
-    // Always refresh page cue list + shared pageCues used by PiP
     pageCues = [];
     await loadPageCues(8);
     controller?.onMainCuesReloaded?.(pageCues);
@@ -229,7 +368,39 @@ async function reloadCuesAfterAd(): Promise<void> {
   }
 }
 
-async function loadPageCues(retryCount = 10): Promise<void> {
+/**
+ * After instant preload apply: optionally refresh with pot-enriched timedtext.
+ * Only replaces UI if a richer/valid set returns for the same video.
+ */
+async function revalidateCuesAfterAd(videoId: string): Promise<void> {
+  try {
+    await new Promise((r) => setTimeout(r, 1200));
+    if (extractYoutubeVideoId() !== videoId) return;
+    if (detectYoutubeAdStatus().phase !== 'none') return;
+    const adapter = createPlayerAdapter(config);
+    // Soft refresh: re-fetch with pot; do not short-circuit on ad-time preload
+    adapter.clearCache?.();
+    const cues = await adapter.getCues({
+      purpose: 'display',
+      bypassPreload: true,
+    });
+    if (extractYoutubeVideoId() !== videoId) return;
+    if (cues.length && cues.length >= (pageCues.length || 0) * 0.8) {
+      applyPageCues(cues);
+    }
+  } catch {
+    // keep preloaded set
+  }
+}
+
+async function loadPageCues(
+  retryCount = 10,
+  generation?: number,
+): Promise<void> {
+  const gen = generation ?? cueLoadGeneration;
+  // Abandoned after video switch / full reboot invalidated this attempt
+  if (gen !== cueLoadGeneration) return;
+
   const isVideoPage = !isYoutubeHost() || isYoutubeWatchLikePath();
   if (!isVideoPage) {
     pageCues = [];
@@ -237,10 +408,32 @@ async function loadPageCues(retryCount = 10): Promise<void> {
     return;
   }
 
+  const expectedVideoId = isYoutubeHost() ? extractYoutubeVideoId() : null;
+  const inAd =
+    isYoutubeHost() && detectYoutubeAdStatus().phase !== 'none';
+
   try {
     // Ensure MAIN interceptor early (captions / pot capture)
     if (isYoutubeHost()) {
       void sendRuntime('youtube.injectMain', {}, 'content');
+    }
+
+    // Ad playing: warm main captions into preload cache; do not paint on
+    // overlay yet (ad currentTime ≠ main cue times). Ad-end applies them.
+    if (inAd && expectedVideoId) {
+      const pre = peekPreloadedMainCues(expectedVideoId);
+      if (pre?.length) {
+        console.info('[UEH] main captions already preloaded during ad', pre.length);
+        return;
+      }
+      void prefetchMainCuesDuringAd();
+      // Keep retrying lightly while ad runs so a late playerResponse still warms
+      if (retryCount > 0 && gen === cueLoadGeneration) {
+        window.setTimeout(() => {
+          void loadPageCues(retryCount - 1, gen);
+        }, 1500);
+      }
+      return;
     }
 
     const adapter = createPlayerAdapter(config);
@@ -248,34 +441,46 @@ async function loadPageCues(retryCount = 10): Promise<void> {
     if (!video) {
       throw new Error('Video element not found yet');
     }
-    pageCues = await adapter.getCues();
-    pageCueList?.setCues(pageCues);
+    // Prefer instant preload if ad just ended and cache is warm
+    let cues: SubtitleCue[] = [];
+    if (expectedVideoId && adapter instanceof YoutubeAdapter) {
+      const adopted = adapter.adoptPreloaded(expectedVideoId);
+      if (adopted?.length) cues = adopted;
+    }
+    if (!cues.length) {
+      cues = await adapter.getCues({ purpose: 'display' });
+    }
+    if (gen !== cueLoadGeneration) return;
+    // Reject cues if SPA already moved to another video mid-fetch
+    if (
+      expectedVideoId &&
+      extractYoutubeVideoId() &&
+      extractYoutubeVideoId() !== expectedVideoId
+    ) {
+      return;
+    }
+    if (cues.length && expectedVideoId) {
+      storePreloadedMainCues(
+        expectedVideoId,
+        cues,
+        `${expectedVideoId}:loaded`,
+      );
+    }
+    applyPageCues(cues);
     if (pageCues.length > 0) {
-      if (pageSubs) {
-        pageSubs.setCues(pageCues);
-      } else if (shouldRunPageSubtitles(config)) {
-        pageSubs = new PageSubtitlesOverlay(adapter, config);
-        await pageSubs.start();
-        pageSubs.setCues(pageCues);
-      }
-      if (pageSubs && !pageSubs.isRunning()) {
-        void pageSubs.start();
-      }
-      pageVocabRecap?.setCues(pageCues);
-      pageSubs?.drainTranslations();
-      void refreshPageRecapBadge();
-      console.info('[UEH] page cues ready', pageCues.length);
+      console.info('[UEH] page cues ready', pageCues.length, expectedVideoId);
       return;
     }
   } catch (e) {
+    if (gen !== cueLoadGeneration) return;
     console.warn('[UEH] load cues attempt failed', e);
   }
 
-  if (retryCount > 0) {
+  if (retryCount > 0 && gen === cueLoadGeneration) {
     window.setTimeout(() => {
-      void loadPageCues(retryCount - 1);
+      void loadPageCues(retryCount - 1, gen);
     }, 1200);
-  } else {
+  } else if (retryCount <= 0) {
     console.warn('[UEH] page cues exhausted retries (0 cues)');
   }
 }
@@ -516,23 +721,258 @@ function ensureStorageListener(): void {
   });
 }
 
+/**
+ * Watch YouTube SPA navigation + autoplay-next.
+ *
+ * Full `location.href` alone is not enough: continuous play / playlist next
+ * changes `v=` (and fires media reset on the same <video>) while staying on
+ * /watch. We track video id separately and soft-reload captions without
+ * tearing down the whole UI when only the video changes.
+ */
 function ensureNavObserver(): void {
   if (navObserving) return;
   navObserving = true;
-  let last = location.href;
-  const check = () => {
-    if (location.href !== last) {
-      last = location.href;
-      tearDownAll();
-      // Small delay so ytInitialPlayerResponse / player settle after SPA nav
-      window.setTimeout(() => {
-        void boot();
-      }, 400);
-    }
+  lastNavHref = location.href;
+  lastNavVideoId = extractYoutubeVideoId();
+
+  const poll = () => {
+    const href = location.href;
+    const videoId = extractYoutubeVideoId();
+    if (href === lastNavHref && videoId === lastNavVideoId) return;
+    scheduleYoutubeNavHandle('poll');
   };
-  setInterval(check, 800);
-  window.addEventListener('yt-navigate-finish', check as EventListener);
-  window.addEventListener('yt-page-data-updated', check as EventListener);
+
+  // Faster than before so autoplay-next is caught promptly
+  setInterval(poll, 500);
+  window.addEventListener('yt-navigate-start', () =>
+    scheduleYoutubeNavHandle('yt-navigate-start'),
+  );
+  window.addEventListener('yt-navigate-finish', () =>
+    scheduleYoutubeNavHandle('yt-navigate-finish'),
+  );
+  window.addEventListener('yt-page-data-updated', () =>
+    scheduleYoutubeNavHandle('yt-page-data-updated'),
+  );
+  window.addEventListener('popstate', () =>
+    scheduleYoutubeNavHandle('popstate'),
+  );
+
+  ensureMainVideoWatch();
+}
+
+function scheduleYoutubeNavHandle(reason: string): void {
+  if (navHandleTimer) window.clearTimeout(navHandleTimer);
+  // Debounce rapid SPA events (navigate-start → page-data → navigate-finish)
+  navHandleTimer = window.setTimeout(() => {
+    navHandleTimer = 0;
+    void handleYoutubeNavigation(reason);
+  }, 280);
+}
+
+function wasWatchPath(href: string): boolean {
+  try {
+    return isYoutubeWatchLikePath(new URL(href).pathname);
+  } catch {
+    return false;
+  }
+}
+
+async function handleYoutubeNavigation(reason: string): Promise<void> {
+  if (!isYoutubeHost()) return;
+
+  const href = location.href;
+  const videoId = extractYoutubeVideoId();
+  const prevHref = lastNavHref;
+  const prevVideoId = lastNavVideoId;
+
+  // Nothing meaningful changed
+  if (href === prevHref && videoId === prevVideoId) {
+    ensureMainVideoWatch();
+    return;
+  }
+
+  const stillWatch = isYoutubeWatchLikePath();
+  const wasWatch = wasWatchPath(prevHref || href);
+  const videoChanged = Boolean(videoId && videoId !== prevVideoId);
+  const leftOrEnteredWatch = wasWatch !== stillWatch;
+
+  if (siteDisabled) {
+    lastNavHref = href;
+    lastNavVideoId = videoId;
+    ensureMainVideoWatch();
+    return;
+  }
+
+  // Same video, only secondary query params (t=, index, …) — keep UI, rebind video
+  if (!videoChanged && !leftOrEnteredWatch && stillWatch) {
+    lastNavHref = href;
+    ensureMainVideoWatch();
+    return;
+  }
+
+  // Leave/enter watch-like surface, or leave YouTube watch entirely → full reboot
+  if (leftOrEnteredWatch || !stillWatch) {
+    lastNavHref = href;
+    lastNavVideoId = videoId;
+    console.info('[UEH] YouTube nav full reboot', { reason, href, videoId });
+    tearDownAll();
+    window.setTimeout(() => {
+      void boot();
+    }, 450);
+    return;
+  }
+
+  // Still on a watch-like page but video id changed (autoplay next / playlist)
+  if (videoChanged && stillWatch && videoId) {
+    // Commit cursor to the target id so polls for the same id don't pile up.
+    // If a newer id appears mid-flight, handleYoutubeVideoSwitch re-schedules.
+    lastNavHref = href;
+    lastNavVideoId = videoId;
+    await handleYoutubeVideoSwitch(videoId, prevVideoId, reason);
+    return;
+  }
+
+  lastNavHref = href;
+  lastNavVideoId = videoId;
+  ensureMainVideoWatch();
+}
+
+/**
+ * Soft-switch captions when YouTube loads the next video on the same page.
+ * Clears stale cues first so previous-episode lines never stick.
+ */
+async function handleYoutubeVideoSwitch(
+  videoId: string,
+  prevVideoId: string | null,
+  reason: string,
+): Promise<void> {
+  if (videoSwitching) {
+    // Another switch is in flight — re-check after it settles so we don't
+    // lose a B→C transition that arrived while loading B.
+    window.setTimeout(() => {
+      const latest = extractYoutubeVideoId();
+      if (latest && latest !== lastNavVideoId) {
+        scheduleYoutubeNavHandle('video-switch-retry');
+      } else if (latest && latest === lastNavVideoId) {
+        // Cursor already points at latest; force a follow-up load if cues empty
+        // or still from a previous id (cues prefix is videoId-).
+        const cuePrefix = pageCues[0]?.id?.split('-')[0];
+        if (!pageCues.length || (cuePrefix && cuePrefix !== latest)) {
+          lastNavVideoId = null;
+          scheduleYoutubeNavHandle('video-switch-retry-force');
+        }
+      }
+    }, 700);
+    return;
+  }
+  videoSwitching = true;
+  // Invalidate in-flight loadPageCues retries from the previous video
+  const loadGen = ++cueLoadGeneration;
+  // Drop previous video's preloaded captions
+  if (prevVideoId) clearPreloadedMainCues(prevVideoId);
+  lastPrefetchVideoId = null;
+  console.info('[UEH] YouTube video switched — reloading captions', {
+    from: prevVideoId,
+    to: videoId,
+    reason,
+  });
+
+  try {
+    // Drop stale state immediately (page + open PiP)
+    pageCues = [];
+    activeCueId = '';
+    pageCueList?.setCues([]);
+    pageVocabRecap?.setCues([]);
+    controller?.onMainVideoSwitching?.();
+
+    void sendRuntime('youtube.injectMain', {}, 'content');
+
+    const adapter = createPlayerAdapter(config);
+    adapter.clearCache?.();
+
+    // Next episode often starts with a pre-roll — prefetch during ad
+    if (detectYoutubeAdStatus().phase !== 'none') {
+      void prefetchMainCuesDuringAd();
+    }
+
+    // Prefer overlay path (keeps its adapter cache + UI in sync)
+    if (pageSubs?.isRunning()) {
+      pageSubs.setCues([]);
+      if (detectYoutubeAdStatus().phase === 'none') {
+        await pageSubs.forceReloadCues();
+      }
+    } else if (
+      shouldRunPageSubtitles(config) &&
+      detectYoutubeAdStatus().phase === 'none'
+    ) {
+      // Overlay may have been stopped; recreate for the new video
+      pageSubs = new PageSubtitlesOverlay(adapter, config);
+      await pageSubs.start();
+    }
+
+    if (loadGen !== cueLoadGeneration) return;
+
+    // Shared page cues + PiP / sidebar (extra retries for SPA player settle)
+    pageCues = [];
+    await loadPageCues(12, loadGen);
+    if (loadGen !== cueLoadGeneration) return;
+
+    if (pageCues.length) {
+      controller?.onMainCuesReloaded?.(pageCues);
+    } else if (detectYoutubeAdStatus().phase !== 'none') {
+      // Still in ad — PiP stays empty until ad-end applies preload
+      controller?.onMainVideoSwitching?.();
+    } else {
+      // Page path empty — PiP self-fetches so an open learning window still updates
+      void controller?.reloadCuesForCurrentVideo?.({
+        toastOnSuccess: '已加载下一集字幕',
+        retries: 8,
+      });
+    }
+    void refreshPageRecapBadge();
+    ensureMainVideoWatch();
+    ensureAdWatcher();
+  } catch (e) {
+    console.warn('[UEH] video switch caption reload failed', e);
+    // Fallback: full reboot if soft path fails hard
+    tearDownAll();
+    window.setTimeout(() => {
+      void boot();
+    }, 500);
+  } finally {
+    videoSwitching = false;
+    // If the user/autoplay moved on while we were loading, catch up
+    const latest = extractYoutubeVideoId();
+    if (latest && latest !== videoId) {
+      lastNavVideoId = videoId;
+      scheduleYoutubeNavHandle('video-switch-followup');
+    }
+  }
+}
+
+/**
+ * Bind emptied/loadstart/loadedmetadata on the main <video>.
+ * Autoplay-next reuses the element; media reset often arrives before or with URL update.
+ */
+function ensureMainVideoWatch(): void {
+  if (!isYoutubeHost()) return;
+  const video = createPlayerAdapter(config).findVideo();
+  if (!video) return;
+  if (watchedMainVideo === video) return;
+
+  if (watchedMainVideo) {
+    watchedMainVideo.removeEventListener('emptied', onMainVideoMediaReset);
+    watchedMainVideo.removeEventListener('loadstart', onMainVideoMediaReset);
+    watchedMainVideo.removeEventListener(
+      'loadedmetadata',
+      onMainVideoMediaReset,
+    );
+  }
+
+  watchedMainVideo = video;
+  video.addEventListener('emptied', onMainVideoMediaReset);
+  video.addEventListener('loadstart', onMainVideoMediaReset);
+  video.addEventListener('loadedmetadata', onMainVideoMediaReset);
 }
 
 function onPageCuesUpdated(cues: SubtitleCue[]): void {

@@ -153,14 +153,23 @@ export class PageSubtitlesOverlay {
   }
 
   /**
-   * Force re-fetch captions (used when YouTube ad ends and we may still
-   * hold ad timedtext / stale cache).
+   * Force re-fetch captions (ad end, autoplay next video, SPA video switch).
+   * Clears stale cues once up front; retries never wipe a successful load.
    */
   async forceReloadCues(): Promise<void> {
     if (!this.running) return;
+    // Autoplay-next reuses or replaces the media element — refresh pointer
+    this.video = this.adapter.findVideo() ?? this.video;
+    this.adapter.clearCache?.();
+    // Drop previous video's lines immediately so they don't linger mid-load
+    if (this.cues.length) {
+      this.cues = [];
+      this.currentId = '';
+      this.renderCue(null);
+    }
     await this.reloadCues(true);
     if (!this.cues.length) {
-      void this.reloadCuesWithRetry(6, /* force */ true);
+      void this.reloadCuesWithRetry(10, /* force */ true);
     }
   }
 
@@ -170,7 +179,8 @@ export class PageSubtitlesOverlay {
   ): Promise<void> {
     for (let i = 0; i < attempts; i++) {
       if (!this.running) return;
-      if (!force && this.cues.length) return;
+      // Stop once any path (forceReload, loadPageCues, setCues) filled cues
+      if (this.cues.length) return;
       await new Promise((r) => setTimeout(r, 1200));
       await this.reloadCues(force);
       if (this.cues.length) return;

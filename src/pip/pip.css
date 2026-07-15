@@ -149,16 +149,16 @@ body,
 /* Floating word tooltip — always above PiP chrome / cues */
 .ueh-word-popup {
   position: fixed;
-  top: 12px;
-  right: 12px;
+  top: 10px;
+  right: 10px;
   z-index: 1000;
-  width: min(300px, calc(100vw - 24px));
-  max-height: min(70vh, 420px);
+  width: min(280px, calc(100vw - 20px));
+  max-height: min(68vh, 400px);
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
-  padding: 12px;
-  border-radius: 14px;
+  padding: 0;
+  border-radius: 12px;
   background: rgba(16, 17, 22, 0.96);
   border: 1px solid rgba(255, 255, 255, 0.14);
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
@@ -186,33 +186,35 @@ body,
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 8px;
+  gap: 6px;
   flex: 0 0 auto;
+  padding: 8px 8px 6px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .ueh-word-popup-title-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px 8px;
+  gap: 4px 6px;
   min-width: 0;
   flex: 1;
 }
 
 .ueh-word-popup-surface {
-  font-size: 18px;
+  font-size: 14px;
   font-weight: 700;
   color: oklch(88% 0.08 82);
   word-break: break-word;
-  line-height: 1.25;
+  line-height: 1.3;
 }
 
 .ueh-word-popup-badge {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.02em;
-  padding: 2px 7px;
+  padding: 1px 6px;
   border-radius: 999px;
   line-height: 1.3;
 }
@@ -235,67 +237,91 @@ body,
   border: 1px solid rgba(255, 100, 100, 0.35);
 }
 
+.ueh-word-popup-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.ueh-word-popup-head-actions .ueh-ibtn {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+}
+
+.ueh-word-popup-head-actions .ueh-ibtn svg {
+  width: 13px;
+  height: 13px;
+}
+
 .ueh-word-popup-note {
-  margin-top: 8px;
+  margin: 6px 10px 0;
   flex: 0 0 auto;
   font-size: 11px;
   line-height: 1.35;
   color: oklch(88% 0.08 82 / 0.9);
   background: rgba(255, 255, 255, 0.05);
-  border-radius: 8px;
-  padding: 6px 8px;
+  border-radius: 6px;
+  padding: 5px 7px;
 }
 
 .ueh-word-popup-close {
   flex-shrink: 0;
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 7px;
   background: rgba(255, 255, 255, 0.1);
   color: #fff;
   cursor: pointer;
-  font-size: 16px;
+  font-size: 15px;
   line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
 }
 
 .ueh-word-popup-close:hover {
   background: rgba(255, 255, 255, 0.18);
 }
 
-.ueh-word-popup-ctx-tr {
-  margin-top: 6px;
-  color: #9ecbff;
-  opacity: 0.92;
-}
-
 .ueh-word-popup-ctx {
-  margin-top: 6px;
+  margin: 6px 10px 0;
   font-size: 11px;
-  line-height: 1.45;
-  opacity: 0.72;
+  line-height: 1.4;
+  padding: 5px 7px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
   white-space: pre-wrap;
   word-break: break-word;
   overflow: visible;
   flex: 0 0 auto;
 }
 
+.ueh-word-popup-ctx-orig {
+  opacity: 0.85;
+}
+
+.ueh-word-popup-ctx-tr {
+  margin-top: 3px;
+  color: oklch(88% 0.08 82);
+  opacity: 0.95;
+}
+
 .ueh-word-popup-body {
-  margin-top: 10px;
+  margin: 6px 0 0;
+  padding: 0 10px 10px;
   flex: 1 1 auto;
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 12px;
+  line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
-}
-
-.ueh-word-popup-actions {
-  margin-top: 10px;
-  flex: 0 0 auto;
 }
 
 .ueh-ibtn-row {
@@ -306,10 +332,10 @@ body,
 }
 
 .ueh-ibtn {
-  width: 32px;
-  height: 32px;
+  width: 26px;
+  height: 26px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 7px;
   background: rgba(255, 255, 255, 0.1);
   color: #fff;
   cursor: pointer;

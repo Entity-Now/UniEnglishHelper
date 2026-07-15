@@ -188,30 +188,49 @@ export function buildPipStyles(opts: {
       z-index: 32;
     }
     #ueh-word-panel-head {
-      display: flex; align-items: flex-start; gap: 8px;
-      padding: 12px 12px 8px;
+      display: flex; align-items: flex-start; gap: 6px;
+      padding: 8px 8px 6px 10px;
       border-bottom: 1px solid rgba(255,255,255,.08);
+      flex: 0 0 auto;
     }
     #ueh-word-panel-title {
       flex: 1; min-width: 0;
-      font-size: 18px; font-weight: 700; line-height: 1.25;
+      font-size: 14px; font-weight: 700; line-height: 1.3;
       color: oklch(88% 0.08 82);
       word-break: break-word;
     }
+    #ueh-word-panel-head-actions {
+      display: flex; align-items: center; gap: 3px; flex-shrink: 0;
+    }
+    #ueh-word-panel-head-actions .ueh-ibtn {
+      width: 26px; height: 26px; border-radius: 7px;
+    }
+    #ueh-word-panel-head-actions .ueh-ibtn svg {
+      width: 13px; height: 13px;
+    }
     #ueh-word-panel-close {
-      flex-shrink: 0; width: 28px; height: 28px; border: 0; border-radius: 8px;
+      flex-shrink: 0; width: 26px; height: 26px; border: 0; border-radius: 7px;
       background: rgba(255,255,255,.08); color: #fff; cursor: pointer;
-      font-size: 16px; line-height: 1;
+      font-size: 15px; line-height: 1;
+      display: inline-flex; align-items: center; justify-content: center;
+      padding: 0;
     }
     #ueh-word-panel-close:hover { background: rgba(255,255,255,.16); }
     #ueh-word-panel-ctx {
       flex: 0 0 auto;
-      padding: 8px 12px 0;
-      font-size: 11px; line-height: 1.45;
-      color: rgba(255,255,255,.72);
+      margin: 6px 10px 0;
+      padding: 5px 7px;
+      border-radius: 6px;
+      background: rgba(255,255,255,.06);
+      font-size: 11px; line-height: 1.4;
+      color: rgba(255,255,255,.85);
       white-space: pre-wrap;
       word-break: break-word;
       overflow: visible;
+    }
+    #ueh-word-panel-ctx .tr-line {
+      margin-top: 3px;
+      color: oklch(88% 0.08 82);
     }
     #ueh-word-panel-main {
       flex: 1 1 auto;
@@ -226,16 +245,11 @@ export function buildPipStyles(opts: {
       overflow-x: hidden;
       overflow-y: auto;
       overscroll-behavior: contain;
-      padding: 10px 12px 8px;
-      font-size: 13px; line-height: 1.5;
+      padding: 6px 10px 10px;
+      font-size: 12px; line-height: 1.45;
       color: rgba(255,255,255,.92);
       white-space: pre-wrap;
       word-break: break-word;
-    }
-    #ueh-word-panel-actions {
-      flex: 0 0 auto;
-      padding: 8px 12px 12px;
-      border-top: 1px solid rgba(255,255,255,.08);
     }
     ${ICON_BTN_CSS}
     /* Small PiP window: word panel goes full-screen */
@@ -490,15 +504,15 @@ export function buildPipMarkup(): string {
       <aside id="ueh-word-panel" aria-label="单词释义" aria-hidden="true">
         <div id="ueh-word-panel-head">
           <div id="ueh-word-panel-title"></div>
-          <button type="button" id="ueh-word-panel-close" title="关闭" aria-label="关闭">×</button>
+          <div id="ueh-word-panel-head-actions">
+            ${iconActionButton('add', '加生词本', 'primary', { 'data-word-act': 'add' })}
+            ${iconActionButton('tts', '朗读', '', { 'data-word-act': 'tts' })}
+            <button type="button" id="ueh-word-panel-close" class="ueh-ibtn" title="关闭" aria-label="关闭">×</button>
+          </div>
         </div>
         <div id="ueh-word-panel-main">
           <div id="ueh-word-panel-ctx"></div>
           <div id="ueh-word-panel-body"></div>
-        </div>
-        <div id="ueh-word-panel-actions" class="ueh-ibtn-row">
-          ${iconActionButton('add', '加生词本', 'primary', { 'data-word-act': 'add' })}
-          ${iconActionButton('tts', '朗读', '', { 'data-word-act': 'tts' })}
         </div>
       </aside>
       <div id="ueh-pip-settings" aria-label="PiP 字幕设置">

@@ -175,10 +175,10 @@ export class SelectionToolbar {
         .bar {
           pointer-events: auto;
           display: inline-flex;
-          gap: 3px;
+          gap: 2px;
           align-items: center;
-          padding: 3px;
-          border-radius: 10px;
+          padding: 2px;
+          border-radius: 8px;
           background: rgba(16,17,22,.96);
           border: 1px solid rgba(255,255,255,.12);
           box-shadow: 0 8px 24px rgba(0,0,0,.38);
@@ -191,15 +191,16 @@ export class SelectionToolbar {
         .bar::-webkit-scrollbar { display: none; }
         ${ICON_BTN_CSS}
         .bar .ueh-ibtn {
-          width: 26px;
-          height: 26px;
-          border-radius: 7px;
+          width: 22px;
+          height: 22px;
+          border-radius: 6px;
           background: rgba(255,255,255,.08);
         }
         .bar .ueh-ibtn:hover { background: rgba(255,255,255,.16); }
         .bar .ueh-ibtn svg {
-          width: 13px;
-          height: 13px;
+          width: 11px;
+          height: 11px;
+          stroke-width: 2.25;
         }
         .bar .ueh-ibtn.primary {
           background: oklch(76% 0.12 82);
@@ -222,14 +223,15 @@ export class SelectionToolbar {
         }
         .bar .ueh-ibtn.chip {
           width: auto;
-          min-width: 26px;
-          padding: 0 7px;
-          font-size: 11px;
+          min-width: 22px;
+          height: 22px;
+          padding: 0 5px;
+          font-size: 10px;
           font-weight: 700;
-          gap: 4px;
+          gap: 3px;
         }
         .bar .ueh-ibtn.chip span {
-          max-width: 72px;
+          max-width: 64px;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
@@ -239,12 +241,12 @@ export class SelectionToolbar {
           display: none;
           flex-direction: column;
           gap: 2px;
-          min-width: 160px;
+          min-width: 148px;
           max-width: min(260px, 90vw);
           max-height: 220px;
           overflow: auto;
-          padding: 4px;
-          border-radius: 10px;
+          padding: 3px;
+          border-radius: 8px;
           background: rgba(16,17,22,.98);
           border: 1px solid rgba(255,255,255,.12);
           box-shadow: 0 8px 24px rgba(0,0,0,.4);
@@ -253,24 +255,24 @@ export class SelectionToolbar {
         .skill-menu.open { display: flex; }
         .skill-menu button {
           border: 0;
-          border-radius: 7px;
+          border-radius: 6px;
           background: transparent;
           color: #f0f0f0;
           text-align: left;
-          padding: 7px 10px;
-          font-size: 12px;
+          padding: 5px 8px;
+          font-size: 11px;
           font-weight: 600;
           cursor: pointer;
           display: flex;
           align-items: center;
-          gap: 8px;
+          gap: 6px;
         }
         .skill-menu button:hover {
           background: rgba(255,255,255,.1);
         }
         .skill-menu button svg {
-          width: 14px; height: 14px; flex-shrink: 0;
-          fill: none; stroke: currentColor; stroke-width: 2;
+          width: 12px; height: 12px; flex-shrink: 0;
+          fill: none; stroke: currentColor; stroke-width: 2.25;
           stroke-linecap: round; stroke-linejoin: round;
         }
         .skill-menu .empty {

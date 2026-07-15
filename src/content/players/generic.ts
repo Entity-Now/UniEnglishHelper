@@ -1,6 +1,6 @@
 import type { SubtitleCue } from '../../shared/domain/types';
 import { parseSubtitleFile } from '../../utils/subtitles/parser';
-import { BasePlayerAdapter } from './base';
+import { BasePlayerAdapter, type GetCuesOptions } from './base';
 
 export class GenericHtml5Adapter extends BasePlayerAdapter {
   readonly id = 'generic';
@@ -15,7 +15,7 @@ export class GenericHtml5Adapter extends BasePlayerAdapter {
     )[0];
   }
 
-  async getCues(): Promise<SubtitleCue[]> {
+  async getCues(_options?: GetCuesOptions): Promise<SubtitleCue[]> {
     const video = this.findVideo();
     if (!video) return [];
 

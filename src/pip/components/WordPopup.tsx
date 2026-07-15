@@ -31,18 +31,32 @@ const IcoAdd = () => (
 
 const IcoTts = () => (
   <svg viewBox="0 0 24 24" aria-hidden>
-    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none" />
+    <polygon
+      points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"
+      fill="currentColor"
+      stroke="none"
+    />
     <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
   </svg>
 );
 
 /**
+ * Strip trailing "句子译文：…" blocks that may be embedded in formatted text
+ * when the UI already shows contextTranslation at the top.
+ */
+function stripEmbeddedSentenceTranslation(text: string): string {
+  return text
+    .replace(/(?:\n\n)?句子译文：[^\n]*(?:\n\n句子译文：[^\n]*)*$/g, '')
+    .replace(/^句子译文：[^\n]*\n*/gm, '')
+    .trim();
+}
+
+/**
  * Floating word-explain card for the React PiP shell.
- * Fixed overlay + high z-index so it is never clipped by the flex layout
- * or covered by the toolbar / subtitle panel.
  *
- * When LLM fails, background explainWord falls back to free MT quickly;
- * pass `engine` / `note` so the user sees the switch.
+ * Layout: [word + badge] …… [加生词本] [朗读] [×]
+ *          context (原文 + 译文 once)
+ *          definition body
  */
 export function WordPopup(props: {
   text: string;
@@ -59,16 +73,19 @@ export function WordPopup(props: {
   onTts?: () => void;
   onClose?: () => void;
 }) {
-  const badge =
-    props.loading
-      ? null
-      : props.engine === 'free_mt'
-        ? { cls: 'free', label: '免费翻译' }
-        : props.engine === 'llm'
-          ? { cls: 'llm', label: 'AI 释义' }
-          : props.engine === 'none'
-            ? { cls: 'none', label: '不可用' }
-            : null;
+  const badge = props.loading
+    ? null
+    : props.engine === 'free_mt'
+      ? { cls: 'free', label: '免费翻译' }
+      : props.engine === 'llm'
+        ? { cls: 'llm', label: 'AI 释义' }
+        : props.engine === 'none'
+          ? { cls: 'none', label: '不可用' }
+          : null;
+
+  const bodyText = props.loading
+    ? '查询中…'
+    : stripEmbeddedSentenceTranslation(props.text);
 
   return (
     <div className="ueh-word-popup" role="dialog" aria-label="单词释义">
@@ -85,37 +102,7 @@ export function WordPopup(props: {
             </span>
           ) : null}
         </div>
-        {props.onClose ? (
-          <button
-            type="button"
-            className="ueh-word-popup-close"
-            onClick={props.onClose}
-            aria-label="关闭"
-          >
-            ×
-          </button>
-        ) : null}
-      </div>
-      {props.context ? (
-        <div className="ueh-word-popup-ctx" title={props.context}>
-          <div>原文：{props.context}</div>
-          {props.contextTranslation?.trim() ? (
-            <div className="ueh-word-popup-ctx-tr">
-              译文：{props.contextTranslation.trim()}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-      <div className="ueh-word-popup-body">
-        {props.loading ? '查询中…' : props.text}
-      </div>
-      {!props.loading && props.note ? (
-        <div className="ueh-word-popup-note" role="status">
-          {props.note}
-        </div>
-      ) : null}
-      {(props.onAdd || props.onTts) && (
-        <div className="ueh-word-popup-actions ueh-ibtn-row">
+        <div className="ueh-word-popup-head-actions">
           {props.onAdd ? (
             <IconBtn label="加生词本" primary onClick={props.onAdd}>
               <IcoAdd />
@@ -126,8 +113,35 @@ export function WordPopup(props: {
               <IcoTts />
             </IconBtn>
           ) : null}
+          {props.onClose ? (
+            <button
+              type="button"
+              className="ueh-word-popup-close"
+              onClick={props.onClose}
+              aria-label="关闭"
+              title="关闭"
+            >
+              ×
+            </button>
+          ) : null}
         </div>
-      )}
+      </div>
+      {props.context ? (
+        <div className="ueh-word-popup-ctx" title={props.context}>
+          <div className="ueh-word-popup-ctx-orig">原文：{props.context}</div>
+          {props.contextTranslation?.trim() ? (
+            <div className="ueh-word-popup-ctx-tr">
+              译文：{props.contextTranslation.trim()}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      {!props.loading && props.note ? (
+        <div className="ueh-word-popup-note" role="status">
+          {props.note}
+        </div>
+      ) : null}
+      <div className="ueh-word-popup-body">{bodyText}</div>
     </div>
   );
 }

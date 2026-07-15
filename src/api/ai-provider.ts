@@ -319,7 +319,11 @@ export async function explainWord(
   };
 }
 
-/** Render structured explain for UI (display only). */
+/**
+ * Render structured explain for UI body text only.
+ * Sentence translation is shown once in the popup context block — do not
+ * embed `句子译文：…` here or it will appear twice.
+ */
 export function formatWordExplainForDisplay(r: WordExplainResult): string {
   const parts: string[] = [];
   if (r.definition) parts.push(r.definition);
@@ -328,9 +332,6 @@ export function formatWordExplainForDisplay(r: WordExplainResult): string {
     // Prefer full AI markdown when available; still surface note if present
     const body = r.explanation;
     return r.note ? `${body}\n\n（${r.note}）` : body;
-  }
-  if (r.contextTranslation) {
-    parts.push(`句子译文：${r.contextTranslation}`);
   }
   if (r.note) parts.push(`（${r.note}）`);
   return parts.filter(Boolean).join('\n\n') || r.surface;

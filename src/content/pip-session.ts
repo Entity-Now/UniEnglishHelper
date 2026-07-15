@@ -952,7 +952,7 @@ export class PipSessionController {
   /** Restore action buttons to default when the word panel closes or switches word. */
   private resetWordPanelActions(doc: Document): void {
     const addBtn = doc.querySelector(
-      '#ueh-word-panel-actions [data-word-act="add"]',
+      '#ueh-word-panel-head-actions [data-word-act="add"], #ueh-word-panel [data-word-act="add"]',
     ) as HTMLButtonElement | null;
     if (addBtn) {
       addBtn.title = '加生词本';
@@ -1178,48 +1178,117 @@ export class PipSessionController {
     }
   }
 
+  private isPipActive(): boolean {
+    return (
+      this.state !== 'Idle' &&
+      this.state !== 'Closed' &&
+      this.state !== 'Restoring' &&
+      !!this.pipWindow
+    );
+  }
+
   /**
-   * Called from content script after host-page ad ends, or from PiP ad watch.
-   * Pulls fresh page cues / re-fetches via adapter.
+   * Host page switched video (autoplay next / playlist) while PiP is open.
+   * Clears stale captions immediately; follow with {@link onMainCuesReloaded}
+   * or {@link reloadCuesForCurrentVideo} once timedtext is available.
+   */
+  onMainVideoSwitching(): void {
+    if (!this.isPipActive()) return;
+    this.adapter.clearCache?.();
+    // YouTube usually reuses the same <video>; still re-resolve + re-attach sampler
+    const next = this.adapter.findVideo();
+    if (next) {
+      this.video = next;
+      this.sampler.attach(next);
+    }
+    this.cues = [];
+    this.currentCue = null;
+    this.lastPrefetchCueId = '';
+    this.cueList?.setCues([]);
+    this.vocabRecap?.setCues([]);
+    this.renderCue(null);
+    const st = this.pipWindow?.document.getElementById('ueh-status');
+    if (st) st.textContent = '加载字幕…';
+  }
+
+  /**
+   * Apply cues from the content script (after ad end, autoplay next, or SPA nav).
+   * Empty array clears the previous video's lines so they never stick.
    */
   onMainCuesReloaded(cues: SubtitleCue[]): void {
-    if (!cues.length) return;
+    if (!this.isPipActive() && this.state !== 'Opening') {
+      // Still accept while opening so host-page load can race in
+      if (this.state === 'Idle' || this.state === 'Closed') return;
+    }
     this.cues = cues;
     this.currentCue = null;
+    this.lastPrefetchCueId = '';
     this.cueList?.setCues(cues);
     this.vocabRecap?.setCues(cues);
     void this.refreshRecapBadge();
     this.syncCue(true);
-    if (this.wantsAutoTranslate()) this.startBackgroundTranslate();
+    if (cues.length && this.wantsAutoTranslate()) {
+      this.startBackgroundTranslate();
+    }
+    const st = this.pipWindow?.document.getElementById('ueh-status');
+    if (st) {
+      if (cues.length) st.textContent = '';
+      else if (st.textContent === '加载字幕…') st.textContent = '无字幕轨';
+    }
   }
 
-  private async reloadCuesAfterAd(): Promise<void> {
+  /**
+   * Self-fetch captions when host page could not supply them yet
+   * (autoplay next, ad end). Prefers shared page cues, then adapter.
+   */
+  async reloadCuesForCurrentVideo(opts?: {
+    toastOnSuccess?: string;
+    retries?: number;
+  }): Promise<void> {
+    if (!this.isPipActive()) return;
+    const retries = opts?.retries ?? 6;
     try {
-      this.adapter.clearCache?.();
-      // Prefer shared page cues if content script already reloaded them
+      const next = this.adapter.findVideo();
+      if (next) {
+        this.video = next;
+        this.sampler.attach(next);
+      }
+
+      // Prefer host-page cues / ad-time preload before network
       let cues = getPageCues();
       if (!cues.length) {
-        cues = await this.adapter.getCues();
+        cues = await this.adapter.getCues({ purpose: 'display' });
       }
-      // If still empty, brief retry (player / pot may not be ready yet)
       if (!cues.length) {
-        for (let i = 0; i < 4; i++) {
-          await new Promise((r) => setTimeout(r, 800));
+        for (let i = 0; i < retries; i++) {
+          if (!this.isPipActive()) return;
+          await new Promise((r) => setTimeout(r, 900));
           cues = getPageCues();
-          if (!cues.length) cues = await this.adapter.getCues();
+          if (!cues.length) {
+            // Soft retry — getCues still hits shared preload if warmed during ad
+            cues = await this.adapter.getCues({ purpose: 'display' });
+          }
           if (cues.length) break;
         }
       }
       if (cues.length) {
         this.onMainCuesReloaded(cues);
-        this.toast('info', '已切换到正片字幕');
+        if (opts?.toastOnSuccess) this.toast('info', opts.toastOnSuccess);
       } else {
+        this.onMainCuesReloaded([]);
         this.syncCue(true);
       }
     } catch (e) {
-      console.warn('[UEH] PiP reload after ad failed', e);
+      console.warn('[UEH] PiP reload cues failed', e);
       this.syncCue(true);
     }
+  }
+
+  private async reloadCuesAfterAd(): Promise<void> {
+    await this.reloadCuesForCurrentVideo({
+      toastOnSuccess: '已切换到正片字幕',
+      retries: 4,
+    });
   }
 
   private syncCue(force: boolean): void {
@@ -1646,21 +1715,36 @@ export class PipSessionController {
     const title = doc.getElementById('ueh-word-panel-title');
     const ctxEl = doc.getElementById('ueh-word-panel-ctx');
     const body = doc.getElementById('ueh-word-panel-body');
-    const actions = doc.getElementById('ueh-word-panel-actions');
+    const headActions =
+      doc.getElementById('ueh-word-panel-head-actions') ||
+      doc.getElementById('ueh-word-panel');
 
     this.resetWordPanelActions(doc);
 
     if (title) title.textContent = surface;
     const cueTranslation = this.currentCue?.translation?.trim();
-    if (ctxEl) {
+
+    const renderCtx = (tr?: string) => {
+      if (!ctxEl) return;
       if (!context) {
-        ctxEl.textContent = '';
-      } else if (cueTranslation) {
-        ctxEl.textContent = `原文：${context}\n译文：${cueTranslation}`;
-      } else {
-        ctxEl.textContent = `原文：${context}`;
+        ctxEl.replaceChildren();
+        ctxEl.style.display = 'none';
+        return;
       }
-    }
+      ctxEl.style.display = '';
+      ctxEl.replaceChildren();
+      const orig = doc.createElement('div');
+      orig.textContent = `原文：${context}`;
+      ctxEl.appendChild(orig);
+      const line = (tr ?? cueTranslation)?.trim();
+      if (line) {
+        const trEl = doc.createElement('div');
+        trEl.className = 'tr-line';
+        trEl.textContent = `译文：${line}`;
+        ctxEl.appendChild(trEl);
+      }
+    };
+    renderCtx();
 
     this.openWordPanel();
 
@@ -1668,7 +1752,6 @@ export class PipSessionController {
     if (wordShow?.autoExplain !== false) {
       if (body) body.textContent = '查询中…（AI 超时将自动免费翻译）';
       if (title) {
-        // Engine badge next to the word
         title.dataset.engine = '';
       }
       const res = await sendRuntime<WordExplainResult & { text?: string }>(
@@ -1683,7 +1766,7 @@ export class PipSessionController {
           // Badge for LLM vs free MT fallback
           const badge = doc.createElement('div');
           badge.style.cssText =
-            'display:inline-block;font-size:10px;font-weight:700;padding:2px 7px;border-radius:999px;margin-bottom:8px;';
+            'display:inline-block;font-size:9px;font-weight:700;padding:1px 6px;border-radius:999px;margin-bottom:6px;';
           if (explain.engine === 'llm') {
             badge.textContent = 'AI 释义';
             badge.style.background = 'color-mix(in srgb, oklch(76% 0.12 82) 35%, transparent)';
@@ -1702,24 +1785,18 @@ export class PipSessionController {
           if (explain.definition) {
             const def = doc.createElement('div');
             def.style.fontWeight = '600';
+            def.style.fontSize = '13px';
             def.textContent = explain.definition;
             body.appendChild(def);
           }
+          // Sentence translation only in the top context block (never again in body)
           const sentenceTr =
             explain.contextTranslation?.trim() || cueTranslation;
-          if (sentenceTr) {
-            const ct = doc.createElement('div');
-            ct.style.marginTop = '8px';
-            ct.style.opacity = '0.85';
-            ct.textContent = `句子译文：${sentenceTr}`;
-            body.appendChild(ct);
-            if (ctxEl && context && !ctxEl.textContent?.includes('译文：')) {
-              ctxEl.textContent = `原文：${context}\n译文：${sentenceTr}`;
-            }
-          }
+          renderCtx(sentenceTr);
+
           if (explain.explanation && explain.engine === 'llm') {
             const full = doc.createElement('pre');
-            full.style.marginTop = '8px';
+            full.style.marginTop = '6px';
             full.style.whiteSpace = 'pre-wrap';
             full.style.fontFamily = 'inherit';
             full.style.fontSize = '12px';
@@ -1729,7 +1806,7 @@ export class PipSessionController {
           if (explain.note) {
             const note = doc.createElement('div');
             note.style.cssText =
-              'margin-top:10px;font-size:11px;line-height:1.35;padding:6px 8px;border-radius:8px;background:rgba(255,255,255,.06);color:oklch(88% 0.08 82)';
+              'margin-top:8px;font-size:11px;line-height:1.35;padding:5px 7px;border-radius:6px;background:rgba(255,255,255,.06);color:oklch(88% 0.08 82)';
             note.textContent = explain.note;
             body.appendChild(note);
           }
@@ -1741,14 +1818,14 @@ export class PipSessionController {
         body.textContent = res.error.message;
       }
     } else if (body) {
-      body.textContent = '点击下方按钮查询释义，或直接加入生词本。';
+      body.textContent = '点击右上角加入生词本，或等待自动释义。';
     }
 
-    if (actions) {
-      const addBtn = actions.querySelector(
+    if (headActions) {
+      const addBtn = headActions.querySelector(
         '[data-word-act="add"]',
       ) as HTMLButtonElement | null;
-      const ttsBtn = actions.querySelector(
+      const ttsBtn = headActions.querySelector(
         '[data-word-act="tts"]',
       ) as HTMLButtonElement | null;
 

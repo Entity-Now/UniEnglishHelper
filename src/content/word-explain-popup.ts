@@ -8,6 +8,10 @@ const POPUP_HOST_ID = 'ueh-word-explain-host';
  * Page-side word explain tooltip.
  * Uses a top-layer host (fixed + max z-index + shadow DOM) so YouTube chrome,
  * player overlays, and the cue-list sidebar cannot cover it.
+ *
+ * Layout: [word + badge] …… [加生词本] [朗读] [×]
+ *          context (原文 + 译文 once)
+ *          definition / explanation body
  */
 export async function showWordExplainPopup(
   surface: string,
@@ -22,7 +26,6 @@ export async function showWordExplainPopup(
   const host = hostDoc.createElement('div');
   host.id = POPUP_HOST_ID;
   host.setAttribute('data-ueh-overlay', 'word-explain');
-  // Stay above almost all page UI including YouTube masthead / theater
   host.style.cssText = `
     all: initial;
     position: fixed !important;
@@ -44,20 +47,20 @@ export async function showWordExplainPopup(
       }
       .card {
         position: fixed;
-        top: max(16px, env(safe-area-inset-top, 0px));
-        right: max(16px, env(safe-area-inset-right, 0px));
-        width: min(300px, calc(100vw - 32px));
-        max-height: min(70vh, 440px);
+        top: max(12px, env(safe-area-inset-top, 0px));
+        right: max(12px, env(safe-area-inset-right, 0px));
+        width: min(280px, calc(100vw - 24px));
+        max-height: min(68vh, 400px);
         display: flex;
         flex-direction: column;
         box-sizing: border-box;
-        padding: 12px;
-        border-radius: 14px;
+        padding: 0;
+        border-radius: 12px;
         background: rgba(16, 17, 22, 0.97);
         color: #fff;
         border: 1px solid rgba(255, 255, 255, 0.14);
         box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
-        font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+        font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
         pointer-events: auto;
         isolation: isolate;
         overflow: hidden;
@@ -75,23 +78,33 @@ export async function showWordExplainPopup(
           border-radius: 0;
         }
       }
+      .head {
+        display: flex;
+        align-items: flex-start;
+        gap: 6px;
+        padding: 8px 8px 6px 10px;
+        border-bottom: 1px solid rgba(255,255,255,.08);
+        flex: 0 0 auto;
+      }
       .title-row {
+        flex: 1;
+        min-width: 0;
         display: flex;
         flex-wrap: wrap;
         align-items: center;
-        gap: 6px 8px;
-        padding-right: 28px;
+        gap: 4px 6px;
       }
       .title {
-        font-size: 15px;
+        font-size: 14px;
         font-weight: 700;
         color: oklch(88% 0.08 82);
         word-break: break-word;
+        line-height: 1.3;
       }
       .badge {
-        font-size: 10px;
+        font-size: 9px;
         font-weight: 700;
-        padding: 2px 7px;
+        padding: 1px 6px;
         border-radius: 999px;
         line-height: 1.3;
       }
@@ -110,32 +123,60 @@ export async function showWordExplainPopup(
         color: #ffb4a9;
         border: 1px solid rgba(255, 100, 100, 0.35);
       }
+      .head-actions {
+        display: flex;
+        align-items: center;
+        gap: 3px;
+        flex-shrink: 0;
+      }
       .note {
-        margin-top: 8px;
+        margin: 6px 10px 0;
         font-size: 11px;
         line-height: 1.35;
         color: oklch(88% 0.08 82 / 0.95);
         background: rgba(255,255,255,.06);
-        border-radius: 8px;
-        padding: 6px 8px;
+        border-radius: 6px;
+        padding: 5px 7px;
+        flex: 0 0 auto;
       }
-      .close-x {
-        position: absolute;
-        top: 8px;
-        right: 8px;
-        width: 28px;
-        height: 28px;
-        border: 0;
-        border-radius: 8px;
-        background: rgba(255,255,255,.1);
-        color: #fff;
-        cursor: pointer;
-        font-size: 16px;
+      ${ICON_BTN_CSS}
+      .head-actions .ueh-ibtn {
+        width: 26px;
+        height: 26px;
+        border-radius: 7px;
+      }
+      .head-actions .ueh-ibtn svg {
+        width: 13px;
+        height: 13px;
+      }
+      .head-actions .ueh-ibtn.close {
+        background: rgba(255,255,255,.08);
+        font-size: 15px;
         line-height: 1;
       }
-      .close-x:hover { background: rgba(255,255,255,.18); }
+      .head-actions .ueh-ibtn.close:hover {
+        background: rgba(255,255,255,.16);
+      }
+      .ctx-block {
+        flex: 0 0 auto;
+        margin: 6px 10px 0;
+        font-size: 11px;
+        line-height: 1.4;
+        padding: 5px 7px;
+        border-radius: 6px;
+        background: rgba(255,255,255,.06);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .ctx-block .orig { opacity: .85; }
+      .ctx-block .tr-line {
+        margin-top: 3px;
+        color: oklch(88% 0.08 82);
+        opacity: .95;
+      }
       .body {
-        margin-top: 10px;
+        margin: 6px 0 0;
+        padding: 0 10px 10px;
         flex: 1 1 auto;
         min-height: 0;
         overflow-x: hidden;
@@ -151,56 +192,44 @@ export async function showWordExplainPopup(
         background: rgba(255,255,255,.22);
         border-radius: 999px;
       }
-      .ctx-block {
-        flex: 0 0 auto;
-        margin-top: 8px;
-        font-size: 11px;
-        line-height: 1.45;
-        padding: 6px 8px;
-        border-radius: 8px;
-        background: rgba(255,255,255,.06);
-        white-space: pre-wrap;
-        word-break: break-word;
-        overflow: visible;
-      }
-      .ctx-block .orig { opacity: .85; }
-      .ctx-block .tr-line {
-        margin-top: 4px;
-        color: oklch(88% 0.08 82);
-        opacity: .95;
-      }
-      .def { font-weight: 600; font-size: 13px; color: #fff; margin-bottom: 8px; }
-      .ctx { margin-top: 8px; opacity: .7; font-size: 12px; line-height: 1.4; }
-      .tr { margin-top: 4px; opacity: .9; font-size: 12px; color: oklch(88% 0.08 82); }
+      .def { font-weight: 600; font-size: 13px; color: #fff; margin-bottom: 6px; }
       .err { color: #ef4444; }
-      .actions {
-        margin-top: 10px;
-        flex: 0 0 auto;
+      .explain-pre {
+        margin: 6px 0 0;
+        white-space: pre-wrap;
+        font: 12px/1.4 inherit;
+        opacity: .9;
       }
-      ${ICON_BTN_CSS}
     </style>
     <div class="backdrop"></div>
     <div class="card" role="dialog" aria-label="单词释义">
-      <button type="button" class="close-x" id="ueh-close" title="关闭" aria-label="关闭">×</button>
-      <div class="title-row">
-        <div class="title" id="ueh-title"></div>
-        <span class="badge" id="ueh-badge" hidden></span>
+      <div class="head">
+        <div class="title-row">
+          <div class="title" id="ueh-title"></div>
+          <span class="badge" id="ueh-badge" hidden></span>
+        </div>
+        <div class="head-actions" id="ueh-head-actions">
+          ${iconActionButton('add', '加生词本', 'primary', { id: 'ueh-add', disabled: 'true' })}
+          ${iconActionButton('tts', '朗读', '', { id: 'ueh-tts' })}
+          <button type="button" class="ueh-ibtn close" id="ueh-close" title="关闭" aria-label="关闭">×</button>
+        </div>
       </div>
       <div class="ctx-block" id="ueh-ctx-block" hidden></div>
-      <div class="body" id="ueh-popup-body">⏳ 正在查询释义…（AI 超时将自动免费翻译）</div>
       <div class="note" id="ueh-note" hidden></div>
-      <div class="actions ueh-ibtn-row" id="ueh-actions">
-        <button type="button" class="ueh-ibtn" id="ueh-close-footer" title="关闭" aria-label="关闭">×</button>
-      </div>
+      <div class="body" id="ueh-popup-body">⏳ 正在查询释义…（AI 超时将自动免费翻译）</div>
     </div>
   `;
 
   const titleEl = shadow.getElementById('ueh-title');
   if (titleEl) titleEl.textContent = surface;
 
+  /** Top context only — never also inject into body. */
   const renderCtxBlock = (tr?: string) => {
     const ctxBlock = shadow.getElementById('ueh-ctx-block');
-    if (!ctxBlock || !context.trim()) return;
+    if (!ctxBlock || !context.trim()) {
+      if (ctxBlock) ctxBlock.hidden = true;
+      return;
+    }
     ctxBlock.hidden = false;
     ctxBlock.replaceChildren();
     const orig = hostDoc.createElement('div');
@@ -223,22 +252,66 @@ export async function showWordExplainPopup(
   };
 
   shadow.getElementById('ueh-close')?.addEventListener('click', remove);
-  shadow
-    .getElementById('ueh-close-footer')
-    ?.addEventListener('click', remove);
+
+  // TTS available immediately (doesn't need explain result)
+  shadow.getElementById('ueh-tts')?.addEventListener('click', () => {
+    void (async () => {
+      const res = await sendRuntime<{
+        mode: string;
+        text?: string;
+        voice?: string;
+      }>('tts.synth', { text: surface }, 'content');
+      if (res.ok && res.data.mode === 'web-speech' && res.data.text) {
+        const u = new SpeechSynthesisUtterance(res.data.text);
+        u.lang = res.data.voice || 'en-US';
+        speechSynthesis.cancel();
+        speechSynthesis.speak(u);
+      }
+    })();
+  });
 
   let timer = window.setTimeout(remove, 25_000);
+  let latestExplain: WordExplainResult | null = null;
 
-  // Reposition if top-right would sit under a dense right column on wide pages
+  const bindAdd = () => {
+    const addBtn = shadow.getElementById('ueh-add') as HTMLButtonElement | null;
+    if (!addBtn) return;
+    addBtn.disabled = false;
+    addBtn.onclick = () => {
+      void (async () => {
+        await sendRuntime(
+          'word.add',
+          {
+            surface,
+            context,
+            translation: latestExplain?.definition || undefined,
+            contextTranslation:
+              latestExplain?.contextTranslation || contextTranslation,
+            explanation: latestExplain?.explanation,
+            explainEngine: latestExplain?.engine ?? 'none',
+            explainProvider: latestExplain?.provider,
+            kind: 'word',
+            sourceUrl: hostDoc.defaultView?.location.href ?? location.href,
+            sourceTitle: hostDoc.title || document.title,
+          },
+          'content',
+        );
+        onAddSuccess?.();
+        remove();
+      })();
+    };
+  };
+  // Allow add before explain finishes (context-only entry)
+  bindAdd();
+
   const card = shadow.querySelector('.card') as HTMLElement | null;
   if (card && hostDoc.defaultView) {
     const vw = hostDoc.defaultView.innerWidth;
-    // On narrow viewports center the card
     if (vw < 480) {
       card.style.left = '50%';
       card.style.right = 'auto';
       card.style.transform = 'translateX(-50%)';
-      card.style.width = 'min(300px, calc(100vw - 24px))';
+      card.style.width = 'min(280px, calc(100vw - 20px))';
     }
   }
 
@@ -268,6 +341,7 @@ export async function showWordExplainPopup(
       }
 
       const explain = res.data;
+      latestExplain = explain;
       const def = explain.definition || explain.text || '';
 
       if (badgeEl) {
@@ -293,6 +367,11 @@ export async function showWordExplainPopup(
         }
       }
 
+      // Sentence translation only at the top
+      const sentenceTr =
+        explain.contextTranslation?.trim() || contextTranslation?.trim();
+      renderCtxBlock(sentenceTr);
+
       bodyEl.className = 'body';
       bodyEl.replaceChildren();
 
@@ -302,25 +381,9 @@ export async function showWordExplainPopup(
         d.textContent = def;
         bodyEl.appendChild(d);
       }
-      const sentenceTr =
-        explain.contextTranslation?.trim() || contextTranslation?.trim();
-      renderCtxBlock(sentenceTr);
-      if (context && !shadow.getElementById('ueh-ctx-block')?.childElementCount) {
-        const c = hostDoc.createElement('div');
-        c.className = 'ctx';
-        c.textContent = `原文：${context}`;
-        bodyEl.appendChild(c);
-      }
-      if (sentenceTr && !shadow.getElementById('ueh-ctx-block')?.querySelector('.tr-line')) {
-        const t = hostDoc.createElement('div');
-        t.className = 'tr';
-        t.textContent = `译文：${sentenceTr}`;
-        bodyEl.appendChild(t);
-      }
       if (explain.explanation && explain.engine === 'llm') {
         const pre = hostDoc.createElement('pre');
-        pre.style.cssText =
-          'margin:8px 0 0;white-space:pre-wrap;font:12px/1.45 inherit;opacity:.9';
+        pre.className = 'explain-pre';
         pre.textContent = explain.explanation;
         bodyEl.appendChild(pre);
       }
@@ -328,59 +391,8 @@ export async function showWordExplainPopup(
         bodyEl.textContent = surface;
       }
 
-      const actions = shadow.getElementById('ueh-actions');
-      if (actions) {
-        actions.innerHTML = `
-          <div class="ueh-ibtn-row">
-            ${iconActionButton('add', '加生词本', 'primary', { id: 'ueh-add' })}
-            ${iconActionButton('tts', '朗读', '', { id: 'ueh-tts' })}
-            <button type="button" class="ueh-ibtn" id="ueh-close-active" title="关闭" aria-label="关闭">×</button>
-          </div>
-        `;
-        shadow
-          .getElementById('ueh-close-active')
-          ?.addEventListener('click', remove);
-        shadow.getElementById('ueh-add')?.addEventListener('click', () => {
-          void (async () => {
-            await sendRuntime(
-              'word.add',
-              {
-                surface,
-                context,
-                translation: explain.definition || undefined,
-                contextTranslation: explain.contextTranslation,
-                explanation: explain.explanation,
-                explainEngine: explain.engine ?? 'none',
-                explainProvider: explain.provider,
-                kind: 'word',
-                sourceUrl:
-                  hostDoc.defaultView?.location.href ?? location.href,
-                sourceTitle: hostDoc.title || document.title,
-              },
-              'content',
-            );
-            onAddSuccess?.();
-            remove();
-          })();
-        });
-        shadow.getElementById('ueh-tts')?.addEventListener('click', () => {
-          void (async () => {
-            const res = await sendRuntime<{
-              mode: string;
-              text?: string;
-              voice?: string;
-            }>('tts.synth', { text: surface }, 'content');
-            if (res.ok && res.data.mode === 'web-speech' && res.data.text) {
-              const u = new SpeechSynthesisUtterance(res.data.text);
-              u.lang = res.data.voice || 'en-US';
-              speechSynthesis.cancel();
-              speechSynthesis.speak(u);
-            }
-          })();
-        });
-      }
+      bindAdd();
 
-      // Reset auto-dismiss after content loads
       window.clearTimeout(timer);
       timer = window.setTimeout(remove, 25_000);
     })

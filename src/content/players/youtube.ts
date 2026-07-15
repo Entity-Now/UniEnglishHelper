@@ -3,10 +3,40 @@
  *
  * Critical: timedtext requires page cookies + often a `pot` token captured from
  * the player's own network calls. Service-worker fetch alone is unreliable.
+ *
+ * Preload: during pre-roll / mid-roll ads, main-video caption tracks are already
+ * on the player response — we fetch them without waiting for pot timedtext so
+ * cues are ready the moment the ad ends.
  */
 import type { SubtitleCue } from '../../shared/domain/types';
 import { sendRuntime } from '../../shared/messaging/client';
-import { BasePlayerAdapter } from './base';
+import { BasePlayerAdapter, type GetCuesOptions } from './base';
+
+/** Cross-adapter main-video cue cache (survives adapter instance recreation). */
+const mainCuePreload = new Map<
+  string,
+  { cues: SubtitleCue[]; key: string; at: number }
+>();
+
+/** Instant apply after ad: peek preloaded main-video cues (does not remove). */
+export function peekPreloadedMainCues(videoId: string): SubtitleCue[] | null {
+  const hit = mainCuePreload.get(videoId);
+  return hit?.cues?.length ? hit.cues : null;
+}
+
+export function storePreloadedMainCues(
+  videoId: string,
+  cues: SubtitleCue[],
+  key: string,
+): void {
+  if (!videoId || !cues.length) return;
+  mainCuePreload.set(videoId, { cues, key, at: Date.now() });
+}
+
+export function clearPreloadedMainCues(videoId?: string): void {
+  if (videoId) mainCuePreload.delete(videoId);
+  else mainCuePreload.clear();
+}
 
 interface CaptionTrack {
   baseUrl: string;
@@ -105,40 +135,90 @@ export class YoutubeAdapter extends BasePlayerAdapter {
     );
   }
 
-  /** Drop cache when SPA navigates to another video or ad ends. */
-  clearCache(): void {
+  /**
+   * Drop instance cache. Does NOT clear cross-instance preload (that is how
+   * ad-end instant apply works). Pass clearPreload to drop both.
+   */
+  clearCache(opts?: { clearPreload?: boolean }): void {
     this.cachedCues = null;
     this.cacheKey = null;
     this.forceRefresh = true;
+    if (opts?.clearPreload) {
+      const vid = extractYoutubeVideoId();
+      if (vid) clearPreloadedMainCues(vid);
+      else clearPreloadedMainCues();
+    }
   }
 
-  async getCues(): Promise<SubtitleCue[]> {
+  /**
+   * Seed instance cache from preloaded main cues (used right after ad ends).
+   */
+  adoptPreloaded(videoId: string): SubtitleCue[] | null {
+    const hit = mainCuePreload.get(videoId);
+    if (!hit?.cues?.length) return null;
+    this.cachedCues = hit.cues;
+    this.cacheKey = hit.key;
+    this.forceRefresh = false;
+    return hit.cues;
+  }
+
+  async getCues(options?: GetCuesOptions): Promise<SubtitleCue[]> {
+    const purpose = options?.purpose ?? 'display';
+    const preload = purpose === 'preload';
+    const bypassPreload = options?.bypassPreload === true;
     const videoId = extractYoutubeVideoId();
     if (!videoId) return this.readTextTracks();
 
     // Invalidate if video changed
     if (this.cacheKey && !this.cacheKey.startsWith(`${videoId}:`)) {
-      this.clearCache();
+      this.cachedCues = null;
+      this.cacheKey = null;
+      this.forceRefresh = true;
+    }
+
+    // Instance cache (skip when forceRefresh or network revalidate)
+    if (
+      !this.forceRefresh &&
+      !bypassPreload &&
+      this.cacheKey?.startsWith(`${videoId}:`) &&
+      this.cachedCues?.length
+    ) {
+      return this.cachedCues;
+    }
+
+    // Shared preload from ad-time fetch — even after clearCache/forceRefresh,
+    // prefer instant apply over re-waiting for pot (unless bypassPreload).
+    if (!bypassPreload) {
+      const pre = mainCuePreload.get(videoId);
+      if (pre?.cues?.length) {
+        this.cachedCues = pre.cues;
+        this.cacheKey = pre.key;
+        this.forceRefresh = false;
+        return pre.cues;
+      }
     }
 
     try {
       await ensureMainInjected();
 
-      // 1) Turn captions on so YT issues timedtext (with pot)
-      await mainWorldRequest(
-        'UEH_ENSURE_SUBTITLES',
-        'UEH_ENSURE_SUBTITLES_DONE',
-        {},
-        3000,
-      ).catch(() => undefined);
+      // During ad preload: do NOT force YT caption UI (often ad timedtext).
+      // Display path still ensures so pot may appear for main video.
+      if (!preload) {
+        await mainWorldRequest(
+          'UEH_ENSURE_SUBTITLES',
+          'UEH_ENSURE_SUBTITLES_DONE',
+          {},
+          3000,
+        ).catch(() => undefined);
+      }
 
-      // 2) Player data + tracks (retry for SPA)
+      // Player data + tracks (fewer retries when preloading during ad)
+      const maxRetries = preload ? 4 : 12;
       let playerData = await this.fetchPlayerData(videoId);
       if (!playerData?.captionTracks?.length) {
-        for (let i = 0; i < 12; i++) {
-          await sleep(400);
-          // Re-ensure captions periodically
-          if (i === 3 || i === 7) {
+        for (let i = 0; i < maxRetries; i++) {
+          await sleep(preload ? 250 : 400);
+          if (!preload && (i === 3 || i === 7)) {
             await mainWorldRequest(
               'UEH_ENSURE_SUBTITLES',
               'UEH_ENSURE_SUBTITLES_DONE',
@@ -151,7 +231,7 @@ export class YoutubeAdapter extends BasePlayerAdapter {
         }
       }
 
-      // 3) BG one-shot MAIN extract fallback
+      // BG one-shot MAIN extract fallback
       if (!playerData?.captionTracks?.length) {
         const tr = await sendRuntime<{ tracks: CaptionTrack[] }>(
           'youtube.captionTracks',
@@ -175,13 +255,15 @@ export class YoutubeAdapter extends BasePlayerAdapter {
 
       if (!playerData?.captionTracks?.length) {
         console.warn('[UEH] No caption tracks on player response');
-        return this.readTextTracks();
+        return preload ? [] : this.readTextTracks();
       }
 
+      // Prefer main-video tracks: player response is usually the watch target
+      // even while an ad plays. Soft-mismatch with empty tracks already rejected.
       const track = selectTrack(playerData);
       if (!track?.baseUrl) {
         console.warn('[UEH] No usable caption track baseUrl');
-        return this.readTextTracks();
+        return preload ? [] : this.readTextTracks();
       }
 
       const key = `${videoId}:${track.languageCode}:${track.kind ?? ''}:${track.vssId}`;
@@ -190,26 +272,34 @@ export class YoutubeAdapter extends BasePlayerAdapter {
         this.cacheKey === key &&
         this.cachedCues?.length
       ) {
+        storePreloadedMainCues(videoId, this.cachedCues, key);
         return this.cachedCues;
       }
 
-      // 4) Wait for pot-bearing timedtext URL from YT network (must match main video)
+      // Live timedtext: only accept main videoId (ads are filtered out).
+      // Preload must not block on pot — ad traffic rarely emits main timedtext.
       let liveTimedtext = filterTimedtextForVideo(
         playerData.cachedTimedtextUrl,
         videoId,
       );
       if (!liveTimedtext || !liveTimedtext.includes('pot=')) {
+        const waitMs = preload ? 400 : 6500;
+        const bridgeTimeout = preload ? 800 : 7000;
         const waited = await mainWorldRequest<{ url?: string | null }>(
           'UEH_WAIT_TIMEDTEXT',
           'UEH_TIMEDTEXT_READY',
-          { videoId, timeoutMs: 6500 },
-          7000,
+          { videoId, timeoutMs: waitMs },
+          bridgeTimeout,
         ).catch(() => null);
         const waitedUrl = filterTimedtextForVideo(waited?.url ?? null, videoId);
         if (waitedUrl) liveTimedtext = waitedUrl;
       }
 
-      const urls = buildFetchUrls(track, playerData, liveTimedtext);
+      // Preload: try plain track baseUrl first (fast, no pot), then pot variants.
+      // Display: pot/live first for reliability.
+      const urls = preload
+        ? buildFetchUrlsPreload(track, playerData, liveTimedtext)
+        : buildFetchUrls(track, playerData, liveTimedtext);
       let events: TimedEvent[] | null = null;
       let lastErr = '';
 
@@ -231,8 +321,9 @@ export class YoutubeAdapter extends BasePlayerAdapter {
           tracks: playerData.captionTracks.length,
           track: track.languageCode,
           hasPotUrl: Boolean(liveTimedtext?.includes('pot=')),
+          purpose,
         });
-        return this.readTextTracks();
+        return preload ? [] : this.readTextTracks();
       }
 
       const cues = eventsToCues(events, videoId);
@@ -240,12 +331,18 @@ export class YoutubeAdapter extends BasePlayerAdapter {
         this.cachedCues = cues;
         this.cacheKey = key;
         this.forceRefresh = false;
-        console.info('[UEH] YouTube cues loaded', cues.length, track.languageCode);
+        storePreloadedMainCues(videoId, cues, key);
+        console.info(
+          '[UEH] YouTube cues loaded',
+          cues.length,
+          track.languageCode,
+          purpose,
+        );
       }
-      return cues.length ? cues : this.readTextTracks();
+      return cues.length ? cues : preload ? [] : this.readTextTracks();
     } catch (err) {
       console.warn('[UEH] YouTube getCues failed', err);
-      return this.readTextTracks();
+      return preload ? [] : this.readTextTracks();
     }
   }
 
@@ -449,6 +546,45 @@ export function filterTimedtextForVideo(
   }
 }
 
+function captionUrlWithParams(
+  track: CaptionTrack,
+  playerData: PlayerData,
+  fmt: string,
+  pot: { pot: string | null; potc: string | null },
+  usePot: boolean,
+): string {
+  try {
+    const url = new URL(track.baseUrl);
+    url.searchParams.set('fmt', fmt);
+    url.searchParams.set('xorb', '2');
+    url.searchParams.set('xobt', '3');
+    url.searchParams.set('xovt', '3');
+    if (!url.searchParams.get('c')) url.searchParams.set('c', 'WEB');
+    if (playerData.cver) url.searchParams.set('cver', playerData.cver);
+    if (playerData.device) {
+      const dp = new URLSearchParams(playerData.device);
+      for (const k of [
+        'cbrand',
+        'cbr',
+        'cbrver',
+        'cos',
+        'cosver',
+        'cplatform',
+      ]) {
+        const v = dp.get(k);
+        if (v) url.searchParams.set(k, v);
+      }
+    }
+    if (usePot && pot.pot) {
+      url.searchParams.set('pot', pot.pot);
+      if (pot.potc) url.searchParams.set('potc', pot.potc);
+    }
+    return url.toString();
+  } catch {
+    return track.baseUrl;
+  }
+}
+
 /** Build candidate URLs: live timedtext first, then pot variants, then plain. */
 function buildFetchUrls(
   track: CaptionTrack,
@@ -460,7 +596,6 @@ function buildFetchUrls(
 
   if (liveTimedtext) {
     urls.push(liveTimedtext);
-    // Also force json3 on the live URL
     try {
       const u = new URL(liveTimedtext);
       u.searchParams.set('fmt', 'json3');
@@ -470,44 +605,48 @@ function buildFetchUrls(
     }
   }
 
-  const withParams = (fmt: string, usePot: boolean) => {
-    try {
-      const url = new URL(track.baseUrl);
-      url.searchParams.set('fmt', fmt);
-      url.searchParams.set('xorb', '2');
-      url.searchParams.set('xobt', '3');
-      url.searchParams.set('xovt', '3');
-      if (!url.searchParams.get('c')) url.searchParams.set('c', 'WEB');
-      if (playerData.cver) url.searchParams.set('cver', playerData.cver);
-      if (playerData.device) {
-        const dp = new URLSearchParams(playerData.device);
-        for (const k of [
-          'cbrand',
-          'cbr',
-          'cbrver',
-          'cos',
-          'cosver',
-          'cplatform',
-        ]) {
-          const v = dp.get(k);
-          if (v) url.searchParams.set(k, v);
-        }
-      }
-      if (usePot && pot.pot) {
-        url.searchParams.set('pot', pot.pot);
-        if (pot.potc) url.searchParams.set('potc', pot.potc);
-      }
-      return url.toString();
-    } catch {
-      return track.baseUrl;
-    }
-  };
-
   for (const fmt of ['json3', 'srv3', 'vtt']) {
-    if (pot.pot) urls.push(withParams(fmt, true));
-    urls.push(withParams(fmt, false));
+    if (pot.pot) urls.push(captionUrlWithParams(track, playerData, fmt, pot, true));
+    urls.push(captionUrlWithParams(track, playerData, fmt, pot, false));
   }
   urls.push(track.baseUrl);
+  return [...new Set(urls)];
+}
+
+/**
+ * Ad-time preload: try plain baseUrl/json3 first (fast, cookies-only),
+ * then pot/live if already captured for the main video.
+ */
+function buildFetchUrlsPreload(
+  track: CaptionTrack,
+  playerData: PlayerData,
+  liveTimedtext: string | null,
+): string[] {
+  const pot = extractPot(track, playerData, liveTimedtext);
+  const urls: string[] = [];
+
+  // Fast path — no pot dependency
+  for (const fmt of ['json3', 'srv3', 'vtt']) {
+    urls.push(captionUrlWithParams(track, playerData, fmt, pot, false));
+  }
+  urls.push(track.baseUrl);
+
+  // Enrich with pot/live when already available (no extra wait)
+  if (liveTimedtext) {
+    urls.push(liveTimedtext);
+    try {
+      const u = new URL(liveTimedtext);
+      u.searchParams.set('fmt', 'json3');
+      urls.push(u.toString());
+    } catch {
+      // ignore
+    }
+  }
+  if (pot.pot) {
+    for (const fmt of ['json3', 'srv3', 'vtt']) {
+      urls.push(captionUrlWithParams(track, playerData, fmt, pot, true));
+    }
+  }
   return [...new Set(urls)];
 }
 
