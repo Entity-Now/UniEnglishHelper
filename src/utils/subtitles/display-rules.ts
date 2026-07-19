@@ -1,6 +1,18 @@
 import type { StateData, SubtitlesFragment } from './types';
 import type { SubtitlesDisplayMode } from '@/types/config/subtitles';
 
+export {
+  applySubtitleLayerLayout,
+  clampPositionPercent,
+  describeSubtitlePlacement,
+  resolveSubtitlePlacement,
+} from './layout';
+export type {
+  ApplySubtitleLayerLayoutOpts,
+  ResolvedSubtitlePlacement,
+  SubtitleEdge,
+} from './layout';
+
 export function hasRenderableSubtitleByMode(
   subtitle: SubtitlesFragment | null,
   displayMode: SubtitlesDisplayMode,

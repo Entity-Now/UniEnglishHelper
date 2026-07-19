@@ -6,12 +6,22 @@ export type SubtitlesDisplayMode =
   | 'originalOnly'
   | 'translationOnly'
   | 'off';
+/**
+ * Relative placement of the translation line.
+ * - stacked: above/below the original inside one block
+ * - split: which video edge the translation sits on (`above`=top, `below`=bottom)
+ */
 export type SubtitlesTranslationPosition = 'above' | 'below';
+/**
+ * - stacked: original + translation share one block (classic bilingual cue)
+ * - split: original and translation on opposite vertical edges of the video
+ */
+export type SubtitlesLayout = 'stacked' | 'split';
 export type SubtitlesFontFamily = 'system' | 'roboto' | 'noto-sans' | 'noto-serif';
 
 export interface SubtitleTextStyle {
   fontFamily: SubtitlesFontFamily;
-  /** Percent of base size (30–150). */
+  /** Percent of base size (30–200). */
   fontScale: number;
   color: string;
   fontWeight: number;
@@ -24,13 +34,20 @@ export interface SubtitleContainerStyle {
 
 export interface SubtitlesStyle {
   displayMode: SubtitlesDisplayMode;
+  /** stacked (default) or split to opposite edges */
+  layout: SubtitlesLayout;
   translationPosition: SubtitlesTranslationPosition;
   main: SubtitleTextStyle;
   translation: SubtitleTextStyle;
   container: SubtitleContainerStyle;
 }
 
+/**
+ * Vertical placement for the stacked block (ignored for edge offsets in split:
+ * split uses `percent` from both top and bottom edges).
+ */
 export interface SubtitlePosition {
+  /** Distance from the chosen edge, 0–45 (% of player height). */
   percent: number;
   anchor: 'top' | 'bottom';
 }
@@ -98,6 +115,7 @@ export const DEFAULT_PAGE_SUBTITLE_SURFACE: SubtitleSurfaceConfig = {
   autoTranslate: true,
   style: {
     displayMode: 'bilingual',
+    layout: 'stacked',
     translationPosition: 'below',
     main: { ...DEFAULT_SUBTITLE_TEXT_STYLE, fontScale: 110, fontWeight: 600 },
     translation: {
@@ -117,6 +135,7 @@ export const DEFAULT_PIP_SUBTITLE_SURFACE: SubtitleSurfaceConfig = {
   autoTranslate: true,
   style: {
     displayMode: 'bilingual',
+    layout: 'stacked',
     translationPosition: 'below',
     main: { ...DEFAULT_SUBTITLE_TEXT_STYLE, fontScale: 85, fontWeight: 600 },
     translation: {
@@ -132,6 +151,7 @@ export const DEFAULT_PIP_SUBTITLE_SURFACE: SubtitleSurfaceConfig = {
 
 export const DEFAULT_SUBTITLES_STYLE: SubtitlesStyle = {
   displayMode: 'bilingual',
+  layout: 'stacked',
   translationPosition: 'below',
   main: { ...DEFAULT_SUBTITLE_TEXT_STYLE, fontWeight: 600 },
   translation: {

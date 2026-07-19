@@ -3,6 +3,15 @@ export {
   hasRenderableSubtitleByMode,
   isAwaitingTranslation,
   pickSubtitleLines,
+  applySubtitleLayerLayout,
+  clampPositionPercent,
+  describeSubtitlePlacement,
+  resolveSubtitlePlacement,
+} from './display-rules';
+export type {
+  ApplySubtitleLayerLayoutOpts,
+  ResolvedSubtitlePlacement,
+  SubtitleEdge,
 } from './display-rules';
 export {
   buildSubtitlesSrtContent,

@@ -13,6 +13,10 @@ import {
   decorateWordSpan,
   type HighlightMap,
 } from '../utils/vocab-highlight';
+import {
+  applySubtitleLayerLayout,
+  resolveSubtitlePlacement,
+} from '../utils/subtitles/layout';
 import { CueTranslateScheduler } from './cue-translate';
 import type { PlayerAdapter } from './players';
 
@@ -375,11 +379,17 @@ export class PageSubtitlesOverlay {
       tr.style.color = vs?.translation.color ?? '#E8D5A3';
       tr.style.background = `rgba(0,0,0,${bg})`;
     }
-    if (layer) {
-      layer.style.flexDirection =
-        vs?.translationPosition === 'above' ? 'column-reverse' : 'column';
-      const pct = this.config.pageSubtitles?.position?.percent ?? 10;
-      layer.style.bottom = `${Math.max(8, pct)}%`;
+    if (layer && en && tr) {
+      const placement = resolveSubtitlePlacement({
+        layout: vs?.layout,
+        translationPosition: vs?.translationPosition,
+        position: this.config.pageSubtitles?.position,
+      });
+      applySubtitleLayerLayout(layer, en, tr, {
+        placement,
+        // Keep clear of YouTube-ish bottom chrome a little
+        bottomExtraPx: 0,
+      });
     }
     // Live-update word underline from wordShow.underlineWords
     if (baseStyle) {

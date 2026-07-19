@@ -374,15 +374,33 @@ export class PlayerChromeButton {
         </select>
       </div>
       <div class="ueh-field">
-        <label class="ueh-block" for="ueh-ps-pos">译文位置</label>
-        <select id="ueh-ps-pos">
-          <option value="below">原文下方</option>
-          <option value="above">原文上方</option>
+        <label class="ueh-block" for="ueh-ps-layout">双语布局</label>
+        <select id="ueh-ps-layout">
+          <option value="stacked">堆叠（同一区域）</option>
+          <option value="split">分离（上下两端）</option>
         </select>
       </div>
       <div class="ueh-field">
+        <label class="ueh-block" for="ueh-ps-pos">译文位置</label>
+        <select id="ueh-ps-pos">
+          <option value="below">堆叠：原文下 · 分离：原文顶/译文底</option>
+          <option value="above">堆叠：原文上 · 分离：译文顶/原文底</option>
+        </select>
+      </div>
+      <div class="ueh-field">
+        <label class="ueh-block" for="ueh-ps-anchor">垂直锚点（堆叠）</label>
+        <select id="ueh-ps-anchor">
+          <option value="bottom">靠下</option>
+          <option value="top">靠上</option>
+        </select>
+      </div>
+      <div class="ueh-field">
+        <label class="ueh-block" for="ueh-ps-offset">边距 <span id="ueh-ps-offset-val"></span></label>
+        <input type="range" id="ueh-ps-offset" min="0" max="45" step="1" />
+      </div>
+      <div class="ueh-field">
         <label class="ueh-block" for="ueh-ps-scale">字幕大小 <span id="ueh-ps-scale-val"></span></label>
-        <input type="range" id="ueh-ps-scale" min="50" max="150" step="5" />
+        <input type="range" id="ueh-ps-scale" min="50" max="200" step="5" />
       </div>
       <div class="ueh-actions">
         <button type="button" class="ueh-save" id="ueh-ps-save">保存并应用</button>
@@ -408,6 +426,16 @@ export class PlayerChromeButton {
     panel
       .querySelector('#ueh-ps-pos')
       ?.addEventListener('change', applyLiveFromPanel);
+    panel
+      .querySelector('#ueh-ps-layout')
+      ?.addEventListener('change', applyLiveFromPanel);
+    panel
+      .querySelector('#ueh-ps-anchor')
+      ?.addEventListener('change', applyLiveFromPanel);
+    panel.querySelector('#ueh-ps-offset')?.addEventListener('input', () => {
+      this.updateScaleLabel();
+      void this.applyFromPanel(false);
+    });
     panel.querySelector('#ueh-ps-scale')?.addEventListener('input', () => {
       this.updateScaleLabel();
       void this.applyFromPanel(false);
@@ -439,6 +467,11 @@ export class PlayerChromeButton {
     ) as HTMLInputElement | null;
     const lab = this.panel?.querySelector('#ueh-ps-scale-val');
     if (scale && lab) lab.textContent = `${scale.value}%`;
+    const offset = this.panel?.querySelector(
+      '#ueh-ps-offset',
+    ) as HTMLInputElement | null;
+    const olab = this.panel?.querySelector('#ueh-ps-offset-val');
+    if (offset && olab) olab.textContent = `${offset.value}%`;
   }
 
   private syncPanelFields(): void {
@@ -456,9 +489,18 @@ export class PlayerChromeButton {
     const mode = this.panel.querySelector(
       '#ueh-ps-mode',
     ) as HTMLSelectElement | null;
+    const layout = this.panel.querySelector(
+      '#ueh-ps-layout',
+    ) as HTMLSelectElement | null;
     const pos = this.panel.querySelector(
       '#ueh-ps-pos',
     ) as HTMLSelectElement | null;
+    const anchor = this.panel.querySelector(
+      '#ueh-ps-anchor',
+    ) as HTMLSelectElement | null;
+    const offset = this.panel.querySelector(
+      '#ueh-ps-offset',
+    ) as HTMLInputElement | null;
     const scale = this.panel.querySelector(
       '#ueh-ps-scale',
     ) as HTMLInputElement | null;
@@ -470,11 +512,14 @@ export class PlayerChromeButton {
       autoTr.checked =
         ps?.autoTranslate ?? c.features?.autoTranslate !== false;
     if (mode) mode.value = ps?.style?.displayMode ?? 'bilingual';
+    if (layout) layout.value = ps?.style?.layout ?? 'stacked';
     if (pos) pos.value = ps?.style?.translationPosition ?? 'below';
+    if (anchor) anchor.value = ps?.position?.anchor ?? 'bottom';
+    if (offset) offset.value = String(ps?.position?.percent ?? 10);
     if (scale) {
       scale.value = String(ps?.style?.main?.fontScale ?? 110);
-      this.updateScaleLabel();
     }
+    this.updateScaleLabel();
   }
 
   /** Read panel → merge pageSubtitles only → live apply → optionally persist. */
@@ -490,7 +535,16 @@ export class PlayerChromeButton {
       '#ueh-ps-auto-tr',
     ) as HTMLInputElement;
     const mode = this.panel.querySelector('#ueh-ps-mode') as HTMLSelectElement;
+    const layout = this.panel.querySelector(
+      '#ueh-ps-layout',
+    ) as HTMLSelectElement;
     const pos = this.panel.querySelector('#ueh-ps-pos') as HTMLSelectElement;
+    const anchor = this.panel.querySelector(
+      '#ueh-ps-anchor',
+    ) as HTMLSelectElement;
+    const offset = this.panel.querySelector(
+      '#ueh-ps-offset',
+    ) as HTMLInputElement;
     const scale = this.panel.querySelector(
       '#ueh-ps-scale',
     ) as HTMLInputElement;
@@ -507,6 +561,9 @@ export class PlayerChromeButton {
         style: {
           ...prev.style,
           displayMode,
+          layout: (layout.value === 'split' ? 'split' : 'stacked') as
+            | 'stacked'
+            | 'split',
           translationPosition: pos.value as 'above' | 'below',
           main: {
             ...prev.style.main,
@@ -516,6 +573,10 @@ export class PlayerChromeButton {
             ...prev.style.translation,
             fontScale: Math.round(fontScale * 0.88),
           },
+        },
+        position: {
+          percent: Number(offset.value) || 10,
+          anchor: anchor.value === 'top' ? 'top' : 'bottom',
         },
       },
     };

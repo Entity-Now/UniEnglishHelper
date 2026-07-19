@@ -17,7 +17,7 @@ export const PROCESS_LOOK_AHEAD_MS = 60_000;
 
 // Style constants
 export const MIN_FONT_SCALE = 30;
-export const MAX_FONT_SCALE = 150;
+export const MAX_FONT_SCALE = 200;
 export const DEFAULT_FONT_SCALE = 100;
 export const MIN_FONT_WEIGHT = 300;
 export const MAX_FONT_WEIGHT = 700;
@@ -29,6 +29,10 @@ export const DEFAULT_FONT_FAMILY = 'system' as const;
 export const DEFAULT_SUBTITLE_COLOR = '#FFFFFF';
 export const DEFAULT_DISPLAY_MODE = 'bilingual' as const;
 export const DEFAULT_TRANSLATION_POSITION = 'below' as const;
+export const DEFAULT_SUBTITLES_LAYOUT = 'stacked' as const;
+/** Edge offset range for position.percent (percent of player height). */
+export const MIN_POSITION_PERCENT = 0;
+export const MAX_POSITION_PERCENT = 45;
 export const DEFAULT_CONTROLS_HEIGHT = 60;
 export const DEFAULT_SUBTITLE_POSITION = { percent: 10, anchor: 'bottom' as const };
 

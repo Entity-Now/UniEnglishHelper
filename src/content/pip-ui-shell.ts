@@ -526,13 +526,25 @@ export function buildPipMarkup(): string {
           <option value="translationOnly">仅译文</option>
           <option value="off">关闭</option>
         </select>
+        <label class="ueh-block" for="ueh-pip-layout">双语布局</label>
+        <select id="ueh-pip-layout">
+          <option value="stacked">堆叠（同一区域）</option>
+          <option value="split">分离（上下两端）</option>
+        </select>
         <label class="ueh-block" for="ueh-pip-pos">译文位置</label>
         <select id="ueh-pip-pos">
-          <option value="below">原文下方</option>
-          <option value="above">原文上方</option>
+          <option value="below">堆叠：原文下 · 分离：原文顶/译文底</option>
+          <option value="above">堆叠：原文上 · 分离：译文顶/原文底</option>
         </select>
+        <label class="ueh-block" for="ueh-pip-anchor">垂直锚点（堆叠）</label>
+        <select id="ueh-pip-anchor">
+          <option value="bottom">靠下</option>
+          <option value="top">靠上</option>
+        </select>
+        <label class="ueh-block" for="ueh-pip-offset">边距 <span id="ueh-pip-offset-val"></span></label>
+        <input type="range" id="ueh-pip-offset" min="0" max="45" step="1" />
         <label class="ueh-block" for="ueh-pip-scale">字幕大小 <span id="ueh-pip-scale-val"></span></label>
-        <input type="range" id="ueh-pip-scale" min="50" max="140" step="5" />
+        <input type="range" id="ueh-pip-scale" min="50" max="200" step="5" />
         <label class="ueh-block" for="ueh-pip-bg">背景不透明度 <span id="ueh-pip-bg-val"></span></label>
         <input type="range" id="ueh-pip-bg" min="0" max="100" step="5" />
         <div class="ueh-actions">

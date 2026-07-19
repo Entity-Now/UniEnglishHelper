@@ -8,9 +8,19 @@ import type {
   SubtitleSurfaceConfig,
   SubtitlesDisplayMode,
   SubtitlesFontFamily,
+  SubtitlesLayout,
   SubtitlesTranslationPosition,
 } from '../../types/config/subtitles';
-import { SUBTITLE_FONT_FAMILIES } from '../../utils/constants/subtitles';
+import {
+  MAX_FONT_SCALE,
+  MAX_POSITION_PERCENT,
+  MIN_POSITION_PERCENT,
+  SUBTITLE_FONT_FAMILIES,
+} from '../../utils/constants/subtitles';
+import {
+  describeSubtitlePlacement,
+  resolveSubtitlePlacement,
+} from '../../utils/subtitles/layout';
 import { isClickableWord, segmentWords } from '../../utils/segmenter';
 
 /** Sample cue mirrors real PiP content (long enough to show wrap). */
@@ -439,6 +449,7 @@ function SurfaceCard(props: {
 
   type StylePatch = {
     displayMode?: typeof style.displayMode;
+    layout?: SubtitlesLayout;
     translationPosition?: typeof style.translationPosition;
     main?: Partial<typeof style.main>;
     translation?: Partial<typeof style.translation>;
@@ -451,6 +462,7 @@ function SurfaceCard(props: {
       style: {
         ...style,
         displayMode: partial.displayMode ?? style.displayMode,
+        layout: partial.layout ?? style.layout ?? 'stacked',
         translationPosition:
           partial.translationPosition ?? style.translationPosition,
         // Deep-merge nested style objects so partial main/translation/container
@@ -521,7 +533,25 @@ function SurfaceCard(props: {
           </select>
         </div>
         <div>
-          <label>译文位置（换行堆叠）</label>
+          <label>双语布局</label>
+          <select
+            value={style.layout ?? 'stacked'}
+            onChange={(e) =>
+              patchStyle({
+                layout: e.target.value as SubtitlesLayout,
+              })
+            }
+          >
+            <option value="stacked">堆叠（同一区域）</option>
+            <option value="split">分离（上下两端）</option>
+          </select>
+        </div>
+        <div>
+          <label>
+            {(style.layout ?? 'stacked') === 'split'
+              ? '分离方向'
+              : '译文相对位置'}
+          </label>
           <select
             value={style.translationPosition}
             onChange={(e) =>
@@ -531,8 +561,17 @@ function SurfaceCard(props: {
               })
             }
           >
-            <option value="below">原文下方（默认）</option>
-            <option value="above">原文上方</option>
+            {(style.layout ?? 'stacked') === 'split' ? (
+              <>
+                <option value="above">译文在上 / 原文在下</option>
+                <option value="below">原文在上 / 译文在下</option>
+              </>
+            ) : (
+              <>
+                <option value="below">原文下方（默认）</option>
+                <option value="above">原文上方</option>
+              </>
+            )}
           </select>
         </div>
         <div>
@@ -561,8 +600,8 @@ function SurfaceCard(props: {
           <input
             type="range"
             min={50}
-            max={150}
-            value={style.main.fontScale}
+            max={MAX_FONT_SCALE}
+            value={Math.min(style.main.fontScale, MAX_FONT_SCALE)}
             onChange={(e) => {
               const fontScale = Number(e.target.value);
               patchStyle({
@@ -593,11 +632,32 @@ function SurfaceCard(props: {
           />
         </div>
         <div>
-          <label>垂直位置 ({surface.position.percent}%)</label>
+          <label>垂直锚点（堆叠）</label>
+          <select
+            value={surface.position.anchor}
+            onChange={(e) =>
+              onChange({
+                ...surface,
+                position: {
+                  ...surface.position,
+                  anchor: e.target.value as 'top' | 'bottom',
+                },
+              })
+            }
+          >
+            <option value="bottom">靠下</option>
+            <option value="top">靠上</option>
+          </select>
+        </div>
+        <div>
+          <label>
+            边距 ({surface.position.percent}%)
+            {(style.layout ?? 'stacked') === 'split' ? ' · 两端' : ''}
+          </label>
           <input
             type="range"
-            min={0}
-            max={40}
+            min={MIN_POSITION_PERCENT}
+            max={MAX_POSITION_PERCENT}
             value={surface.position.percent}
             onChange={(e) =>
               onChange({
@@ -682,9 +742,11 @@ function PipStyleSubtitlePreview(props: {
       enabled && (mode === 'bilingual' || mode === 'originalOnly');
     const showTr =
       enabled && (mode === 'bilingual' || mode === 'translationOnly');
-    // PiP: bottom = max(56, 48 + percent)px on a full window.
-    // Stage mock uses % so vertical slider is visible in the fixed-height box.
-    const bottomPct = Math.max(10, Math.min(46, 14 + surface.position.percent));
+    const placement = resolveSubtitlePlacement({
+      layout: style.layout,
+      translationPosition: style.translationPosition,
+      position: surface.position,
+    });
     return {
       enFontPx: Math.round(SUBTITLE_BASE_PX * (mainScale / 100)),
       trFontPx: Math.round(SUBTITLE_BASE_PX * (trScale / 100)),
@@ -693,8 +755,8 @@ function PipStyleSubtitlePreview(props: {
       showEn,
       showTr,
       mode,
-      positionAbove: style.translationPosition === 'above',
-      bottomPct,
+      placement,
+      label: describeSubtitlePlacement(placement),
       enColor: style.main.color || '#FFFFFF',
       trColor: style.translation.color || '#E8D5A3',
       enWeight: style.main.fontWeight ?? 600,
@@ -715,6 +777,54 @@ function PipStyleSubtitlePreview(props: {
     });
   }, []);
 
+  const lineStyle = (kind: 'en' | 'tr'): React.CSSProperties => {
+    const isEn = kind === 'en';
+    const base: React.CSSProperties = {
+      fontSize: isEn ? appearance.enFontPx : appearance.trFontPx,
+      fontFamily: appearance.fontCss,
+      fontWeight: isEn ? appearance.enWeight : appearance.trWeight,
+      color: isEn ? appearance.enColor : appearance.trColor,
+      background: `rgba(0,0,0,${appearance.bg})`,
+    };
+    if (appearance.placement.layout !== 'split') return base;
+    const edge = isEn
+      ? appearance.placement.originalEdge
+      : appearance.placement.translationEdge;
+    return {
+      ...base,
+      position: 'absolute',
+      left: '50%',
+      transform: 'translateX(-50%)',
+      width: 'max-content',
+      maxWidth: '94%',
+      ...(edge === 'top'
+        ? { top: `${appearance.placement.percent}%`, bottom: 'auto' }
+        : { bottom: `${appearance.placement.percent}%`, top: 'auto' }),
+    };
+  };
+
+  const layerStyle: React.CSSProperties =
+    appearance.placement.layout === 'split'
+      ? {
+          inset: 0,
+          display: 'block',
+          flexDirection: undefined,
+          bottom: undefined,
+          top: undefined,
+        }
+      : {
+          flexDirection: appearance.placement.flexDirection,
+          ...(appearance.placement.stackAnchor === 'top'
+            ? {
+                top: `${Math.max(6, appearance.placement.percent)}%`,
+                bottom: 'auto',
+              }
+            : {
+                bottom: `${Math.max(10, Math.min(46, 8 + appearance.placement.percent))}%`,
+                top: 'auto',
+              }),
+        };
+
   return (
     <div className="ueh-sub-preview" style={{ marginTop: 16 }}>
       <div className="ueh-sub-preview-meta">
@@ -722,9 +832,7 @@ function PipStyleSubtitlePreview(props: {
         <span className="muted">
           {appearance.mode}
           {' · '}
-          {appearance.positionAbove ? '译文在上' : '译文在下'}
-          {' · '}
-          底边 {surface.position.percent}%
+          {appearance.label}
         </span>
       </div>
 
@@ -741,26 +849,11 @@ function PipStyleSubtitlePreview(props: {
         {!enabled || appearance.mode === 'off' ? (
           <div className="ueh-sub-preview-off">字幕已关闭</div>
         ) : (
-          <div
-            className="ueh-sub-preview-layer"
-            style={{
-              // Matches PiP: flex column / column-reverse for translationPosition
-              flexDirection: appearance.positionAbove
-                ? 'column-reverse'
-                : 'column',
-              bottom: `${appearance.bottomPct}%`,
-            }}
-          >
+          <div className="ueh-sub-preview-layer" style={layerStyle}>
             {appearance.showEn ? (
               <div
                 className="ueh-sub-preview-line ueh-sub-preview-en"
-                style={{
-                  fontSize: appearance.enFontPx,
-                  fontFamily: appearance.fontCss,
-                  fontWeight: appearance.enWeight,
-                  color: appearance.enColor,
-                  background: `rgba(0,0,0,${appearance.bg})`,
-                }}
+                style={lineStyle('en')}
               >
                 {wordNodes}
               </div>
@@ -768,13 +861,7 @@ function PipStyleSubtitlePreview(props: {
             {appearance.showTr ? (
               <div
                 className="ueh-sub-preview-line ueh-sub-preview-tr"
-                style={{
-                  fontSize: appearance.trFontPx,
-                  fontFamily: appearance.fontCss,
-                  fontWeight: appearance.trWeight,
-                  color: appearance.trColor,
-                  background: `rgba(0,0,0,${appearance.bg})`,
-                }}
+                style={lineStyle('tr')}
               >
                 {PREVIEW_TR}
               </div>

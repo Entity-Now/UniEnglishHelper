@@ -221,6 +221,42 @@ export async function getConfig(): Promise<AppConfig> {
   // Always normalize TTS shape (legacy string prosody → numbers)
   merged = migrateTtsConfig(merged);
 
+  // Ensure layout / position fields exist on older saves (pre-split layout)
+  for (const surface of [merged.pageSubtitles, merged.pipSubtitles] as const) {
+    if (!surface?.style) continue;
+    if (surface.style.layout !== 'split' && surface.style.layout !== 'stacked') {
+      surface.style.layout = 'stacked';
+    }
+    if (!surface.position) {
+      surface.position = { percent: 10, anchor: 'bottom' };
+    } else {
+      if (surface.position.anchor !== 'top' && surface.position.anchor !== 'bottom') {
+        surface.position.anchor = 'bottom';
+      }
+      if (!Number.isFinite(surface.position.percent)) {
+        surface.position.percent = 10;
+      } else {
+        surface.position.percent = Math.max(
+          0,
+          Math.min(45, surface.position.percent),
+        );
+      }
+    }
+    // Cap font scale to the new 200% ceiling (legacy max was 150)
+    if (surface.style.main?.fontScale != null) {
+      surface.style.main.fontScale = Math.max(
+        30,
+        Math.min(200, surface.style.main.fontScale),
+      );
+    }
+    if (surface.style.translation?.fontScale != null) {
+      surface.style.translation.fontScale = Math.max(
+        30,
+        Math.min(200, surface.style.translation.fontScale),
+      );
+    }
+  }
+
   // Sync deprecated pip.subtitleFontSize from pipSubtitles for old readers
   if (merged.pipSubtitles?.style) {
     merged.pip.subtitleFontSize = Math.round(

@@ -36,6 +36,10 @@ import {
   decorateWordSpan,
   type HighlightMap,
 } from '../utils/vocab-highlight';
+import {
+  applySubtitleLayerLayout,
+  resolveSubtitlePlacement,
+} from '../utils/subtitles/layout';
 import { CueListSidebar } from './cue-list-sidebar';
 import { CueTranslateScheduler } from './cue-translate';
 import {
@@ -811,6 +815,16 @@ export class PipSessionController {
     doc
       .getElementById('ueh-pip-pos')
       ?.addEventListener('change', () => apply(false));
+    doc
+      .getElementById('ueh-pip-layout')
+      ?.addEventListener('change', () => apply(false));
+    doc
+      .getElementById('ueh-pip-anchor')
+      ?.addEventListener('change', () => apply(false));
+    doc.getElementById('ueh-pip-offset')?.addEventListener('input', () => {
+      this.updatePipScaleLabels(doc);
+      apply(false);
+    });
     doc.getElementById('ueh-pip-scale')?.addEventListener('input', () => {
       this.updatePipScaleLabels(doc);
       apply(false);
@@ -841,7 +855,16 @@ export class PipSessionController {
       'ueh-pip-auto-tr',
     ) as HTMLInputElement | null;
     const mode = doc.getElementById('ueh-pip-mode') as HTMLSelectElement | null;
+    const layout = doc.getElementById(
+      'ueh-pip-layout',
+    ) as HTMLSelectElement | null;
     const pos = doc.getElementById('ueh-pip-pos') as HTMLSelectElement | null;
+    const anchor = doc.getElementById(
+      'ueh-pip-anchor',
+    ) as HTMLSelectElement | null;
+    const offset = doc.getElementById(
+      'ueh-pip-offset',
+    ) as HTMLInputElement | null;
     const scale = doc.getElementById(
       'ueh-pip-scale',
     ) as HTMLInputElement | null;
@@ -852,7 +875,10 @@ export class PipSessionController {
       autoTr.checked =
         ps.autoTranslate ?? this.config.features.autoTranslate !== false;
     if (mode) mode.value = ps.style?.displayMode ?? 'bilingual';
+    if (layout) layout.value = ps.style?.layout ?? 'stacked';
     if (pos) pos.value = ps.style?.translationPosition ?? 'below';
+    if (anchor) anchor.value = ps.position?.anchor ?? 'bottom';
+    if (offset) offset.value = String(ps.position?.percent ?? 12);
     if (scale) scale.value = String(ps.style?.main.fontScale ?? 85);
     if (bg) bg.value = String(ps.style?.container.backgroundOpacity ?? 60);
     this.updatePipScaleLabels(doc);
@@ -863,10 +889,15 @@ export class PipSessionController {
       'ueh-pip-scale',
     ) as HTMLInputElement | null;
     const bg = doc.getElementById('ueh-pip-bg') as HTMLInputElement | null;
+    const offset = doc.getElementById(
+      'ueh-pip-offset',
+    ) as HTMLInputElement | null;
     const sv = doc.getElementById('ueh-pip-scale-val');
     const bv = doc.getElementById('ueh-pip-bg-val');
+    const ov = doc.getElementById('ueh-pip-offset-val');
     if (scale && sv) sv.textContent = `${scale.value}%`;
     if (bg && bv) bv.textContent = `${bg.value}%`;
+    if (offset && ov) ov.textContent = `${offset.value}%`;
   }
 
   private async applyPipSettingsFromPanel(
@@ -878,7 +909,10 @@ export class PipSessionController {
       'ueh-pip-auto-tr',
     ) as HTMLInputElement;
     const mode = doc.getElementById('ueh-pip-mode') as HTMLSelectElement;
+    const layout = doc.getElementById('ueh-pip-layout') as HTMLSelectElement;
     const pos = doc.getElementById('ueh-pip-pos') as HTMLSelectElement;
+    const anchor = doc.getElementById('ueh-pip-anchor') as HTMLSelectElement;
+    const offset = doc.getElementById('ueh-pip-offset') as HTMLInputElement;
     const scale = doc.getElementById('ueh-pip-scale') as HTMLInputElement;
     const bg = doc.getElementById('ueh-pip-bg') as HTMLInputElement;
 
@@ -898,6 +932,9 @@ export class PipSessionController {
       style: {
         ...prev.style,
         displayMode,
+        layout: (layout?.value === 'split' ? 'split' : 'stacked') as
+          | 'stacked'
+          | 'split',
         translationPosition: pos.value as 'above' | 'below',
         main: { ...prev.style.main, fontScale },
         translation: {
@@ -908,6 +945,10 @@ export class PipSessionController {
           ...prev.style.container,
           backgroundOpacity: Number(bg.value) || 60,
         },
+      },
+      position: {
+        percent: Number(offset?.value) || 12,
+        anchor: (anchor?.value === 'top' ? 'top' : 'bottom') as 'top' | 'bottom',
       },
     };
 
@@ -1373,6 +1414,29 @@ export class PipSessionController {
     this.renderCue(this.currentCue);
   }
 
+  private applyPipSubtitleLayout(
+    layer: HTMLElement,
+    en: HTMLElement,
+    tr: HTMLElement,
+  ): void {
+    const surface = this.pipSurface();
+    const placement = resolveSubtitlePlacement({
+      layout: surface.style?.layout,
+      translationPosition: surface.style?.translationPosition,
+      position: surface.position,
+    });
+    // PiP bottom chrome ~56px; stacked bottom uses px like before
+    const stackedBottomPx =
+      placement.layout === 'stacked' && placement.stackAnchor === 'bottom'
+        ? Math.max(56, 48 + placement.percent)
+        : null;
+    applySubtitleLayerLayout(layer, en, tr, {
+      placement,
+      bottomExtraPx: 56,
+      stackedBottomPx,
+    });
+  }
+
   private renderCue(cue: SubtitleCue | null): void {
     const doc = this.pipWindow?.document;
     if (!doc) return;
@@ -1388,15 +1452,9 @@ export class PipSessionController {
       return;
     }
 
-    const position =
-      this.pipSurface().style?.translationPosition ?? 'below';
-
     const layer = doc.getElementById('ueh-sub-layer');
     if (layer) {
-      layer.style.flexDirection =
-        position === 'above' ? 'column-reverse' : 'column';
-      const pct = this.pipSurface().position?.percent ?? 12;
-      layer.style.bottom = `${Math.max(56, 48 + pct)}px`;
+      this.applyPipSubtitleLayout(layer, en, tr);
     }
 
     const showOriginal = this.resolveShowOriginal();
