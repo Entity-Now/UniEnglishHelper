@@ -1,6 +1,6 @@
 {
   "name": "uni-english-helper",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Chrome/Edge extension for immersive English video learning with Document PiP, subtitles, clips, and AI.",
   "type": "module",

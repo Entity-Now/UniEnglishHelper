@@ -34,6 +34,7 @@ import { getPageCues } from './index';
 import {
   buildHighlightCss,
   decorateWordSpan,
+  syncEnGlossClass,
   type HighlightMap,
 } from '../utils/vocab-highlight';
 import {
@@ -226,10 +227,16 @@ export class PipSessionController {
   /** Refresh highlight map and re-render subtitle panel + cue list. */
   private async refreshWordHighlights(): Promise<void> {
     await this.refreshHighlightMap();
+    this.injectHighlightCss();
     this.renderCue(this.currentCue);
     this.cueList?.setHighlightMap(this.highlightMap);
     void this.refreshRecapBadge();
     if (this.vocabRecap?.isOpen()) void this.vocabRecap.refresh();
+  }
+
+  /** Public entry for content-script storage listeners (vocab book changes). */
+  refreshHighlightsFromStorage(): void {
+    void this.refreshWordHighlights();
   }
 
   private async refreshRecapBadge(): Promise<void> {
@@ -663,7 +670,12 @@ export class PipSessionController {
   }
 
   private injectPipShell(win: Window): void {
-    void this.refreshHighlightMap();
+    // Load map ASAP; re-render when it arrives so first cue is not blank of highlights
+    void this.refreshHighlightMap().then(() => {
+      this.injectHighlightCss();
+      this.renderCue(this.currentCue);
+      this.cueList?.setHighlightMap(this.highlightMap);
+    });
     const doc = win.document;
 
     // Keep a single body (double-body caused black screen)
@@ -1449,6 +1461,7 @@ export class PipSessionController {
     if (!cue || this.adPhase !== 'none') {
       en.textContent = '';
       tr.textContent = '';
+      syncEnGlossClass(en);
       return;
     }
 
@@ -1467,18 +1480,21 @@ export class PipSessionController {
         if (isClickableWord(seg)) {
           const span = doc.createElement('span');
           span.className = 'ueh-word';
-          span.textContent = seg.text;
           decorateWordSpan(span, seg.text, this.highlightMap, hlCfg);
           span.addEventListener('click', (e) => {
             e.stopPropagation();
+            e.preventDefault();
             void this.handleWordClick(seg.text, cue.text);
           });
+          // Avoid player focus/pause side-effects when interacting with words
+          span.addEventListener('mousedown', (e) => e.stopPropagation());
           en.appendChild(span);
         } else {
           en.appendChild(doc.createTextNode(seg.text));
         }
       }
     }
+    syncEnGlossClass(en);
     tr.textContent =
       showTranslation && cue.translation?.trim() ? cue.translation : '';
   }
@@ -1914,7 +1930,7 @@ export class PipSessionController {
           addBtn.setAttribute('aria-label', '已添加');
           addBtn.style.opacity = '0.55';
           this.toast('info', `已加入生词本：${surface}`);
-          void this.refreshWordHighlights();
+          await this.refreshWordHighlights();
         };
       }
       if (ttsBtn) {

@@ -11,6 +11,7 @@ import { isClickableWord, segmentWords } from '../utils/segmenter';
 import {
   buildHighlightCss,
   decorateWordSpan,
+  syncEnGlossClass,
   type HighlightMap,
 } from '../utils/vocab-highlight';
 import {
@@ -217,7 +218,11 @@ export class PageSubtitlesOverlay {
 
   async refreshHighlights(): Promise<void> {
     await this.refreshHighlightMap();
-    this.renderCue(findActiveCue(this.cues, this.mediaTimeMs()));
+    // Force paint even if cue id unchanged (highlight map / gloss updated)
+    this.currentId = '';
+    const active = findActiveCue(this.cues, this.mediaTimeMs());
+    this.currentId = active?.id ?? '';
+    this.renderCue(active);
   }
 
   /** Update recap toolbar badge (called from content index). */
@@ -289,6 +294,7 @@ export class PageSubtitlesOverlay {
         }
         #en:empty, #tr:empty { display: none; padding: 0; background: transparent; }
         .ueh-word {
+          position: relative;
           cursor: pointer;
           border-bottom: 1px dashed rgba(255,255,255,.35);
           padding: 0 1px;
@@ -296,6 +302,7 @@ export class PageSubtitlesOverlay {
         .ueh-word:hover {
           filter: brightness(1.1);
         }
+        /* Gloss layout comes from #hl (buildHighlightCss) — keep base flat */
         #tools {
           position: absolute; right: 10px; bottom: 8%;
           display: flex; gap: 6px; pointer-events: auto;
@@ -452,6 +459,7 @@ export class PageSubtitlesOverlay {
     if (!cue || !this.enabled || !masterOn || mode === 'off') {
       en.textContent = '';
       tr.textContent = '';
+      syncEnGlossClass(en);
       return;
     }
 
@@ -465,18 +473,21 @@ export class PageSubtitlesOverlay {
         if (isClickableWord(seg)) {
           const span = document.createElement('span');
           span.className = 'ueh-word';
-          span.textContent = seg.text;
           decorateWordSpan(span, seg.text, this.highlightMap, hl);
           span.addEventListener('click', (e) => {
             e.stopPropagation();
+            e.preventDefault();
             void this.onWordClick(seg.text, cue.text);
           });
+          // Hover preview only — never steal focus / pause the player
+          span.addEventListener('mousedown', (e) => e.stopPropagation());
           en.appendChild(span);
         } else {
           en.appendChild(document.createTextNode(seg.text));
         }
       }
     }
+    syncEnGlossClass(en);
     tr.textContent =
       showTranslation && cue.translation?.trim() ? cue.translation : '';
   }
@@ -489,8 +500,7 @@ export class PageSubtitlesOverlay {
       context,
       this.root?.ownerDocument || document,
       async () => {
-        await this.refreshHighlightMap();
-        this.renderCue(findActiveCue(this.cues, this.mediaTimeMs()));
+        await this.refreshHighlights();
       },
       contextTranslation,
     );

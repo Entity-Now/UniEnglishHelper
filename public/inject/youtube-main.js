@@ -328,45 +328,21 @@
     }
   }
 
+  /**
+   * Warm the captions module so tracklist / timedtext are available.
+   * Do NOT enable YouTube's visible CC UI — UniEnglishHelper paints its own
+   * overlay; toggling native captions confused users and stacked two layers.
+   */
   function ensureSubtitlesEnabled() {
     try {
       var player = findPlayer();
-      // Prefer API so YT loads timedtext with pot
       if (player && player.loadModule) {
         try {
           player.loadModule("captions");
         } catch (e) {}
       }
-      if (player && player.setOption) {
-        try {
-          // turn captions on if off
-          var track = player.getOption && player.getOption("captions", "track");
-          if (!track || !track.languageCode) {
-            var list =
-              (player.getOption && player.getOption("captions", "tracklist")) ||
-              [];
-            if (list && list.length) {
-              // Prefer English ASR/human, else first
-              var pick =
-                list.find(function (t) {
-                  return (
-                    t.languageCode &&
-                    String(t.languageCode).toLowerCase().indexOf("en") === 0
-                  );
-                }) || list[0];
-              player.setOption("captions", "track", pick);
-            }
-          }
-        } catch (e2) {}
-      }
-      var button = document.querySelector(".ytp-subtitles-button");
-      if (button && button.getAttribute("aria-pressed") !== "true") {
-        if (player && player.toggleSubtitles) {
-          player.toggleSubtitles();
-        } else if (button.click) {
-          button.click();
-        }
-      }
+      // Intentionally no setOption("captions","track"), no toggleSubtitles(),
+      // and no .ytp-subtitles-button click — those turn on native captions.
     } catch (e) {}
   }
 

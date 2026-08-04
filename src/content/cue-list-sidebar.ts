@@ -11,6 +11,7 @@ import { isClickableWord, segmentWords } from '../utils/segmenter';
 import {
   buildHighlightCss,
   decorateWordSpan,
+  syncEnGlossClass,
   type HighlightMap,
 } from '../utils/vocab-highlight';
 import { ICON_BTN_CSS, iconActionButton } from './ui-icons';
@@ -406,7 +407,6 @@ export class CueListSidebar {
         if (isClickableWord(seg)) {
           const span = this.hostDoc.createElement('span');
           span.className = 'ueh-word';
-          span.textContent = seg.text;
           decorateWordSpan(span, seg.text, this.highlightMap, this.vocabHighlight);
           span.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -419,6 +419,7 @@ export class CueListSidebar {
           txtEl.appendChild(this.hostDoc.createTextNode(seg.text));
         }
       }
+      syncEnGlossClass(txtEl);
       const tr = item.querySelector('.tr') as HTMLElement;
       if (cue.translation) tr.textContent = cue.translation;
       else tr.style.display = 'none';

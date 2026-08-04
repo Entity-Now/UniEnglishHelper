@@ -261,16 +261,29 @@ export async function getVideoVocabRecap(
   return classifyVideoVocab(rows, videoKey, cueWordKeys);
 }
 
-/** Lightweight map for subtitle highlight (wordKey → status). */
+/** Lightweight map for subtitle highlight (wordKey → status + saved gloss). */
 export async function getHighlightMap(): Promise<
-  Record<string, import('./schema').LearningStatus>
+  import('../utils/vocab-highlight').HighlightMap
 > {
   const rows = await db.words.toArray();
-  const map: Record<string, import('./schema').LearningStatus> = {};
+  const map: import('../utils/vocab-highlight').HighlightMap = {};
   for (const w of rows) {
+    // Sentence bookmarks are whole lines — skip for per-word highlight/gloss
+    if (w.kind === 'sentence') continue;
     const status = w.learningStatus ?? 'new';
-    const key = normalizeWordKey(w.surface) || normalizeWordKey(w.wordKey);
-    if (key) map[key] = status;
+    const key = normalizeWordKey(w.wordKey) || normalizeWordKey(w.surface);
+    if (!key) continue;
+    const translation = w.translation?.trim() || undefined;
+    const existing = map[key];
+    // Prefer entry that already has a gloss; keep status from latest write
+    if (!existing) {
+      map[key] = { status, translation };
+    } else {
+      map[key] = {
+        status,
+        translation: translation || existing.translation,
+      };
+    }
   }
   return map;
 }

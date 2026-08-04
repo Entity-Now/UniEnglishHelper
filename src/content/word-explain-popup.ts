@@ -17,7 +17,7 @@ export async function showWordExplainPopup(
   surface: string,
   context: string,
   hostDoc: Document = document,
-  onAddSuccess?: () => void,
+  onAddSuccess?: () => void | Promise<void>,
   contextTranslation?: string,
 ): Promise<void> {
   // One host at a time
@@ -296,7 +296,12 @@ export async function showWordExplainPopup(
           },
           'content',
         );
-        onAddSuccess?.();
+        // Await refresh so the current cue paints highlight+gloss before popup closes
+        try {
+          await onAddSuccess?.();
+        } catch {
+          // ignore refresh errors
+        }
         remove();
       })();
     };

@@ -98,6 +98,7 @@ export function buildPipStyles(opts: {
     }
     #ueh-sub-en:empty, #ueh-sub-tr:empty { display: none; padding: 0; background: transparent; }
     .ueh-word {
+      position: relative;
       cursor: pointer;
       ${wordBorder}
       padding: 0 1px;
@@ -106,6 +107,7 @@ export function buildPipStyles(opts: {
       background: color-mix(in srgb, oklch(76% 0.12 82) 45%, transparent);
       border-radius: 3px;
     }
+    /* Gloss layout injected via #ueh-hl-style (buildHighlightCss) */
 
     /* Bottom chrome */
     #ueh-chrome {

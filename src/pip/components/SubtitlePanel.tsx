@@ -4,8 +4,9 @@ import { DEFAULT_VOCAB_HIGHLIGHT } from '../../shared/domain/types';
 import { isClickableWord, segmentWords } from '../../utils/segmenter';
 import {
   colorForStatus,
+  entryForSurface,
   highlightClass,
-  statusForSurface,
+  shortGloss,
   type HighlightMap,
 } from '../../utils/vocab-highlight';
 
@@ -53,36 +54,65 @@ export function SubtitlePanel(props: {
   }
 
   const segs = segmentWords(cue.text);
+  let hasGloss = false;
+  const wordNodes = segs.map((seg) => {
+    if (!isClickableWord(seg)) {
+      return <span key={seg.index}>{seg.text}</span>;
+    }
+    const entry =
+      vocabHighlight.enabled !== false
+        ? entryForSurface(highlightMap, seg.text)
+        : null;
+    const st = entry?.status ?? null;
+    const hlCls = highlightClass(st);
+    const full = entry?.translation?.trim() || '';
+    const gloss = shortGloss(full);
+    if (gloss) hasGloss = true;
+    const tip = full
+      ? `${seg.text} · ${full}`
+      : st
+        ? `生词 · ${st}`
+        : undefined;
+    return (
+      <span
+        key={seg.index}
+        className={[
+          'ueh-word',
+          hlCls,
+          gloss ? 'ueh-word-has-gloss' : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+        title={tip}
+        data-gloss={full || undefined}
+        style={
+          st
+            ? {
+                boxShadow: `inset 0 -2px 0 ${colorForStatus(st, vocabHighlight)}`,
+              }
+            : undefined
+        }
+        onClick={() => onWordClick(seg.text)}
+      >
+        {gloss ? (
+          <>
+            <span className="ueh-word-surface">{seg.text}</span>
+            <span className="ueh-word-gloss">{gloss}</span>
+          </>
+        ) : (
+          seg.text
+        )}
+      </span>
+    );
+  });
   return (
     <div ref={scrollRef} className="ueh-subtitle-panel">
-      <div className="ueh-cue-en">
-        {segs.map((seg) => {
-          if (!isClickableWord(seg)) {
-            return <span key={seg.index}>{seg.text}</span>;
-          }
-          const st =
-            vocabHighlight.enabled !== false
-              ? statusForSurface(highlightMap, seg.text)
-              : null;
-          const hlCls = highlightClass(st);
-          return (
-            <span
-              key={seg.index}
-              className={hlCls ? `ueh-word ${hlCls}` : 'ueh-word'}
-              title={st ? `生词 · ${st}` : undefined}
-              style={
-                st
-                  ? {
-                      boxShadow: `inset 0 -2px 0 ${colorForStatus(st, vocabHighlight)}`,
-                    }
-                  : undefined
-              }
-              onClick={() => onWordClick(seg.text)}
-            >
-              {seg.text}
-            </span>
-          );
-        })}
+      <div
+        className={
+          hasGloss ? 'ueh-cue-en ueh-en-has-gloss' : 'ueh-cue-en'
+        }
+      >
+        {wordNodes}
       </div>
       {cue.translation?.trim() ? (
         <div className="ueh-cue-tr">{cue.translation}</div>

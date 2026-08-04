@@ -25,7 +25,7 @@ import {
   normalizeVideoKey,
   type VideoVocabRecapResult,
 } from '../utils/video-vocab-recap';
-import { CONFIG_STORAGE_KEY } from '../shared/constants';
+import { CONFIG_STORAGE_KEY, WORDS_REVISION_KEY } from '../shared/constants';
 import { isSiteEnabled } from '../utils/site-control';
 import {
   detectYoutubeAdStatus,
@@ -573,9 +573,9 @@ function togglePageVocabRecap(): void {
           surface,
           context,
           document,
-          () => {
-            if (pageSubs?.isRunning()) void pageSubs.refreshHighlights();
-            void pageCueList?.refreshHighlights();
+          async () => {
+            if (pageSubs?.isRunning()) await pageSubs.refreshHighlights();
+            await pageCueList?.refreshHighlights();
             void refreshPageRecapBadge();
             if (pageVocabRecap?.isOpen()) void pageVocabRecap.refresh();
           },
@@ -628,11 +628,9 @@ function togglePageCueList(): void {
           word,
           context,
           document,
-          () => {
-            if (pageSubs && pageSubs.isRunning()) {
-              void pageSubs.refreshHighlights();
-            }
-            void pageCueList?.refreshHighlights();
+          async () => {
+            if (pageSubs?.isRunning()) await pageSubs.refreshHighlights();
+            await pageCueList?.refreshHighlights();
             void refreshPageRecapBadge();
             if (pageVocabRecap?.isOpen()) void pageVocabRecap.refresh();
           },
@@ -707,6 +705,16 @@ function ensureStorageListener(): void {
   storageListening = true;
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
+
+    // Vocab book changed (add / status / delete) — refresh highlights + glosses
+    if (changes[WORDS_REVISION_KEY]) {
+      if (pageSubs?.isRunning()) void pageSubs.refreshHighlights();
+      void pageCueList?.refreshHighlights();
+      controller?.refreshHighlightsFromStorage();
+      if (pageVocabRecap?.isOpen()) void pageVocabRecap.refresh();
+      void refreshPageRecapBadge();
+    }
+
     if (!changes[CONFIG_STORAGE_KEY]) return;
     void (async () => {
       const c = await sendRuntime<AppConfig>('config.get', {}, 'content');
