@@ -21,6 +21,7 @@ import {
   iconActionButton,
   openOptionsRoute,
 } from './ui-icons';
+import { ensurePageSideLayoutStyles } from './page-side-layout';
 
 export type VideoVocabRecapHandlers = {
   getVideoKey: () => string;
@@ -140,10 +141,12 @@ export class VideoVocabRecap {
       host.appendChild(root);
       this.root = root;
     } else {
+      // Dock into left gutter; page layout CSS reserves space so video is not covered
+      ensurePageSideLayoutStyles(this.hostDoc);
       const root = this.hostDoc.createElement('div');
       root.id = PAGE_ROOT_ID;
-      root.style.cssText =
-        'position:fixed;top:72px;left:12px;width:min(280px,92vw);max-height:70vh;z-index:2147483638;';
+      root.classList.add('ueh-page-dock');
+      root.style.cssText = '';
       this.hostDoc.documentElement.appendChild(root);
       this.root = root;
     }
@@ -167,7 +170,7 @@ export class VideoVocabRecap {
           min-height: 0;
           background: rgba(16,17,22,.97);
           border: 1px solid rgba(255,255,255,.12);
-          border-radius: ${this.mode === 'page' ? '12px' : '0'};
+          border-radius: 0;
           overflow: hidden;
           box-shadow: 0 8px 28px rgba(0,0,0,.35);
         }

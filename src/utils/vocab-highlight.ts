@@ -140,59 +140,70 @@ export function colorForStatus(
  * Gloss is position:absolute so it does NOT expand per-word height /
  * scramble baseline alignment. Parent line uses a uniform line-height
  * bump via `.ueh-en-has-gloss` instead of uneven flex columns.
+ *
+ * Visual goals: clear air gap under the English word, readable pill,
+ * and enough line padding so gloss never collides with the next line.
  */
 export function buildWordGlossCss(): string {
   return `
     .ueh-word {
       position: relative;
     }
-    /* English line: even spacing when any gloss is present */
+    /* English line: room for under-word gloss + gap from next line */
     .ueh-en-has-gloss {
-      line-height: 1.72 !important;
-      padding-bottom: 0.12em;
+      line-height: 2.05 !important;
+      padding-top: 0.08em;
+      padding-bottom: 0.55em;
     }
     .ueh-word.ueh-word-has-gloss {
       display: inline;
       position: relative;
       /* keep on the same baseline as non-vocab words */
       vertical-align: baseline;
-      padding: 0 1px;
-      margin: 0;
-      border-radius: 3px;
+      /* horizontal room so adjacent gloss pills don't merge */
+      padding: 0 0.2em 0.05em;
+      margin: 0 0.06em;
+      border-radius: 4px;
     }
     .ueh-word-surface {
       display: inline;
       line-height: inherit;
     }
-    /* Float under the word — out of document flow */
+    /* Float under the word — out of document flow, with intentional gap */
     .ueh-word-gloss {
       position: absolute;
       left: 50%;
-      top: calc(100% - 0.08em);
+      top: calc(100% + 0.18em);
       transform: translateX(-50%);
       z-index: 2;
       display: block;
-      font-size: 0.48em;
+      box-sizing: border-box;
+      font-size: 0.52em;
       font-weight: 600;
-      line-height: 1;
-      letter-spacing: 0;
-      opacity: 0.88;
-      max-width: 5.2em;
+      line-height: 1.15;
+      letter-spacing: 0.02em;
+      opacity: 0.95;
+      max-width: 6.5em;
+      min-width: 1.2em;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      color: inherit;
-      filter: brightness(1.08);
+      color: #fff;
       pointer-events: none;
       user-select: none;
-      text-shadow: 0 1px 2px rgba(0,0,0,.75);
+      padding: 0.12em 0.35em;
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.55);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+      text-shadow: none;
+      filter: none;
     }
     /* Instant hover tip (full gloss) — no click, no video pause */
     .ueh-word[data-gloss]:hover::after {
       content: attr(data-gloss);
       position: absolute;
       left: 50%;
-      bottom: calc(100% + 6px);
+      bottom: calc(100% + 8px);
       transform: translateX(-50%);
       z-index: 30;
       max-width: min(240px, 70vw);
@@ -213,7 +224,7 @@ export function buildWordGlossCss(): string {
       content: "";
       position: absolute;
       left: 50%;
-      bottom: calc(100% + 2px);
+      bottom: calc(100% + 3px);
       transform: translateX(-50%);
       z-index: 30;
       border: 5px solid transparent;

@@ -47,10 +47,12 @@ export function buildPipStyles(opts: {
       contain: layout style;
     }
     #ueh-video-slot {
-      position: absolute; inset: 0;
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
       display: flex; align-items: center; justify-content: center;
       background: #000; overflow: hidden;
       contain: strict;
+      transition: left .18s ease, right .18s ease;
     }
     #ueh-video-slot video, #ueh-video-slot canvas {
       width: 100% !important; height: 100% !important;
@@ -306,35 +308,43 @@ export function buildPipStyles(opts: {
     }
     #ueh-pip-root.ueh-ad-active #ueh-sub-layer { opacity: 0.15; }
     #ueh-pip-root.ueh-subs-off #ueh-sub-layer { display: none !important; }
+    /* Side panels own gutters; video + chrome + subs shrink into remaining area */
     #ueh-pip-root.ueh-cue-list-open #ueh-video-slot {
-      right: min(280px, 42%);
+      right: min(280px, 42%) !important;
     }
     #ueh-pip-root.ueh-cue-list-open #ueh-sub-layer {
-      padding-right: min(290px, 44%);
+      right: min(280px, 42%);
+      padding-right: 12px;
+      box-sizing: border-box;
     }
     #ueh-pip-root.ueh-cue-list-open #ueh-chrome {
-      right: min(280px, 42%);
+      right: min(280px, 42%) !important;
     }
     #ueh-pip-root.ueh-recap-open #ueh-video-slot {
-      left: min(260px, 38%);
+      left: min(260px, 38%) !important;
     }
     #ueh-pip-root.ueh-recap-open #ueh-sub-layer {
-      padding-left: min(270px, 40%);
+      left: min(260px, 38%);
+      padding-left: 12px;
+      box-sizing: border-box;
     }
     #ueh-pip-root.ueh-recap-open #ueh-chrome {
-      left: min(260px, 38%);
+      left: min(260px, 38%) !important;
     }
     #ueh-pip-root.ueh-recap-open.ueh-cue-list-open #ueh-video-slot {
-      left: min(260px, 38%);
-      right: min(280px, 42%);
+      left: min(260px, 38%) !important;
+      right: min(280px, 42%) !important;
     }
     #ueh-pip-root.ueh-recap-open.ueh-cue-list-open #ueh-sub-layer {
-      padding-left: min(270px, 40%);
-      padding-right: min(290px, 44%);
-    }
-    #ueh-pip-root.ueh-recap-open.ueh-cue-list-open #ueh-chrome {
       left: min(260px, 38%);
       right: min(280px, 42%);
+      padding-left: 12px;
+      padding-right: 12px;
+      box-sizing: border-box;
+    }
+    #ueh-pip-root.ueh-recap-open.ueh-cue-list-open #ueh-chrome {
+      left: min(260px, 38%) !important;
+      right: min(280px, 42%) !important;
     }
     .ueh-ico.recap-wrap {
       position: relative;

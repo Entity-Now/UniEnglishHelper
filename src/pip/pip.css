@@ -100,19 +100,20 @@ body,
   border-radius: 2px;
 }
 
-/* Under-word gloss: absolute, no per-word height expansion */
+/* Under-word gloss: absolute, clear gap under English word */
 .ueh-cue-en.ueh-en-has-gloss {
-  line-height: 1.72 !important;
-  padding-bottom: 0.12em;
+  line-height: 2.05 !important;
+  padding-top: 0.08em;
+  padding-bottom: 0.55em;
 }
 
 .ueh-word.ueh-word-has-gloss {
   display: inline;
   position: relative;
   vertical-align: baseline;
-  padding: 0 1px;
-  margin: 0;
-  border-radius: 3px;
+  padding: 0 0.2em 0.05em;
+  margin: 0 0.06em;
+  border-radius: 4px;
 }
 
 .ueh-word-surface {
@@ -123,30 +124,37 @@ body,
 .ueh-word-gloss {
   position: absolute;
   left: 50%;
-  top: calc(100% - 0.08em);
+  top: calc(100% + 0.18em);
   transform: translateX(-50%);
   z-index: 2;
   display: block;
-  font-size: 0.48em;
+  box-sizing: border-box;
+  font-size: 0.52em;
   font-weight: 600;
-  line-height: 1;
-  opacity: 0.88;
-  max-width: 5.2em;
+  line-height: 1.15;
+  letter-spacing: 0.02em;
+  opacity: 0.95;
+  max-width: 6.5em;
+  min-width: 1.2em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: inherit;
-  filter: brightness(1.08);
+  color: #fff;
   pointer-events: none;
   user-select: none;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
+  padding: 0.12em 0.35em;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  text-shadow: none;
+  filter: none;
 }
 
 .ueh-word[data-gloss]:hover::after {
   content: attr(data-gloss);
   position: absolute;
   left: 50%;
-  bottom: calc(100% + 6px);
+  bottom: calc(100% + 8px);
   transform: translateX(-50%);
   z-index: 30;
   max-width: min(240px, 70vw);
@@ -168,7 +176,7 @@ body,
   content: "";
   position: absolute;
   left: 50%;
-  bottom: calc(100% + 2px);
+  bottom: calc(100% + 3px);
   transform: translateX(-50%);
   z-index: 30;
   border: 5px solid transparent;

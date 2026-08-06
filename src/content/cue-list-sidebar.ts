@@ -1,7 +1,8 @@
 /**
  * Full subtitle list with auto-scroll to active cue.
- * - Page: docks into YouTube secondary / beside player
+ * - Page: docks into YouTube secondary / beside player (overlay reserves gutter)
  * - PiP: injected into PiP document as right panel
+ * - Long videos: virtualized list (only visible rows are mounted)
  */
 
 import type { SubtitleCue, VocabHighlightConfig } from '../shared/domain/types';
@@ -14,12 +15,22 @@ import {
   syncEnGlossClass,
   type HighlightMap,
 } from '../utils/vocab-highlight';
+import {
+  ensurePageSideLayoutStyles,
+  setCueListOverlayMode,
+} from './page-side-layout';
 import { ICON_BTN_CSS, iconActionButton } from './ui-icons';
 
 export type CueListSeekHandler = (cue: SubtitleCue) => void;
 export type CueListWordClickHandler = (word: string, context: string) => void;
 
 const PAGE_ROOT_ID = 'ueh-cue-list-root';
+
+/** Estimated row height for virtual window (px). Variable text is OK — overscan covers it. */
+const ROW_EST_PX = 78;
+const OVERSCAN = 10;
+/** Full DOM only when list is short enough that virtualization costs more. */
+const VIRTUALIZE_THRESHOLD = 80;
 
 export class CueListSidebar {
   private root: HTMLElement | null = null;
@@ -33,6 +44,18 @@ export class CueListSidebar {
   private onWordClick?: CueListWordClickHandler;
   private highlightMap: HighlightMap = {};
   private vocabHighlight: VocabHighlightConfig = DEFAULT_VOCAB_HIGHLIGHT;
+  /** Page mode: true when fixed overlay (not docked to #secondary). */
+  private pageOverlay = false;
+  private virtualStart = 0;
+  private virtualEnd = 0;
+  private scrollRaf = 0;
+  private onListScroll = (): void => {
+    if (this.scrollRaf) return;
+    this.scrollRaf = requestAnimationFrame(() => {
+      this.scrollRaf = 0;
+      this.renderVirtualWindow(false);
+    });
+  };
 
   private translationListener = (e: Event) => {
     const { cueId, translation } = (e as CustomEvent).detail;
@@ -56,18 +79,18 @@ export class CueListSidebar {
 
   setCues(cues: SubtitleCue[]): void {
     this.cues = cues;
-    if (this.open) this.renderList();
+    if (this.open) this.renderList(true);
   }
 
   setHighlightMap(map: HighlightMap): void {
     this.highlightMap = map;
-    if (this.open) this.renderList();
+    if (this.open) this.renderList(true);
   }
 
   setVocabHighlight(cfg: VocabHighlightConfig): void {
     this.vocabHighlight = cfg;
     this.injectHighlightCss();
-    if (this.open) this.renderList();
+    if (this.open) this.renderList(true);
   }
 
   async refreshHighlights(): Promise<void> {
@@ -98,17 +121,22 @@ export class CueListSidebar {
   show(): void {
     this.open = true;
     this.mount();
-    this.renderList();
+    this.renderList(true);
     this.highlightActive();
   }
 
   close(): void {
     this.open = false;
+    this.unbindListScroll();
     this.root?.remove();
     this.root = null;
     this.shadow = null;
+    this.virtualStart = 0;
+    this.virtualEnd = 0;
     if (this.mode === 'page') {
       this.hostDoc.documentElement.classList.remove('ueh-cue-list-open');
+      setCueListOverlayMode(false, this.hostDoc);
+      this.pageOverlay = false;
     } else {
       this.hostDoc
         .getElementById('ueh-pip-root')
@@ -133,7 +161,9 @@ export class CueListSidebar {
   }
 
   private mountPage(): void {
-    // Prefer YouTube secondary column (recommendations)
+    ensurePageSideLayoutStyles(this.hostDoc);
+
+    // Prefer YouTube secondary column (recommendations) — does not cover video
     const secondary =
       this.hostDoc.querySelector('#secondary-inner') ||
       this.hostDoc.querySelector('#secondary') ||
@@ -144,14 +174,19 @@ export class CueListSidebar {
     root.setAttribute('data-ueh-overlay', 'cue-list');
 
     if (secondary instanceof HTMLElement) {
+      this.pageOverlay = false;
+      root.classList.remove('ueh-page-dock-overlay');
       root.style.cssText =
         'width:100%;margin-bottom:12px;position:relative;z-index:20;';
       secondary.insertBefore(root, secondary.firstChild);
+      setCueListOverlayMode(false, this.hostDoc);
     } else {
-      // Fallback fixed right panel
-      root.style.cssText =
-        'position:fixed;top:72px;right:12px;width:min(360px,92vw);max-height:70vh;z-index:2147483640;';
+      // Fixed right gutter — page layout CSS reserves space so video is not covered
+      this.pageOverlay = true;
+      root.classList.add('ueh-page-dock-overlay');
+      root.style.cssText = '';
       this.hostDoc.documentElement.appendChild(root);
+      setCueListOverlayMode(true, this.hostDoc);
     }
 
     this.root = root;
@@ -200,7 +235,7 @@ export class CueListSidebar {
           box-sizing: border-box;
           background: rgba(16,17,22,.97);
           border: 1px solid rgba(255,255,255,.12);
-          border-radius: ${this.mode === 'page' ? '12px' : '0'};
+          border-radius: ${this.mode === 'page' && !this.pageOverlay ? '12px' : '0'};
           overflow: hidden;
           box-shadow: 0 8px 28px rgba(0,0,0,.35);
         }
@@ -220,7 +255,11 @@ export class CueListSidebar {
         .list {
           flex: 1 1 auto;
           min-height: 0;
-          max-height: ${this.mode === 'page' ? 'min(62vh, 640px)' : 'none'};
+          max-height: ${
+            this.mode === 'page' && !this.pageOverlay
+              ? 'min(62vh, 640px)'
+              : 'none'
+          };
           padding: 6px 4px 6px 6px;
           overflow-x: hidden;
           overflow-y: auto;
@@ -256,6 +295,11 @@ export class CueListSidebar {
         }
         .list::-webkit-scrollbar-corner {
           background: transparent;
+        }
+        .v-spacer {
+          width: 100%;
+          pointer-events: none;
+          flex-shrink: 0;
         }
         .item {
           display: block; width: 100%; text-align: left;
@@ -376,73 +420,192 @@ export class CueListSidebar {
     el.textContent = buildHighlightCss(this.vocabHighlight);
   }
 
-  private renderList(): void {
+  private useVirtual(): boolean {
+    return this.cues.length > VIRTUALIZE_THRESHOLD;
+  }
+
+  private bindListScroll(list: HTMLElement): void {
+    list.removeEventListener('scroll', this.onListScroll);
+    if (this.useVirtual()) {
+      list.addEventListener('scroll', this.onListScroll, { passive: true });
+    }
+  }
+
+  private unbindListScroll(): void {
+    const list = this.shadow?.getElementById('list');
+    list?.removeEventListener('scroll', this.onListScroll);
+    if (this.scrollRaf) {
+      cancelAnimationFrame(this.scrollRaf);
+      this.scrollRaf = 0;
+    }
+  }
+
+  private renderList(force = false): void {
     const list = this.shadow?.getElementById('list');
     if (!list) return;
-    list.innerHTML = '';
+
     if (!this.cues.length) {
+      this.unbindListScroll();
       list.innerHTML = '<div class="empty">暂无字幕</div>';
+      this.virtualStart = 0;
+      this.virtualEnd = 0;
       return;
     }
-    for (const cue of this.cues) {
-      const item = this.hostDoc.createElement('div');
-      item.className = 'item' + (cue.id === this.activeId ? ' active' : '');
-      item.dataset.cueId = cue.id;
-      const t0 = formatMs(cue.startMs);
-      item.innerHTML = `
-        <div class="item-head">
-          <div class="t">${t0}</div>
-          <div class="row-act ueh-ibtn-row">
-            ${iconActionButton('jump', '跳转到此句', '', { 'data-cue-act': 'jump' })}
-            ${iconActionButton('star', '收藏句子', 'star', { 'data-cue-act': 'star' })}
-          </div>
-        </div>
-        <div class="txt"></div>
-        <div class="tr"></div>
-      `;
-      const txtEl = item.querySelector('.txt') as HTMLElement;
-      txtEl.innerHTML = '';
-      const segments = segmentWords(cue.text);
-      for (const seg of segments) {
-        if (isClickableWord(seg)) {
-          const span = this.hostDoc.createElement('span');
-          span.className = 'ueh-word';
-          decorateWordSpan(span, seg.text, this.highlightMap, this.vocabHighlight);
-          span.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (this.onWordClick) {
-              this.onWordClick(seg.text, cue.text);
-            }
-          });
-          txtEl.appendChild(span);
-        } else {
-          txtEl.appendChild(this.hostDoc.createTextNode(seg.text));
-        }
-      }
-      syncEnGlossClass(txtEl);
-      const tr = item.querySelector('.tr') as HTMLElement;
-      if (cue.translation) tr.textContent = cue.translation;
-      else tr.style.display = 'none';
 
-      item.querySelector('[data-cue-act="jump"]')?.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this.onSeek(cue);
-      });
-      item.addEventListener('click', (e) => {
-        if ((e.target as HTMLElement).closest('button')) return;
-        this.onSeek(cue);
-      });
-      item.querySelector('[data-cue-act="star"]')?.addEventListener('click', (e) => {
-        e.stopPropagation();
-        void this.starCue(cue, e.currentTarget as HTMLButtonElement);
-      });
-      list.appendChild(item);
+    if (!this.useVirtual()) {
+      this.unbindListScroll();
+      this.renderFullList(list);
+      return;
     }
+
+    this.bindListScroll(list);
+    this.renderVirtualWindow(force);
+  }
+
+  private renderFullList(list: HTMLElement): void {
+    const frag = this.hostDoc.createDocumentFragment();
+    for (const cue of this.cues) {
+      frag.appendChild(this.buildItem(cue));
+    }
+    list.replaceChildren(frag);
+    this.virtualStart = 0;
+    this.virtualEnd = this.cues.length;
+  }
+
+  private computeWindow(list: HTMLElement): { start: number; end: number } {
+    const n = this.cues.length;
+    const viewH = Math.max(list.clientHeight, 1);
+    const scrollTop = list.scrollTop;
+    const start = Math.max(
+      0,
+      Math.floor(scrollTop / ROW_EST_PX) - OVERSCAN,
+    );
+    const visible = Math.ceil(viewH / ROW_EST_PX) + OVERSCAN * 2;
+    const end = Math.min(n, start + visible);
+    return { start, end };
+  }
+
+  private renderVirtualWindow(force: boolean): void {
+    const list = this.shadow?.getElementById('list');
+    if (!list || !this.cues.length) return;
+
+    const { start, end } = this.computeWindow(list);
+    if (
+      !force &&
+      start === this.virtualStart &&
+      end === this.virtualEnd &&
+      list.querySelector('.item')
+    ) {
+      return;
+    }
+
+    this.virtualStart = start;
+    this.virtualEnd = end;
+
+    const topH = start * ROW_EST_PX;
+    const bottomH = Math.max(0, (this.cues.length - end) * ROW_EST_PX);
+
+    const frag = this.hostDoc.createDocumentFragment();
+    const top = this.hostDoc.createElement('div');
+    top.className = 'v-spacer';
+    top.style.height = `${topH}px`;
+    top.setAttribute('aria-hidden', 'true');
+    frag.appendChild(top);
+
+    for (let i = start; i < end; i++) {
+      const cue = this.cues[i];
+      if (cue) frag.appendChild(this.buildItem(cue));
+    }
+
+    const bottom = this.hostDoc.createElement('div');
+    bottom.className = 'v-spacer';
+    bottom.style.height = `${bottomH}px`;
+    bottom.setAttribute('aria-hidden', 'true');
+    frag.appendChild(bottom);
+
+    list.replaceChildren(frag);
+  }
+
+  private buildItem(cue: SubtitleCue): HTMLElement {
+    const item = this.hostDoc.createElement('div');
+    item.className = 'item' + (cue.id === this.activeId ? ' active' : '');
+    item.dataset.cueId = cue.id;
+    const t0 = formatMs(cue.startMs);
+    item.innerHTML = `
+      <div class="item-head">
+        <div class="t">${t0}</div>
+        <div class="row-act ueh-ibtn-row">
+          ${iconActionButton('jump', '跳转到此句', '', { 'data-cue-act': 'jump' })}
+          ${iconActionButton('star', '收藏句子', 'star', { 'data-cue-act': 'star' })}
+        </div>
+      </div>
+      <div class="txt"></div>
+      <div class="tr"></div>
+    `;
+    const txtEl = item.querySelector('.txt') as HTMLElement;
+    txtEl.innerHTML = '';
+    const segments = segmentWords(cue.text);
+    for (const seg of segments) {
+      if (isClickableWord(seg)) {
+        const span = this.hostDoc.createElement('span');
+        span.className = 'ueh-word';
+        decorateWordSpan(span, seg.text, this.highlightMap, this.vocabHighlight);
+        span.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (this.onWordClick) {
+            this.onWordClick(seg.text, cue.text);
+          }
+        });
+        txtEl.appendChild(span);
+      } else {
+        txtEl.appendChild(this.hostDoc.createTextNode(seg.text));
+      }
+    }
+    syncEnGlossClass(txtEl);
+    const tr = item.querySelector('.tr') as HTMLElement;
+    if (cue.translation) tr.textContent = cue.translation;
+    else tr.style.display = 'none';
+
+    item.querySelector('[data-cue-act="jump"]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.onSeek(cue);
+    });
+    item.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).closest('button')) return;
+      this.onSeek(cue);
+    });
+    item.querySelector('[data-cue-act="star"]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void this.starCue(cue, e.currentTarget as HTMLButtonElement);
+    });
+    return item;
   }
 
   private highlightActive(): void {
     if (!this.shadow) return;
     const list = this.shadow.getElementById('list');
+    if (!list) return;
+
+    // Virtual list: ensure active cue is in the mounted window, then scroll
+    if (this.useVirtual() && this.activeId) {
+      const idx = this.cues.findIndex((c) => c.id === this.activeId);
+      if (idx >= 0) {
+        const targetTop = Math.max(0, idx * ROW_EST_PX - list.clientHeight * 0.35);
+        const maxScroll = Math.max(0, list.scrollHeight - list.clientHeight);
+        const nextTop = Math.min(targetTop, maxScroll);
+        // Only jump when active row is outside a comfortable band
+        const activeEl = list.querySelector(
+          `.item[data-cue-id="${cssEscape(this.activeId)}"]`,
+        ) as HTMLElement | null;
+        if (!activeEl) {
+          list.scrollTop = nextTop;
+          this.renderVirtualWindow(true);
+        } else {
+          scrollChildIntoListView(list, activeEl);
+        }
+      }
+    }
+
     const items = Array.from(
       this.shadow.querySelectorAll<HTMLElement>('.item'),
     );
@@ -497,7 +660,9 @@ export class CueListSidebar {
     if (stored) stored.translation = translation;
 
     if (!this.shadow) return;
-    const item = this.shadow.querySelector(`[data-cue-id="${cueId}"]`);
+    const item = this.shadow.querySelector(
+      `[data-cue-id="${cssEscape(cueId)}"]`,
+    );
     if (item) {
       const tr = item.querySelector('.tr') as HTMLElement;
       if (tr) {
@@ -513,6 +678,13 @@ function formatMs(ms: number): string {
   const m = Math.floor(s / 60);
   const r = s % 60;
   return `${m}:${String(r).padStart(2, '0')}`;
+}
+
+function cssEscape(value: string): string {
+  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+    return CSS.escape(value);
+  }
+  return value.replace(/["\\]/g, '\\$&');
 }
 
 /**
