@@ -13,12 +13,29 @@ const POPUP_HOST_ID = 'ueh-word-explain-host';
  *          context (原文 + 译文 once)
  *          definition / explanation body
  */
+export type PopupAnchorTarget =
+  | HTMLElement
+  | DOMRect
+  | { top: number; left: number; width?: number; height?: number }
+  | MouseEvent
+  | null;
+
+/**
+ * Page-side word explain tooltip.
+ * Uses a top-layer host (fixed + max z-index + shadow DOM) so YouTube chrome,
+ * player overlays, and the cue-list sidebar cannot cover it.
+ *
+ * Layout: [word + badge] …… [加生词本] [朗读] [×]
+ *          context (原文 + 译文 once)
+ *          definition / explanation body
+ */
 export async function showWordExplainPopup(
   surface: string,
   context: string,
   hostDoc: Document = document,
   onAddSuccess?: () => void | Promise<void>,
   contextTranslation?: string,
+  anchorTarget?: PopupAnchorTarget,
 ): Promise<void> {
   // One host at a time
   hostDoc.getElementById(POPUP_HOST_ID)?.remove();
@@ -309,16 +326,93 @@ export async function showWordExplainPopup(
   // Allow add before explain finishes (context-only entry)
   bindAdd();
 
-  const card = shadow.querySelector('.card') as HTMLElement | null;
-  if (card && hostDoc.defaultView) {
-    const vw = hostDoc.defaultView.innerWidth;
-    if (vw < 480) {
-      card.style.left = '50%';
-      card.style.right = 'auto';
-      card.style.transform = 'translateX(-50%)';
-      card.style.width = 'min(280px, calc(100vw - 20px))';
+  const resolveAnchorRect = (
+    target?: PopupAnchorTarget,
+  ): { top: number; left: number; width: number; height: number } | null => {
+    if (!target) return null;
+    if (
+      'getBoundingClientRect' in target &&
+      typeof target.getBoundingClientRect === 'function'
+    ) {
+      const r = target.getBoundingClientRect();
+      if (r.width || r.height || r.top || r.left) {
+        return { top: r.top, left: r.left, width: r.width, height: r.height };
+      }
     }
-  }
+    if (
+      'clientX' in target &&
+      typeof (target as MouseEvent).clientX === 'number'
+    ) {
+      const me = target as MouseEvent;
+      return { top: me.clientY, left: me.clientX, width: 0, height: 0 };
+    }
+    if (
+      typeof (target as { top?: number }).top === 'number' &&
+      typeof (target as { left?: number }).left === 'number'
+    ) {
+      const obj = target as {
+        top: number;
+        left: number;
+        width?: number;
+        height?: number;
+      };
+      return {
+        top: obj.top,
+        left: obj.left,
+        width: obj.width ?? 0,
+        height: obj.height ?? 0,
+      };
+    }
+    return null;
+  };
+
+  const applyCardPosition = () => {
+    const cardEl = shadow.querySelector('.card') as HTMLElement | null;
+    if (!cardEl || !hostDoc.defaultView) return;
+
+    const vw = hostDoc.defaultView.innerWidth || window.innerWidth;
+    const vh = hostDoc.defaultView.innerHeight || window.innerHeight;
+    const anchorRect = resolveAnchorRect(anchorTarget);
+
+    if (vw < 480) {
+      cardEl.style.left = '50%';
+      cardEl.style.right = 'auto';
+      cardEl.style.transform = 'translateX(-50%)';
+      cardEl.style.width = 'min(280px, calc(100vw - 20px))';
+      return;
+    }
+
+    if (anchorRect) {
+      const cardWidth = Math.min(300, vw - 24);
+      let left = anchorRect.left + anchorRect.width / 2 - cardWidth / 2;
+      left = Math.max(12, Math.min(left, vw - cardWidth - 12));
+
+      const spaceAbove = anchorRect.top;
+      const spaceBelow = vh - (anchorRect.top + anchorRect.height);
+
+      cardEl.style.left = `${left}px`;
+      cardEl.style.width = `${cardWidth}px`;
+      cardEl.style.right = 'auto';
+
+      if (spaceAbove >= 180 || spaceAbove > spaceBelow) {
+        // Place above target anchor: bottom edge is anchored 8px above anchorRect.top
+        const bottomPx = vh - anchorRect.top + 8;
+        const maxH = Math.min(anchorRect.top - 20, vh * 0.65, 420);
+        cardEl.style.bottom = `${Math.max(12, bottomPx)}px`;
+        cardEl.style.top = 'auto';
+        cardEl.style.maxHeight = `${Math.max(160, maxH)}px`;
+      } else {
+        // Place below target anchor
+        const topPx = anchorRect.top + anchorRect.height + 8;
+        const maxH = Math.min(vh - topPx - 20, vh * 0.65, 420);
+        cardEl.style.top = `${Math.max(12, topPx)}px`;
+        cardEl.style.bottom = 'auto';
+        cardEl.style.maxHeight = `${Math.max(160, maxH)}px`;
+      }
+    }
+  };
+
+  applyCardPosition();
 
   sendRuntime<WordExplainResult & { text?: string }>(
     'word.explain',

@@ -567,7 +567,11 @@ function togglePageVocabRecap(): void {
           void video.play().catch(() => undefined);
         }
       },
-      onExplain: (surface, context) => {
+      onExplain: (surface, context, targetEl) => {
+        const video = createPlayerAdapter(config).findVideo();
+        if (video && !video.paused) {
+          void video.pause();
+        }
         const cueTr = pageCues.find((c) => c.text === context)?.translation?.trim();
         void showWordExplainPopup(
           surface,
@@ -580,6 +584,7 @@ function togglePageVocabRecap(): void {
             if (pageVocabRecap?.isOpen()) void pageVocabRecap.refresh();
           },
           cueTr,
+          targetEl,
         );
       },
       onTts: (surface) => {
@@ -622,7 +627,11 @@ function togglePageCueList(): void {
         }
       },
       document,
-      (word, context) => {
+      (word, context, targetEl) => {
+        const video = createPlayerAdapter(config).findVideo();
+        if (video && !video.paused) {
+          void video.pause();
+        }
         const cueTr = pageCues.find((c) => c.text === context)?.translation?.trim();
         void showWordExplainPopup(
           word,
@@ -635,6 +644,7 @@ function togglePageCueList(): void {
             if (pageVocabRecap?.isOpen()) void pageVocabRecap.refresh();
           },
           cueTr,
+          targetEl,
         );
       }
     );

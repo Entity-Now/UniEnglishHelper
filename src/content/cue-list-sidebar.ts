@@ -22,7 +22,11 @@ import {
 import { ICON_BTN_CSS, iconActionButton } from './ui-icons';
 
 export type CueListSeekHandler = (cue: SubtitleCue) => void;
-export type CueListWordClickHandler = (word: string, context: string) => void;
+export type CueListWordClickHandler = (
+  word: string,
+  context: string,
+  targetEl?: HTMLElement,
+) => void;
 
 const PAGE_ROOT_ID = 'ueh-cue-list-root';
 
@@ -553,7 +557,7 @@ export class CueListSidebar {
         span.addEventListener('click', (e) => {
           e.stopPropagation();
           if (this.onWordClick) {
-            this.onWordClick(seg.text, cue.text);
+            this.onWordClick(seg.text, cue.text, span);
           }
         });
         txtEl.appendChild(span);

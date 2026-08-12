@@ -26,7 +26,11 @@ import { ensurePageSideLayoutStyles } from './page-side-layout';
 export type VideoVocabRecapHandlers = {
   getVideoKey: () => string;
   onSeek: (cueStartMs: number) => void;
-  onExplain: (surface: string, context: string) => void;
+  onExplain: (
+    surface: string,
+    context: string,
+    targetEl?: HTMLElement,
+  ) => void;
   onTts: (surface: string) => void;
   onMarkLearned: (wordId: number) => Promise<void>;
   onStatsChange?: (stats: VideoVocabRecapStats) => void;
@@ -532,7 +536,11 @@ export class VideoVocabRecap {
     acts.querySelector('[data-recap-act="explain"]')?.addEventListener('click', (e) => {
       e.stopPropagation();
       const ctx = cue?.text ?? w.context ?? w.surface;
-      this.handlers.onExplain(w.surface, ctx);
+      this.handlers.onExplain(
+        w.surface,
+        ctx,
+        e.currentTarget as HTMLElement,
+      );
     });
     acts.querySelector('[data-recap-act="learned"]')?.addEventListener('click', (e) => {
       e.stopPropagation();

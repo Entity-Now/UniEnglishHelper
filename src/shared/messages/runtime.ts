@@ -54,6 +54,10 @@ export type RuntimeRequest =
       { videoKey: string; cueWordKeys: string[] }
     >
   | Envelope<'word.delete', { id: number }>
+  | Envelope<
+      'word.import',
+      { words: WordCreate[]; mode?: 'merge' | 'overwrite' }
+    >
   | Envelope<'skill.list', Record<string, never>>
   | Envelope<'skill.save', SkillRecordInput>
   | Envelope<'skill.delete', { id: string }>

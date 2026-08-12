@@ -5,6 +5,8 @@ import { PORT_CLIP } from '../../shared/constants';
 import { concatArrayBuffers } from '../../utils/audio';
 import type { ClipPortServerMessage } from '../../shared/messages/ports';
 import { sendRuntime } from '../../shared/messaging/client';
+import { exportWordsJson } from '../../api/dictionary';
+import { DictionaryImportModal } from '../components/DictionaryImportModal';
 
 type FilterMode = 'all' | 'due' | 'new' | 'learning' | 'mature' | 'learned';
 
@@ -15,12 +17,14 @@ export function DictionaryPage(props: {
   onRefresh: () => Promise<void>;
   onReview: (id: number, result: ReviewResult) => Promise<void>;
   onDelete: (id: number) => Promise<void>;
+  onToast?: (msg: string, kind?: 'success' | 'error' | 'info') => void;
 }) {
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState<FilterMode>('all');
   const [sort, setSort] = useState<'newest' | 'due' | 'alpha'>('newest');
   const [selected, setSelected] = useState<WordRecord | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [importModalOpen, setImportModalOpen] = useState(false);
 
   const now = Date.now();
 
@@ -102,27 +106,7 @@ export function DictionaryPage(props: {
   };
 
   const exportJson = () => {
-    const payload = props.words.map((w) => ({
-      surface: w.surface,
-      translation: w.translation,
-      context: w.context,
-      contextTranslation: w.contextTranslation,
-      sourceUrl: w.sourceUrl,
-      sourceTitle: w.sourceTitle,
-      tags: w.tags,
-      reviewStage: w.reviewStage,
-      nextReviewAt: w.nextReviewAt,
-      createdAt: w.createdAt,
-    }));
-    const blob = new Blob([JSON.stringify(payload, null, 2)], {
-      type: 'application/json',
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `ueh-dictionary-${Date.now()}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    exportWordsJson(props.words);
   };
 
   const handleRefresh = async () => {
@@ -235,6 +219,13 @@ export function DictionaryPage(props: {
           </button>
           <button type="button" className="primary" onClick={exportJson}>
             导出 JSON
+          </button>
+          <button
+            type="button"
+            className="primary"
+            onClick={() => setImportModalOpen(true)}
+          >
+            导入 JSON
           </button>
           <span className="muted" style={{ fontSize: 12 }}>
             显示 {filtered.length} / {props.words.length}
@@ -440,6 +431,13 @@ export function DictionaryPage(props: {
           </button>
         </div>
       )}
+
+      <DictionaryImportModal
+        isOpen={importModalOpen}
+        onClose={() => setImportModalOpen(false)}
+        onRefresh={props.onRefresh}
+        onSuccess={(msg) => props.onToast?.(msg, 'success')}
+      />
     </div>
   );
 }

@@ -11,6 +11,7 @@ import {
   clearCaches,
   deleteSkill,
   deleteWord,
+  importWords,
   ensureDefaultSkills,
   listSkills,
   listWords,
@@ -358,6 +359,12 @@ async function dispatch(
     case 'word.delete':
       await deleteWord(Number(p.id));
       return {};
+
+    case 'word.import': {
+      const words = Array.isArray(p.words) ? (p.words as never) : [];
+      const mode = (p.mode as 'merge' | 'overwrite') ?? 'merge';
+      return importWords(words, mode);
+    }
 
     case 'skill.list':
       await ensureDefaultSkills();

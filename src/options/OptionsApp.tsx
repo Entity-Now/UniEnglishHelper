@@ -260,6 +260,7 @@ export function OptionsApp() {
               await loadWords({ silent: true });
               flash('词条已删除', 'success');
             }}
+            onToast={(msg, kind) => flash(msg, kind)}
           />
         )}
         {route === 'statistics' && <StatisticsPage />}

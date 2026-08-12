@@ -80,6 +80,10 @@ export interface WordCreate {
   tags?: string[];
   /** true when saving a whole sentence (cue list star) */
   kind?: 'word' | 'sentence';
+  learningStatus?: import('../../db/schema').LearningStatus;
+  reviewStage?: number;
+  nextReviewAt?: number;
+  createdAt?: number;
 }
 
 /** Structured explain API result (no string concatenation). */

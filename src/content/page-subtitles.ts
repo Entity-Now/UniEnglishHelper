@@ -477,7 +477,10 @@ export class PageSubtitlesOverlay {
           span.addEventListener('click', (e) => {
             e.stopPropagation();
             e.preventDefault();
-            void this.onWordClick(seg.text, cue.text);
+            if (this.video && !this.video.paused) {
+              void this.video.pause();
+            }
+            void this.onWordClick(seg.text, cue.text, span);
           });
           // Hover preview only — never steal focus / pause the player
           span.addEventListener('mousedown', (e) => e.stopPropagation());
@@ -492,7 +495,11 @@ export class PageSubtitlesOverlay {
       showTranslation && cue.translation?.trim() ? cue.translation : '';
   }
 
-  private async onWordClick(surface: string, context: string): Promise<void> {
+  private async onWordClick(
+    surface: string,
+    context: string,
+    anchorTarget?: HTMLElement,
+  ): Promise<void> {
     const active = findActiveCue(this.cues, this.mediaTimeMs());
     const contextTranslation = active?.translation?.trim();
     await showWordExplainPopup(
@@ -503,6 +510,7 @@ export class PageSubtitlesOverlay {
         await this.refreshHighlights();
       },
       contextTranslation,
+      anchorTarget,
     );
   }
 

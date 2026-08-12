@@ -236,6 +236,100 @@ export async function deleteWord(id: number): Promise<void> {
   await bumpWordsRevision();
 }
 
+export async function importWords(
+  items: Array<Partial<WordRecord> & { surface: string }>,
+  mode: 'merge' | 'overwrite' = 'merge',
+): Promise<{ added: number; updated: number; total: number }> {
+  const now = Date.now();
+
+  if (mode === 'overwrite') {
+    await db.words.clear();
+  }
+
+  let added = 0;
+  let updated = 0;
+
+  const existingWords = mode === 'overwrite' ? [] : await db.words.toArray();
+  const existingMap = new Map<string, WordRecord>(
+    existingWords.map((w) => [w.wordKey, w]),
+  );
+
+  const toPut: WordRecord[] = [];
+
+  for (const item of items) {
+    if (!item.surface || typeof item.surface !== 'string') continue;
+    const surface = item.surface.trim();
+    if (!surface) continue;
+    const wordKey = normalizeWordKey(surface);
+    if (!wordKey) continue;
+
+    const existing = existingMap.get(wordKey);
+
+    if (existing && mode !== 'overwrite') {
+      const updatedRecord: WordRecord = {
+        ...existing,
+        translation: item.translation ?? existing.translation,
+        phonetic: item.phonetic ?? existing.phonetic,
+        context: item.context || existing.context,
+        contextTranslation:
+          item.contextTranslation ?? existing.contextTranslation,
+        explanation: item.explanation ?? existing.explanation,
+        explainEngine: item.explainEngine ?? existing.explainEngine,
+        explainProvider: item.explainProvider ?? existing.explainProvider,
+        kind: item.kind ?? existing.kind ?? 'word',
+        sourceUrl: item.sourceUrl ?? existing.sourceUrl,
+        sourceTitle: item.sourceTitle ?? existing.sourceTitle,
+        cueStartMs: item.cueStartMs ?? existing.cueStartMs,
+        cueEndMs: item.cueEndMs ?? existing.cueEndMs,
+        tags: item.tags ?? existing.tags,
+        learningStatus: item.learningStatus ?? existing.learningStatus ?? 'new',
+        reviewStage: item.reviewStage ?? existing.reviewStage ?? 0,
+        nextReviewAt: item.nextReviewAt ?? existing.nextReviewAt ?? now,
+        updatedAt: now,
+      };
+      existingMap.set(wordKey, updatedRecord);
+      toPut.push(updatedRecord);
+      updated++;
+    } else {
+      const record: WordRecord = {
+        wordKey,
+        surface,
+        translation: item.translation,
+        phonetic: item.phonetic,
+        context: item.context ?? '',
+        contextTranslation: item.contextTranslation,
+        explanation: item.explanation,
+        explainEngine: item.explainEngine,
+        explainProvider: item.explainProvider,
+        kind: item.kind ?? 'word',
+        sourceUrl: item.sourceUrl,
+        sourceTitle: item.sourceTitle,
+        cueStartMs: item.cueStartMs,
+        cueEndMs: item.cueEndMs,
+        audioClipId: item.audioClipId,
+        tags: item.tags,
+        learningStatus: item.learningStatus ?? 'new',
+        reviewStage: item.reviewStage ?? 0,
+        nextReviewAt: item.nextReviewAt ?? now,
+        ease: item.ease ?? 2.5,
+        createdAt: item.createdAt ?? now,
+        updatedAt: now,
+      };
+      existingMap.set(wordKey, record);
+      toPut.push(record);
+      added++;
+    }
+  }
+
+  if (toPut.length > 0) {
+    await db.words.bulkPut(toPut);
+  }
+
+  await bumpWordsRevision();
+
+  return { added, updated, total: added + updated };
+}
+
 export async function setLearningStatus(
   id: number,
   learningStatus: import('./schema').LearningStatus,
