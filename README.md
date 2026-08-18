@@ -1,8 +1,12 @@
+<p align="center">
+  <img src="./public/icons/icon128.png" width="100" height="100" alt="UniEnglishHelper Logo" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.25);" />
+</p>
+
 <h1 align="center">UniEnglishHelper (UEH)</h1>
 
 <p align="center">
-  <b>基于 Chromium 116+ Document PiP 与 AI 驱动的 YouTube 视频沉浸式英语学习浏览器扩展</b><br>
-  <i>Immersive English Video Learning Assistant with YouTube Dual Subtitles, Interactive Document PiP & AI Power</i>
+  <b>基于 Chromium 116+ Document PiP 与 AI 驱动的 YouTube 视频沉浸式英语学习与网页双语助手</b><br>
+  <i>Immersive English Video Learning Assistant with YouTube Dual Subtitles, Interactive Document PiP & AI Webpage Translator</i>
 </p>
 
 <p align="center">

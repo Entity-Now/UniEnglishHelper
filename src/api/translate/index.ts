@@ -10,6 +10,7 @@ import {
 } from './providers';
 import { microsoftTranslateBatch } from './microsoft';
 import { AppError } from '../../shared/messages/errors';
+import { getSubtitlesTranslatePromptFromConfig } from '../../utils/prompts/subtitles';
 
 export type { FreeMtProviderId } from './types';
 export { FREE_MT_PROVIDER_IDS } from './types';
@@ -172,10 +173,14 @@ async function translateWithLlm(
     }
     return text;
   }
-  const prompt = `Translate from ${src} to ${dst}. Return only the translation, no quotes.\n\n${text}`;
+  const promptObj = getSubtitlesTranslatePromptFromConfig(
+    config.videoSubtitles?.customPromptsConfig ?? { promptId: null, patterns: [] },
+    dst,
+    text,
+  );
   return chatCompletion(config, [
-    { role: 'system', content: 'You are a precise subtitle translator.' },
-    { role: 'user', content: prompt },
+    { role: 'system', content: promptObj.systemPrompt },
+    { role: 'user', content: promptObj.prompt },
   ]);
 }
 

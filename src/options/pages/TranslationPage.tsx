@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import type { AppConfig } from '../../shared/domain/types';
+import { AiPromptEditor } from '../components/AiPromptEditor';
 
 export function TranslationPage(props: {
   config: AppConfig;
@@ -11,7 +12,7 @@ export function TranslationPage(props: {
     <div>
       <h1 className="page-title">翻译</h1>
       <p className="page-desc">
-        翻译引擎、免费通道与预取策略（对应 read-frog Translation）。
+        翻译引擎、免费通道、LLM 配置与 AI 提示词（对应 read-frog Translation）。
       </p>
 
       <div className="card">
@@ -125,6 +126,8 @@ export function TranslationPage(props: {
           }
         />
       </div>
+
+      <AiPromptEditor config={form} onChange={setForm} />
 
       <div className="card">
         <h2>预取</h2>

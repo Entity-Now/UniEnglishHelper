@@ -31,6 +31,10 @@ import {
   detectYoutubeAdStatus,
   type YoutubeAdPhase,
 } from './youtube-ads';
+import {
+  WebpageTranslateController,
+  WebpageTranslateFloatingButton,
+} from './webpage-translate';
 
 declare global {
   interface Window {
@@ -53,6 +57,8 @@ let selectionToolbar: SelectionToolbar | null = null;
 let pageSubs: PageSubtitlesOverlay | null = null;
 let pageCueList: CueListSidebar | null = null;
 let pageVocabRecap: VideoVocabRecap | null = null;
+let webTranslateCtrl: WebpageTranslateController | null = null;
+let webTranslateFab: WebpageTranslateFloatingButton | null = null;
 let pageCues: SubtitleCue[] = [];
 let activeCueId = '';
 let cueTick = 0;
@@ -110,6 +116,10 @@ function tearDownAll(): void {
   pageCueList = null;
   pageVocabRecap?.destroy();
   pageVocabRecap = null;
+  webTranslateFab?.destroy();
+  webTranslateFab = null;
+  webTranslateCtrl?.destroy();
+  webTranslateCtrl = null;
   // Close Document PiP cleanly (do not orphan an open window on SPA leave)
   const pip = controller;
   controller = null;
@@ -151,6 +161,7 @@ async function applyConfigLive(next: AppConfig): Promise<void> {
   controller?.updateConfig(config);
   selectionToolbar?.updateConfig(config);
   chromeBtn?.updateConfig(config);
+  ensureWebpageTranslate();
 
   if (!shouldRunPageSubtitles(config)) {
     pageSubs?.stop();
@@ -176,6 +187,7 @@ async function applyConfigLive(next: AppConfig): Promise<void> {
   console.info('[UEH] config applied live', {
     pageAutoTr: config.pageSubtitles?.autoTranslate,
     pipAutoTr: config.pipSubtitles?.autoTranslate,
+    webPageAutoTr: config.webPageTranslate?.autoTranslate,
     llmTr: config.features?.enableLlmTranslate,
     autoExplain: config.wordShow?.autoExplain,
   });
@@ -211,6 +223,7 @@ async function boot(): Promise<void> {
 
   mountPlayerButton();
   ensureSelectionToolbar();
+  ensureWebpageTranslate();
   await ensurePageSubtitles();
   void loadPageCues();
   startPageCueTicker();
@@ -224,6 +237,34 @@ async function boot(): Promise<void> {
     lastNavVideoId = extractYoutubeVideoId();
   }
   ensureHotkeys();
+}
+
+function ensureWebpageTranslate(): void {
+  if (siteDisabled) return;
+  if (config.webPageTranslate?.enabled === false) {
+    webTranslateFab?.destroy();
+    webTranslateFab = null;
+    webTranslateCtrl?.destroy();
+    webTranslateCtrl = null;
+    return;
+  }
+
+  if (!webTranslateCtrl) {
+    webTranslateCtrl = new WebpageTranslateController(config);
+  } else {
+    webTranslateCtrl.updateConfig(config);
+  }
+
+  if (!webTranslateFab) {
+    webTranslateFab = new WebpageTranslateFloatingButton(webTranslateCtrl, config);
+    webTranslateFab.mount();
+  } else {
+    webTranslateFab.updateConfig(config);
+  }
+
+  if (config.webPageTranslate?.autoTranslate) {
+    void webTranslateCtrl.translate();
+  }
 }
 
 /**
@@ -569,7 +610,7 @@ function togglePageVocabRecap(): void {
       },
       onExplain: (surface, context, targetEl) => {
         const video = createPlayerAdapter(config).findVideo();
-        if (video && !video.paused) {
+        if (config.wordShow?.pauseOnOpen !== false && video && !video.paused) {
           void video.pause();
         }
         const cueTr = pageCues.find((c) => c.text === context)?.translation?.trim();
@@ -629,7 +670,7 @@ function togglePageCueList(): void {
       document,
       (word, context, targetEl) => {
         const video = createPlayerAdapter(config).findVideo();
-        if (video && !video.paused) {
+        if (config.wordShow?.pauseOnOpen !== false && video && !video.paused) {
           void video.pause();
         }
         const cueTr = pageCues.find((c) => c.text === context)?.translation?.trim();
@@ -1018,6 +1059,23 @@ function ensureHotkeys(): void {
       e.preventDefault();
       togglePageCueList();
     }
+    if (e.altKey && e.shiftKey && (e.key === 'T' || e.key === 't')) {
+      e.preventDefault();
+      ensureWebpageTranslate();
+      const ctrl = webTranslateCtrl;
+      if (ctrl) {
+        const status = ctrl.getStatus();
+        if (status.status === 'idle' || status.status === 'restored') {
+          void ctrl.translate();
+        } else if (status.viewMode === 'bilingual') {
+          ctrl.setViewMode('translation_only');
+        } else if (status.viewMode === 'translation_only') {
+          ctrl.restore();
+        } else {
+          void ctrl.translate();
+        }
+      }
+    }
   });
   window.addEventListener('ueh:open-pip', () => {
     if (siteDisabled) return;
@@ -1031,11 +1089,84 @@ function ensureHotkeys(): void {
     if (siteDisabled) return;
     togglePageVocabRecap();
   });
+  window.addEventListener('ueh:page-translate', () => {
+    if (siteDisabled) return;
+    ensureWebpageTranslate();
+    void webTranslateCtrl?.translate();
+  });
 }
 
 function main(): void {
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (!isEnvelope(message)) return false;
+  chrome.runtime.onMessage.addListener((rawMessage, _sender, sendResponse) => {
+    if (!rawMessage || typeof rawMessage !== 'object') return false;
+    const message = isEnvelope(rawMessage)
+      ? rawMessage
+      : (rawMessage as { type?: string; payload?: unknown });
+    if (!message.type || typeof message.type !== 'string') return false;
+
+    if (message.type === 'page.translate') {
+      if (siteDisabled) {
+        sendResponse({
+          ok: false,
+          error: {
+            code: 'SITE_DISABLED',
+            message: 'Extension disabled on this site',
+          },
+        });
+        return true;
+      }
+      ensureWebpageTranslate();
+      void webTranslateCtrl?.translate();
+      sendResponse(ok({}));
+      return true;
+    }
+
+    if (message.type === 'page.restore') {
+      webTranslateCtrl?.restore();
+      sendResponse(ok({}));
+      return true;
+    }
+
+    if (message.type === 'page.toggleMode') {
+      const mode = (message.payload as { mode?: 'bilingual' | 'translation_only' | 'original' })?.mode ?? 'bilingual';
+      webTranslateCtrl?.setViewMode(mode);
+      sendResponse(ok({}));
+      return true;
+    }
+
+    if (message.type === 'page.getStatus') {
+      const status = webTranslateCtrl?.getStatus() ?? {
+        status: 'idle',
+        progress: { total: 0, completed: 0, failed: 0 },
+        viewMode: 'bilingual',
+      };
+      sendResponse(ok(status));
+      return true;
+    }
+
+    if (message.type === 'selection.translate') {
+      const text = (message.payload as { text?: string })?.text;
+      ensureSelectionToolbar();
+      selectionToolbar?.triggerTranslateForSelection(text);
+      sendResponse(ok({}));
+      return true;
+    }
+
+    if (message.type === 'selection.explain') {
+      const text = (message.payload as { text?: string })?.text;
+      ensureSelectionToolbar();
+      selectionToolbar?.triggerExplainForSelection(text);
+      sendResponse(ok({}));
+      return true;
+    }
+
+    if (message.type === 'selection.tts') {
+      const text = (message.payload as { text?: string })?.text;
+      ensureSelectionToolbar();
+      selectionToolbar?.triggerTtsForSelection(text);
+      sendResponse(ok({}));
+      return true;
+    }
 
     if (message.type === 'content.openPip') {
       void (async () => {

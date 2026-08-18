@@ -1,35 +1,10 @@
+import { formatLanguageForPrompt } from './translate';
+
 export type LangLevel = 'beginner' | 'intermediate' | 'advanced';
 
-const LANG_NAMES: Record<string, string> = {
-  en: 'English',
-  'zh-CN': 'Simplified Chinese',
-  'zh-TW': 'Traditional Chinese',
-  zh: 'Chinese',
-  ja: 'Japanese',
-  ko: 'Korean',
-  fr: 'French',
-  de: 'German',
-  es: 'Spanish',
-};
-
-function langName(code: string): string {
-  return LANG_NAMES[code] || LANG_NAMES[code.split('-')[0]] || code;
-}
-
-/**
- * Word/sentence explanation prompt (adapted from read-frog word-explain).
- */
-export function getWordExplainPrompt(
-  sourceLang: string,
-  targetLang: string,
-  langLevel: LangLevel = 'intermediate',
-): string {
-  const sourceLangName = langName(sourceLang);
-  const targetLangName = langName(targetLang);
-
-  return `
+export const DEFAULT_WORD_EXPLAIN_SYSTEM_PROMPT_TEMPLATE = `
 # Identity
-You are a professional ${sourceLangName} language teacher who provides clear and concise explanations for words and phrases. Your student speaks ${targetLangName}. Your student's language level is ${langLevel}.
+You are a professional {{sourceLanguage}} language teacher who provides clear and concise explanations for words and phrases. Your student speaks {{targetLanguage}}. Your student's language level is {{langLevel}}.
 
 # User Input
 You will receive two pieces of information: the query text and context. The context will help you understand the meaning of the query object more accurately.
@@ -44,7 +19,7 @@ You will receive two pieces of information: the query text and context. The cont
 - Do not add any text outside the structure.
 - Do not add explanations, comments, or greetings.
 - Absolutely do not output template name itself.
-- Unless there are special requirements, must output in ${targetLangName}.
+- Unless there are special requirements, must output in {{targetLanguage}}.
 
 # Level Definitions
 - beginner: CEFR level A1-A2.
@@ -62,11 +37,11 @@ word-template:
 {{ part of speech }}
 
 ## 释义
-**{{ definition in ${sourceLangName} }}**
+**{{ definition in {{sourceLanguage}} }}**
 
-{{ definition in ${targetLangName} }}
+{{ definition in {{targetLanguage}} }}
 
-{{ example sentence in ${sourceLangName} }}
+{{ example sentence in {{sourceLanguage}} }}
 
 ## 词根
 {{ about word root }}
@@ -77,7 +52,7 @@ word-template:
 
 sentence-template:
 
-**{{ translation in ${targetLangName} }}**
+**{{ translation in {{targetLanguage}} }}**
 
 ## 语法点
 {{ Explanation of grammar points }}
@@ -85,4 +60,23 @@ sentence-template:
 ## 讲解
 {{ Explain its usage in the given context }}
 `.trim();
+
+/**
+ * Word/sentence explanation prompt (adapted from read-frog word-explain).
+ */
+export function getWordExplainPrompt(
+  sourceLang: string,
+  targetLang: string,
+  langLevel: LangLevel = 'intermediate',
+  customTemplate?: string,
+): string {
+  const sourceLangName = formatLanguageForPrompt(sourceLang);
+  const targetLangName = formatLanguageForPrompt(targetLang);
+
+  const tpl = customTemplate?.trim() || DEFAULT_WORD_EXPLAIN_SYSTEM_PROMPT_TEMPLATE;
+
+  return tpl
+    .replaceAll('{{sourceLanguage}}', sourceLangName)
+    .replaceAll('{{targetLanguage}}', targetLangName)
+    .replaceAll('{{langLevel}}', langLevel);
 }

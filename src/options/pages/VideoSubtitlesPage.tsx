@@ -22,6 +22,7 @@ import {
   resolveSubtitlePlacement,
 } from '../../utils/subtitles/layout';
 import { isClickableWord, segmentWords } from '../../utils/segmenter';
+import { AiPromptEditor } from '../components/AiPromptEditor';
 
 /** Sample cue mirrors real PiP content (long enough to show wrap). */
 const PREVIEW_EN =
@@ -416,6 +417,8 @@ export function VideoSubtitlesPage(props: {
           可点击词下划线提示
         </label>
       </div>
+
+      <AiPromptEditor config={form} onChange={setForm} />
 
       <SaveButton
         label="保存字幕与相关设置"

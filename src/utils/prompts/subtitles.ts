@@ -12,6 +12,7 @@ import {
   VIDEO_SUMMARY,
 } from '@/utils/constants/prompt';
 import {
+  formatLanguageForPrompt,
   resolvePromptReplacementValue,
   type TranslatePromptOptions,
   type TranslatePromptResult,
@@ -54,10 +55,14 @@ export function getSubtitlesTranslatePromptFromConfig(
     options?.context?.videoSummary,
     'No summary available',
   );
+  const targetLanguageFormatted = formatLanguageForPrompt(targetLang);
 
   const replaceTokens = (text: string) =>
     text
-      .replaceAll(getTokenCellText(SUBTITLE_TARGET_LANGUAGE), targetLang)
+      .replaceAll(
+        getTokenCellText(SUBTITLE_TARGET_LANGUAGE),
+        targetLanguageFormatted,
+      )
       .replaceAll(getTokenCellText(SUBTITLE_INPUT), input)
       .replaceAll(getTokenCellText(SUBTITLE_WEB_TITLE), title)
       .replaceAll(getTokenCellText(SUBTITLE_WEB_DESCRIPTION), description)

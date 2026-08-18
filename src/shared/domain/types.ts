@@ -144,6 +144,8 @@ export interface WordShowConfig {
   langLevel: LangLevel;
   /** Side panel width (px) */
   panelWidth: number;
+  /** Custom system prompt template for word explanation */
+  customSystemPrompt?: string;
 }
 
 /** Highlight colors for dictionary words in subtitles. */
@@ -202,6 +204,28 @@ export interface PageSubtitlesConfig extends SubtitleSurfaceConfig {
 /** PiP-window subtitle appearance (independent of page overlay). */
 export type PipSubtitlesConfig = SubtitleSurfaceConfig;
 
+export type WebPageTranslateDisplayMode = 'bilingual' | 'translation_only';
+
+export interface WebPageTranslateConfig {
+  enabled: boolean;
+  autoTranslate: boolean;
+  displayMode: WebPageTranslateDisplayMode;
+  showFloatingButton: boolean;
+  minCharacters: number;
+  fontSizeScale: number;
+  translationColor: string;
+}
+
+export const DEFAULT_WEBPAGE_TRANSLATE: WebPageTranslateConfig = {
+  enabled: true,
+  autoTranslate: false,
+  displayMode: 'bilingual',
+  showFloatingButton: true,
+  minCharacters: 2,
+  fontSizeScale: 88,
+  translationColor: '',
+};
+
 export interface AppConfig {
   configVersion: number;
   targetLang: string;
@@ -242,6 +266,8 @@ export interface AppConfig {
    * Appearance lives in pageSubtitles / pipSubtitles.
    */
   videoSubtitles: VideoSubtitlesConfig;
+  /** Full webpage bilingual / translation only translation. */
+  webPageTranslate: WebPageTranslateConfig;
   /** Word click / dictionary panel. */
   wordShow: WordShowConfig;
   /** Subtitle highlight for saved vocabulary. */
@@ -281,7 +307,7 @@ export interface AppConfig {
 }
 
 export const DEFAULT_WORD_SHOW: WordShowConfig = {
-  pauseOnOpen: false,
+  pauseOnOpen: true,
   autoExplain: true,
   underlineWords: true,
   langLevel: 'intermediate',
@@ -348,6 +374,7 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
     preferMove: true,
   },
   videoSubtitles: structuredClone(DEFAULT_VIDEO_SUBTITLES),
+  webPageTranslate: { ...DEFAULT_WEBPAGE_TRANSLATE },
   wordShow: { ...DEFAULT_WORD_SHOW },
   vocabHighlight: { ...DEFAULT_VOCAB_HIGHLIGHT },
   selectionToolbar: { ...DEFAULT_SELECTION_TOOLBAR },

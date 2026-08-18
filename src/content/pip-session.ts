@@ -1780,10 +1780,14 @@ export class PipSessionController {
     const doc = this.pipWindow?.document;
     if (!doc) return;
 
+    const video = this.video ?? this.adapter.findVideo();
+    if (video) this.video = video;
+
     const wordShow = this.config.wordShow;
-    if (wordShow?.pauseOnOpen && this.video && !this.video.paused) {
-      this.video.pause();
+    if (wordShow?.pauseOnOpen !== false && video && !video.paused) {
+      video.pause();
       this.updatePlayIcon();
+      this.pushPlaybackState();
     }
 
     const title = doc.getElementById('ueh-word-panel-title');

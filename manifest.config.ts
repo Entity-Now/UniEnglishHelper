@@ -33,6 +33,7 @@ export default defineManifest({
     'scripting',
     'offscreen',
     'tabCapture',
+    'contextMenus',
   ],
   // Granted when the user installs / loads the extension
   host_permissions: ['http://*/*', 'https://*/*'],

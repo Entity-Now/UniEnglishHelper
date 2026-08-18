@@ -83,6 +83,45 @@ export class SelectionToolbar {
     this.shadow = null;
   }
 
+  triggerTranslateForSelection(text?: string): void {
+    const sel = (text || window.getSelection()?.toString() || '').trim();
+    if (!sel) return;
+    this.selectedText = sel;
+    const range = window.getSelection()?.rangeCount
+      ? window.getSelection()?.getRangeAt(0)
+      : null;
+    const rect = range ? getSelectionStartRect(range) : null;
+    const x = rect?.left ?? window.innerWidth / 2 - 100;
+    const y = rect?.bottom ?? window.innerHeight / 2;
+    void this.showAtAsync(x, y).then(() => {
+      const panel = this.shadow?.getElementById('panel');
+      if (panel) void this.runTranslate(panel);
+    });
+  }
+
+  triggerExplainForSelection(text?: string): void {
+    const sel = (text || window.getSelection()?.toString() || '').trim();
+    if (!sel) return;
+    this.selectedText = sel;
+    const range = window.getSelection()?.rangeCount
+      ? window.getSelection()?.getRangeAt(0)
+      : null;
+    const rect = range ? getSelectionStartRect(range) : null;
+    const x = rect?.left ?? window.innerWidth / 2 - 100;
+    const y = rect?.bottom ?? window.innerHeight / 2;
+    void this.showAtAsync(x, y).then(() => {
+      const panel = this.shadow?.getElementById('panel');
+      if (panel) void this.runExplain(panel);
+    });
+  }
+
+  triggerTtsForSelection(text?: string): void {
+    const sel = (text || window.getSelection()?.toString() || '').trim();
+    if (!sel) return;
+    this.selectedText = sel;
+    void this.runTts();
+  }
+
   private tb() {
     return {
       ...DEFAULT_SELECTION_TOOLBAR,

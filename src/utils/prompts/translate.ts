@@ -30,6 +30,51 @@ export function resolvePromptReplacementValue(
   return typeof value === 'string' && value.trim() !== '' ? value : fallback;
 }
 
+const PROMPT_LANG_NAMES: Record<string, string> = {
+  'zh-cn': 'Simplified Chinese (简体中文)',
+  'zh-hans': 'Simplified Chinese (简体中文)',
+  'zh-sg': 'Simplified Chinese (简体中文)',
+  'zh-tw': 'Traditional Chinese (繁體中文)',
+  'zh-hant': 'Traditional Chinese (繁體中文)',
+  'zh-hk': 'Traditional Chinese (繁體中文)',
+  'zh-mo': 'Traditional Chinese (繁體中文)',
+  zh: 'Simplified Chinese (简体中文)',
+  en: 'English',
+  'en-us': 'English (US)',
+  'en-gb': 'English (UK)',
+  ja: 'Japanese (日本語)',
+  ko: 'Korean (한국어)',
+  fr: 'French (Français)',
+  de: 'German (Deutsch)',
+  es: 'Spanish (Español)',
+  ru: 'Russian (Русский)',
+  it: 'Italian (Italiano)',
+  pt: 'Portuguese (Português)',
+  'pt-br': 'Portuguese (Português - Brasil)',
+  'pt-pt': 'Portuguese (Português)',
+  vi: 'Vietnamese (Tiếng Việt)',
+  th: 'Thai (ไทย)',
+  id: 'Indonesian (Bahasa Indonesia)',
+  ar: 'Arabic (العربية)',
+  hi: 'Hindi (हिन्दी)',
+  nl: 'Dutch (Nederlands)',
+  pl: 'Polish (Polski)',
+  tr: 'Turkish (Türkçe)',
+};
+
+export function formatLanguageForPrompt(code: string | null | undefined): string {
+  if (!code || typeof code !== 'string') return 'Simplified Chinese (简体中文)';
+  const normalized = code.trim().toLowerCase().replace('_', '-');
+  if (PROMPT_LANG_NAMES[normalized]) {
+    return PROMPT_LANG_NAMES[normalized];
+  }
+  const prefix = normalized.split('-')[0];
+  if (prefix && PROMPT_LANG_NAMES[prefix]) {
+    return PROMPT_LANG_NAMES[prefix];
+  }
+  return code;
+}
+
 export function getTranslatePromptFromConfig(
   customPromptsConfig: CustomPromptsConfig,
   targetLang: string,
@@ -71,10 +116,11 @@ export function getTranslatePromptFromConfig(
     options?.context?.webSummary,
     'No summary available',
   );
+  const targetLanguageFormatted = formatLanguageForPrompt(targetLang);
 
   const replaceTokens = (text: string) =>
     text
-      .replaceAll(getTokenCellText(TARGET_LANGUAGE), targetLang)
+      .replaceAll(getTokenCellText(TARGET_LANGUAGE), targetLanguageFormatted)
       .replaceAll(getTokenCellText(INPUT), input)
       .replaceAll(getTokenCellText(WEB_TITLE), title)
       .replaceAll(getTokenCellText(WEB_DESCRIPTION), description)

@@ -207,6 +207,7 @@ async function explainWithLlm(
     config.sourceLang,
     config.targetLang,
     config.wordShow?.langLevel ?? 'intermediate',
+    config.wordShow?.customSystemPrompt,
   );
   const explanation = await chatCompletion(
     config,

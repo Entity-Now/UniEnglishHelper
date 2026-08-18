@@ -133,3 +133,45 @@ export async function openPipWithInjection(
     );
   }
 }
+
+/**
+ * Send a message to content script on tabId. If content script is not loaded yet,
+ * inject it automatically and retry.
+ */
+export async function sendTabMessageWithInjection(
+  tabId: number,
+  msg: unknown,
+): Promise<unknown> {
+  const trySend = async (): Promise<unknown> => {
+    return await chrome.tabs.sendMessage(tabId, msg);
+  };
+
+  try {
+    return await trySend();
+  } catch (firstErr) {
+    const firstMsg =
+      firstErr instanceof Error ? firstErr.message : String(firstErr);
+    const shouldInject =
+      firstMsg.includes('Receiving end does not exist') ||
+      firstMsg.includes('Could not establish connection');
+
+    if (!shouldInject) {
+      throw firstErr;
+    }
+
+    try {
+      await injectContentScripts(tabId);
+      for (let i = 0; i < 6; i++) {
+        await sleep(80 + i * 50);
+        try {
+          return await trySend();
+        } catch {
+          // retry
+        }
+      }
+    } catch {
+      // ignore inject error on restricted URLs
+    }
+    return undefined;
+  }
+}

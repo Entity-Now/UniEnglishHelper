@@ -489,11 +489,17 @@ export class VideoVocabRecap {
     const surface = this.hostDoc.createElement('span');
     surface.className = `surface${hlCls ? ` ${hlCls}` : ''}`;
     surface.textContent = w.surface;
-    if (cue) {
-      surface.addEventListener('click', () => {
-        this.handlers.onSeek(cue.startMs);
-      });
-    }
+    surface.title = '查看单词释义';
+    surface.style.cursor = 'pointer';
+    surface.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const ctx = cue?.text ?? w.context ?? w.surface;
+      this.handlers.onExplain(
+        w.surface,
+        ctx,
+        surface,
+      );
+    });
     meta.appendChild(surface);
 
     const badge = this.hostDoc.createElement('span');

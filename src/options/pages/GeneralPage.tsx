@@ -81,6 +81,189 @@ export function GeneralPage(props: {
       </div>
 
       <div className="card">
+        <h2>网页全文翻译</h2>
+        <p className="hint">
+          浏览普通网页或英文文档时提供段落双语对照与全文翻译能力。
+        </p>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={form.webPageTranslate?.enabled !== false}
+            onChange={(e) =>
+              setForm({
+                ...form,
+                webPageTranslate: {
+                  ...form.webPageTranslate,
+                  enabled: e.target.checked,
+                },
+              })
+            }
+          />
+          启用网页翻译
+        </label>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={Boolean(form.webPageTranslate?.autoTranslate)}
+            onChange={(e) =>
+              setForm({
+                ...form,
+                webPageTranslate: {
+                  ...form.webPageTranslate,
+                  autoTranslate: e.target.checked,
+                },
+              })
+            }
+          />
+          自动翻译（打开网页时自动触发翻译）
+        </label>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={form.webPageTranslate?.showFloatingButton !== false}
+            onChange={(e) =>
+              setForm({
+                ...form,
+                webPageTranslate: {
+                  ...form.webPageTranslate,
+                  showFloatingButton: e.target.checked,
+                },
+              })
+            }
+          />
+          在页面右下角显示悬浮翻译按钮
+        </label>
+
+        <div className="row" style={{ marginTop: 10 }}>
+          <div className="field">
+            <label>默认显示模式</label>
+            <select
+              value={form.webPageTranslate?.displayMode ?? 'bilingual'}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  webPageTranslate: {
+                    ...form.webPageTranslate,
+                    displayMode: e.target.value as 'bilingual' | 'translation_only',
+                  },
+                })
+              }
+            >
+              <option value="bilingual">双语对照（推荐）</option>
+              <option value="translation_only">仅显示译文</option>
+            </select>
+          </div>
+          <div className="field">
+            <label>译文字号缩放 (%)</label>
+            <input
+              type="number"
+              min={60}
+              max={160}
+              value={form.webPageTranslate?.fontSizeScale ?? 88}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  webPageTranslate: {
+                    ...form.webPageTranslate,
+                    fontSizeScale: Number(e.target.value) || 88,
+                  },
+                })
+              }
+            />
+          </div>
+        </div>
+
+        <div className="field" style={{ marginTop: 10 }}>
+          <label>译文颜色</label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            {[
+              ['跟随网页 (自适应深浅色)', ''],
+              ['柔和灰', '#6b7280'],
+              ['浅灰', '#9ca3af'],
+              ['经典蓝', '#2563eb'],
+              ['墨绿', '#059669'],
+              ['暖紫', '#7c3aed'],
+            ].map(([label, colorVal]) => (
+              <button
+                key={label}
+                type="button"
+                className="secondary"
+                style={{
+                  fontSize: 12,
+                  padding: '3px 8px',
+                  borderColor:
+                    (form.webPageTranslate?.translationColor ?? '') === colorVal
+                      ? 'var(--rf-brand)'
+                      : undefined,
+                  fontWeight:
+                    (form.webPageTranslate?.translationColor ?? '') === colorVal
+                      ? 'bold'
+                      : 'normal',
+                }}
+                onClick={() =>
+                  setForm({
+                    ...form,
+                    webPageTranslate: {
+                      ...form.webPageTranslate,
+                      translationColor: colorVal,
+                    },
+                  })
+                }
+              >
+                {label}
+              </button>
+            ))}
+            <input
+              type="color"
+              value={form.webPageTranslate?.translationColor || '#6b7280'}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  webPageTranslate: {
+                    ...form.webPageTranslate,
+                    translationColor: e.target.value,
+                  },
+                })
+              }
+              style={{
+                width: 32,
+                height: 28,
+                padding: 0,
+                cursor: 'pointer',
+                border: '1px solid var(--rf-border)',
+                borderRadius: 4,
+              }}
+              title="自定义颜色"
+            />
+          </div>
+        </div>
+
+        <div
+          style={{
+            marginTop: 12,
+            padding: '10px 14px',
+            borderRadius: 6,
+            background: 'var(--rf-secondary)',
+            border: '1px solid var(--rf-border)',
+          }}
+        >
+          <div style={{ fontSize: 13, fontWeight: 500 }}>
+            Stay hungry, stay foolish.
+          </div>
+          <div
+            style={{
+              marginTop: '0.25em',
+              fontSize: `${(form.webPageTranslate?.fontSizeScale ?? 88) / 100}em`,
+              color: form.webPageTranslate?.translationColor || '#6b7280',
+              lineHeight: 1.5,
+            }}
+          >
+            求知若饥，虚心若愚。（排版预览）
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
         <h2>功能开关</h2>
         {(
           [

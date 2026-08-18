@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { sendRuntime } from '../shared/messaging/client';
+import { createEnvelope } from '../shared/messages/envelope';
 import type { AppConfig, CaptureState } from '../shared/domain/types';
 import type { LearningStatus, WordRecord } from '../db/schema';
 import { EXT_VERSION } from '../shared/version';
@@ -43,6 +44,11 @@ export function PopupApp() {
   const [vocabQ, setVocabQ] = useState('');
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
   const [siteDisabled, setSiteDisabled] = useState(false);
+  const [pageTrStatus, setPageTrStatus] = useState<{
+    status: 'idle' | 'translating' | 'translated' | 'restored' | 'error';
+    progress: { total: number; completed: number; failed: number };
+    viewMode: 'bilingual' | 'translation_only' | 'original';
+  } | null>(null);
 
   const refreshPerm = useCallback(async () => {
     const s = await getPermissionStatus();
@@ -70,7 +76,101 @@ export function PopupApp() {
         }`,
       );
     }
+
+    try {
+      const pStatus = await chrome.tabs.sendMessage(
+        tab.id,
+        createEnvelope({
+          channel: 'runtime',
+          type: 'page.getStatus',
+          source: 'popup',
+          payload: {},
+        }),
+      );
+      if (pStatus?.ok) {
+        setPageTrStatus(pStatus.data);
+      }
+    } catch {
+      setPageTrStatus(null);
+    }
   }, []);
+
+  const translatePage = async () => {
+    if (!tabId) return;
+    setBusy(true);
+    try {
+      await chrome.tabs.sendMessage(
+        tabId,
+        createEnvelope({
+          channel: 'runtime',
+          type: 'page.translate',
+          source: 'popup',
+          payload: {},
+        }),
+      );
+      setPageTrStatus({
+        status: 'translating',
+        progress: { total: 0, completed: 0, failed: 0 },
+        viewMode: 'bilingual',
+      });
+      setStatus('正在启动网页翻译...');
+    } catch (err) {
+      setStatus('发送翻译指令失败');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setPageMode = async (mode: 'bilingual' | 'translation_only') => {
+    if (!tabId) return;
+    await chrome.tabs.sendMessage(
+      tabId,
+      createEnvelope({
+        channel: 'runtime',
+        type: 'page.toggleMode',
+        source: 'popup',
+        payload: { mode },
+      }),
+    );
+    setPageTrStatus((prev) => (prev ? { ...prev, viewMode: mode } : null));
+  };
+
+  const restorePage = async () => {
+    if (!tabId) return;
+    await chrome.tabs.sendMessage(
+      tabId,
+      createEnvelope({
+        channel: 'runtime',
+        type: 'page.restore',
+        source: 'popup',
+        payload: {},
+      }),
+    );
+    setPageTrStatus((prev) =>
+      prev ? { ...prev, status: 'restored', viewMode: 'original' } : null,
+    );
+    setStatus('已恢复网页原文');
+  };
+
+  const [showTranslateSettings, setShowTranslateSettings] = useState(false);
+
+  const updateWebPageTranslateConfig = async (
+    partial: Partial<AppConfig['webPageTranslate']>,
+  ) => {
+    if (!appConfig) return;
+    const nextConfig = {
+      ...appConfig.webPageTranslate,
+      ...partial,
+    };
+    const res = await sendRuntime<AppConfig>(
+      'config.set',
+      { webPageTranslate: nextConfig },
+      'popup',
+    );
+    if (res.ok) {
+      setAppConfig(res.data);
+    }
+  };
 
   const loadWords = useCallback(async () => {
     const w = await sendRuntime<WordRecord[]>(
@@ -504,6 +604,147 @@ export function PopupApp() {
         {siteDisabled && (
           <div className="status" style={{ color: 'var(--rf-destructive)' }}>
             当前网站已禁用：字幕 / 选区 / PiP 均不会注入
+          </div>
+        )}
+
+        {!isRestricted && tabUrl && (
+          <div
+            style={{
+              border: '1px solid var(--rf-border)',
+              borderRadius: 8,
+              padding: '10px 12px',
+              marginBottom: 10,
+              background: 'color-mix(in srgb, var(--rf-brand) 5%, var(--rf-card))',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: 8,
+              }}
+            >
+              <strong style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span>🌐</span> 网页双语翻译
+              </strong>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span
+                  style={{
+                    fontSize: 11,
+                    color:
+                      pageTrStatus?.status === 'translating'
+                        ? 'var(--rf-brand)'
+                        : 'var(--rf-muted-foreground)',
+                    fontWeight: 500,
+                  }}
+                >
+                  {pageTrStatus?.status === 'translating'
+                    ? `翻译中 ${pageTrStatus.progress.completed}/${pageTrStatus.progress.total || '…'}`
+                    : pageTrStatus?.status === 'translated'
+                      ? (pageTrStatus.viewMode === 'bilingual' ? '双语对照中' : '仅译文显示')
+                      : '就绪'}
+                </span>
+                <button
+                  type="button"
+                  className="linkish"
+                  title="快速设置"
+                  style={{ fontSize: 12, padding: '0 4px', opacity: 0.8 }}
+                  onClick={() => setShowTranslateSettings(!showTranslateSettings)}
+                >
+                  ⚙️
+                </button>
+              </div>
+            </div>
+
+            {showTranslateSettings && appConfig && (
+              <div
+                style={{
+                  background: 'color-mix(in srgb, var(--rf-foreground) 4%, transparent)',
+                  borderRadius: 6,
+                  padding: '6px 8px',
+                  marginBottom: 8,
+                  fontSize: 11,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 6,
+                  border: '1px dashed var(--rf-border)',
+                }}
+              >
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={appConfig.webPageTranslate?.showFloatingButton !== false}
+                    onChange={(e) =>
+                      void updateWebPageTranslateConfig({
+                        showFloatingButton: e.target.checked,
+                      })
+                    }
+                  />
+                  <span>显示页面右下角悬浮翻译球</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(appConfig.webPageTranslate?.autoTranslate)}
+                    onChange={(e) =>
+                      void updateWebPageTranslateConfig({
+                        autoTranslate: e.target.checked,
+                      })
+                    }
+                  />
+                  <span>打开网页时自动翻译</span>
+                </label>
+              </div>
+            )}
+
+            {pageTrStatus?.status === 'translated' ? (
+              <div className="row" style={{ gap: 6, gridTemplateColumns: '1fr 1fr 1fr' }}>
+                <button
+                  type="button"
+                  className={pageTrStatus.viewMode === 'bilingual' ? 'brand' : 'secondary'}
+                  style={{ fontSize: 11, padding: '5px 4px' }}
+                  onClick={() => void setPageMode('bilingual')}
+                >
+                  双语对照
+                </button>
+                <button
+                  type="button"
+                  className={pageTrStatus.viewMode === 'translation_only' ? 'brand' : 'secondary'}
+                  style={{ fontSize: 11, padding: '5px 4px' }}
+                  onClick={() => void setPageMode('translation_only')}
+                >
+                  仅译文
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  style={{ fontSize: 11, padding: '5px 4px' }}
+                  onClick={() => void restorePage()}
+                >
+                  恢复原文
+                </button>
+              </div>
+            ) : (
+              <div className="row">
+                <button
+                  type="button"
+                  className="brand"
+                  disabled={
+                    busy ||
+                    tabId == null ||
+                    isRestricted ||
+                    siteDisabled ||
+                    pageTrStatus?.status === 'translating'
+                  }
+                  onClick={() => void translatePage()}
+                >
+                  {pageTrStatus?.status === 'translating'
+                    ? '正在翻译本页...'
+                    : '翻译当前网页 (双语对照)'}
+                </button>
+              </div>
+            )}
           </div>
         )}
 
