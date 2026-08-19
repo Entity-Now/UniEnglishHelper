@@ -87,6 +87,7 @@ export function buildPipStyles(opts: {
       text-shadow: 0 1px 2px rgba(0,0,0,.85);
       word-break: break-word;
       pointer-events: auto;
+      cursor: pointer;
     }
     #ueh-sub-en {
       font-size: ${fontSize}px;

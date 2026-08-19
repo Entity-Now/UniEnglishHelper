@@ -130,9 +130,14 @@ export class YoutubeAdapter extends BasePlayerAdapter {
   private forceRefresh = false;
 
   findVideo(): HTMLVideoElement | null {
-    return document.querySelector(
-      'video.html5-main-video, ytd-player video, #movie_player video, video',
+    const main = document.querySelector<HTMLVideoElement>(
+      '#movie_player video.html5-main-video, #movie_player video, video.html5-main-video, ytd-player video',
     );
+    if (main) return main;
+    const all = Array.from(document.querySelectorAll('video'));
+    const playing = all.find((v) => !v.paused);
+    if (playing) return playing;
+    return all.sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight)[0] ?? null;
   }
 
   /**

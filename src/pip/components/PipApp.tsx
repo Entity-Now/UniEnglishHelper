@@ -76,7 +76,11 @@ export function PipApp() {
 
   return (
     <div className="ueh-pip">
-      <SubtitlePanel cue={cue} onWordClick={actions.explain} />
+      <SubtitlePanel
+        cue={cue}
+        onWordClick={actions.explain}
+        onSubtitleClick={actions.playPause}
+      />
       <div className="ueh-toolbar">
         <button type="button" onClick={actions.playPause}>
           Play/Pause

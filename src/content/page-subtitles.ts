@@ -290,6 +290,7 @@ export class PageSubtitlesOverlay {
           padding: 4px 10px;
           border-radius: 6px;
           pointer-events: auto;
+          cursor: pointer;
           text-shadow: 0 1px 2px rgba(0,0,0,.85);
         }
         #en:empty, #tr:empty { display: none; padding: 0; background: transparent; }
@@ -345,6 +346,11 @@ export class PageSubtitlesOverlay {
       </div>
     `;
     this.applyStyles();
+    // Clicking subtitle layer outside word chip toggles play/pause on page video
+    this.shadow.getElementById('layer')?.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).closest('.ueh-word,button')) return;
+      this.handleCommandPlayPause();
+    });
     this.shadow.querySelectorAll('button[data-act]').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -477,9 +483,7 @@ export class PageSubtitlesOverlay {
           span.addEventListener('click', (e) => {
             e.stopPropagation();
             e.preventDefault();
-            if (this.config.wordShow?.pauseOnOpen !== false && this.video && !this.video.paused) {
-              void this.video.pause();
-            }
+            this.pausePlayback();
             void this.onWordClick(seg.text, cue.text, span);
           });
           // Hover preview only — never steal focus / pause the player
@@ -493,6 +497,53 @@ export class PageSubtitlesOverlay {
     syncEnGlossClass(en);
     tr.textContent =
       showTranslation && cue.translation?.trim() ? cue.translation : '';
+  }
+
+  private pausePlayback(): void {
+    const video = this.video ?? this.adapter.findVideo();
+    if (video) {
+      this.video = video;
+      try { video.pause(); } catch {}
+    }
+    try {
+      document.querySelectorAll('video').forEach((v) => {
+        if (!v.paused) {
+          try { v.pause(); } catch {}
+        }
+      });
+    } catch {}
+    try {
+      const yt = (document.getElementById('movie_player') ||
+        document.querySelector('.html5-video-player')) as any;
+      if (yt && typeof yt.pauseVideo === 'function') {
+        yt.pauseVideo();
+      }
+    } catch {}
+  }
+
+  private resumePlayback(): void {
+    const video = this.video ?? this.adapter.findVideo();
+    if (video) this.video = video;
+    try {
+      const yt = (document.getElementById('movie_player') ||
+        document.querySelector('.html5-video-player')) as any;
+      if (yt && typeof yt.playVideo === 'function') {
+        yt.playVideo();
+      } else if (this.video) {
+        void this.video.play().catch(() => undefined);
+      }
+    } catch {
+      if (this.video) {
+        void this.video.play().catch(() => undefined);
+      }
+    }
+  }
+
+  private handleCommandPlayPause(): void {
+    const video = this.video ?? this.adapter.findVideo();
+    const isPaused = video ? video.paused : !Array.from(document.querySelectorAll('video')).some((v) => !v.paused);
+    if (isPaused) this.resumePlayback();
+    else this.pausePlayback();
   }
 
   private async onWordClick(

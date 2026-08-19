@@ -748,6 +748,13 @@ export class PipSessionController {
       this.updatePlayIcon();
     });
 
+    // Click subtitle area (outside of word chip) → play/pause
+    doc.getElementById('ueh-sub-layer')?.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).closest('button,input,a,#ueh-word-panel,.ueh-word')) return;
+      this.handleCommandPlayPause();
+      this.updatePlayIcon();
+    });
+
     doc.querySelectorAll('button[data-act]').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -1484,6 +1491,7 @@ export class PipSessionController {
           span.addEventListener('click', (e) => {
             e.stopPropagation();
             e.preventDefault();
+            this.pausePlayback();
             void this.handleWordClick(seg.text, cue.text);
           });
           // Avoid player focus/pause side-effects when interacting with words
@@ -1599,11 +1607,86 @@ export class PipSessionController {
     }
   }
 
-  private handleCommandPlayPause(): void {
-    if (!this.video) return;
-    if (this.video.paused) void this.video.play();
-    else this.video.pause();
+  private pausePlayback(): void {
+    const video = (this.video && (this.mode === 'move' || document.contains(this.video)))
+      ? this.video
+      : (this.adapter.findVideo() ?? this.video);
+    if (video) this.video = video;
+
+    if (this.video) {
+      try {
+        this.video.pause();
+      } catch {
+        // ignore
+      }
+    }
+
+    try {
+      document.querySelectorAll('video').forEach((v) => {
+        if (!v.paused) {
+          try { v.pause(); } catch {}
+        }
+      });
+    } catch {}
+
+    if (this.pipWindow) {
+      try {
+        this.pipWindow.document.querySelectorAll('video').forEach((v) => {
+          if (!v.paused) {
+            try { v.pause(); } catch {}
+          }
+        });
+      } catch {}
+    }
+
+    try {
+      const yt = (document.getElementById('movie_player') ||
+        document.querySelector('.html5-video-player')) as any;
+      if (yt && typeof yt.pauseVideo === 'function') {
+        yt.pauseVideo();
+      }
+    } catch {}
+
     this.updatePlayIcon();
+    this.pushPlaybackState();
+  }
+
+  private resumePlayback(): void {
+    const video = (this.video && (this.mode === 'move' || document.contains(this.video)))
+      ? this.video
+      : (this.adapter.findVideo() ?? this.video);
+    if (video) this.video = video;
+
+    try {
+      const yt = (document.getElementById('movie_player') ||
+        document.querySelector('.html5-video-player')) as any;
+      if (yt && typeof yt.playVideo === 'function') {
+        yt.playVideo();
+      } else if (this.video) {
+        void this.video.play().catch(() => undefined);
+      }
+    } catch {
+      if (this.video) {
+        void this.video.play().catch(() => undefined);
+      }
+    }
+
+    this.updatePlayIcon();
+    this.pushPlaybackState();
+  }
+
+  private isPlaybackPaused(): boolean {
+    if (this.video) return this.video.paused;
+    const playing = Array.from(document.querySelectorAll('video')).some((v) => !v.paused);
+    return !playing;
+  }
+
+  private handleCommandPlayPause(): void {
+    if (this.isPlaybackPaused()) {
+      this.resumePlayback();
+    } else {
+      this.pausePlayback();
+    }
   }
 
   private async translateCue(cue: SubtitleCue): Promise<void> {
@@ -1780,15 +1863,8 @@ export class PipSessionController {
     const doc = this.pipWindow?.document;
     if (!doc) return;
 
-    const video = this.video ?? this.adapter.findVideo();
-    if (video) this.video = video;
-
+    this.pausePlayback();
     const wordShow = this.config.wordShow;
-    if (wordShow?.pauseOnOpen !== false && video && !video.paused) {
-      video.pause();
-      this.updatePlayIcon();
-      this.pushPlaybackState();
-    }
 
     const title = doc.getElementById('ueh-word-panel-title');
     const ctxEl = doc.getElementById('ueh-word-panel-ctx');

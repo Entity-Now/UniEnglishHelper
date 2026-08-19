@@ -36,13 +36,24 @@ function useContainOverscroll(ref: React.RefObject<HTMLElement | null>): void {
 export function SubtitlePanel(props: {
   cue: SubtitleCue | null;
   onWordClick: (surface: string) => void;
+  onSubtitleClick?: () => void;
   highlightMap?: HighlightMap;
   vocabHighlight?: VocabHighlightConfig;
 }) {
-  const { cue, onWordClick, highlightMap = {}, vocabHighlight = DEFAULT_VOCAB_HIGHLIGHT } =
-    props;
+  const {
+    cue,
+    onWordClick,
+    onSubtitleClick,
+    highlightMap = {},
+    vocabHighlight = DEFAULT_VOCAB_HIGHLIGHT,
+  } = props;
   const scrollRef = useRef<HTMLDivElement>(null);
   useContainOverscroll(scrollRef);
+
+  const handlePanelClick = (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest('.ueh-word')) return;
+    onSubtitleClick?.();
+  };
 
   if (!cue) {
     return (
@@ -106,7 +117,11 @@ export function SubtitlePanel(props: {
     );
   });
   return (
-    <div ref={scrollRef} className="ueh-subtitle-panel">
+    <div
+      ref={scrollRef}
+      className="ueh-subtitle-panel"
+      onClick={handlePanelClick}
+    >
       <div
         className={
           hasGloss ? 'ueh-cue-en ueh-en-has-gloss' : 'ueh-cue-en'
