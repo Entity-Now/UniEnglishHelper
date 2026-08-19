@@ -222,7 +222,7 @@ export const DEFAULT_WEBPAGE_TRANSLATE: WebPageTranslateConfig = {
   displayMode: 'bilingual',
   showFloatingButton: true,
   minCharacters: 2,
-  fontSizeScale: 88,
+  fontSizeScale: 94,
   translationColor: '',
 };
 

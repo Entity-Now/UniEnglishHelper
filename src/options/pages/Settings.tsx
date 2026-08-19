@@ -204,7 +204,7 @@ export function SettingsPage(props: {
       <div className="card">
         <h2>网页全文翻译</h2>
         <p className="hint">
-          浏览普通网页或英文技术文档时提供段落双语对照与全文翻译能力。
+          译文继承原文的字体、字重与颜色，作为段落的下一行融入页面，而不是单独的翻译框。
         </p>
         <label className="checkbox">
           <input
@@ -279,13 +279,13 @@ export function SettingsPage(props: {
               type="number"
               min={60}
               max={160}
-              value={form.webPageTranslate?.fontSizeScale ?? 88}
+              value={form.webPageTranslate?.fontSizeScale ?? 94}
               onChange={(e) =>
                 setForm((f) => ({
                   ...f,
                   webPageTranslate: {
                     ...f.webPageTranslate,
-                    fontSizeScale: Number(e.target.value) || 88,
+                    fontSizeScale: Number(e.target.value) || 94,
                   },
                 }))
               }

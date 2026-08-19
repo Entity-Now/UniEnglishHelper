@@ -1,10 +1,10 @@
 /**
- * Floating action widget for in-page translation.
+ * Quiet floating control for in-page translation.
+ * Icon-first so it sits on the page instead of advertising itself as a widget.
  */
 
 import type { AppConfig } from '../../shared/domain/types';
 import type {
-  StatusListener,
   TranslationProgress,
   TranslationStatus,
   ViewMode,
@@ -35,6 +35,9 @@ export class WebpageTranslateFloatingButton {
   private status: TranslationStatus = 'idle';
   private progress: TranslationProgress = { total: 0, completed: 0, failed: 0 };
   private viewMode: ViewMode = 'bilingual';
+  private scrollHideTimer = 0;
+  private onScroll: (() => void) | null = null;
+  private onDocClick: ((e: Event) => void) | null = null;
 
   constructor(
     controller: WebpageTranslateController,
@@ -59,6 +62,8 @@ export class WebpageTranslateFloatingButton {
 
     this.host = document.createElement('div');
     this.host.id = HOST_ID;
+    const pageScheme = getComputedStyle(document.documentElement).colorScheme;
+    if (pageScheme) this.host.style.colorScheme = pageScheme;
     this.shadow = this.host.attachShadow({ mode: 'open' });
 
     const styleEl = document.createElement('style');
@@ -85,6 +90,25 @@ export class WebpageTranslateFloatingButton {
       },
     );
 
+    this.onScroll = () => {
+      if (!this.host) return;
+      this.host.classList.add('ueh-fab-hidden');
+      window.clearTimeout(this.scrollHideTimer);
+      this.scrollHideTimer = window.setTimeout(() => {
+        this.host?.classList.remove('ueh-fab-hidden');
+      }, 280);
+    };
+    window.addEventListener('scroll', this.onScroll, { passive: true, capture: true });
+
+    this.onDocClick = (e: Event) => {
+      if (!this.menuOpen) return;
+      const path = e.composedPath();
+      if (this.host && path.includes(this.host)) return;
+      this.menuOpen = false;
+      this.render();
+    };
+    document.addEventListener('click', this.onDocClick, true);
+
     this.render();
   }
 
@@ -93,109 +117,155 @@ export class WebpageTranslateFloatingButton {
     const container = this.shadow.querySelector('.fab-container');
     if (!container) return;
 
-    container.innerHTML = '';
+    container.replaceChildren();
+
+    const isTranslated = this.status === 'translated' || this.status === 'translating';
 
     if (this.menuOpen) {
       const menu = document.createElement('div');
       menu.className = 'fab-menu';
-
-      const isTranslated = this.status === 'translated' || this.status === 'translating';
+      menu.setAttribute('role', 'menu');
 
       if (!isTranslated) {
-        const btnTranslate = document.createElement('button');
-        btnTranslate.className = 'fab-menu-btn active';
-        btnTranslate.textContent = '🌐 翻译本页';
-        btnTranslate.onclick = () => {
-          this.menuOpen = false;
-          void this.controller.translate();
-        };
-        menu.appendChild(btnTranslate);
+        menu.appendChild(
+          this.menuButton('翻译本页', true, () => {
+            this.menuOpen = false;
+            void this.controller.translate();
+          }),
+        );
       } else {
-        const btnBilingual = document.createElement('button');
-        btnBilingual.className = `fab-menu-btn ${this.viewMode === 'bilingual' ? 'active' : ''}`;
-        btnBilingual.textContent = '📖 双语对照';
-        btnBilingual.onclick = () => {
-          this.menuOpen = false;
-          this.controller.setViewMode('bilingual');
-        };
-        menu.appendChild(btnBilingual);
-
-        const btnTransOnly = document.createElement('button');
-        btnTransOnly.className = `fab-menu-btn ${this.viewMode === 'translation_only' ? 'active' : ''}`;
-        btnTransOnly.textContent = '📝 仅显示译文';
-        btnTransOnly.onclick = () => {
-          this.menuOpen = false;
-          this.controller.setViewMode('translation_only');
-        };
-        menu.appendChild(btnTransOnly);
-
-        const btnOriginal = document.createElement('button');
-        btnOriginal.className = `fab-menu-btn ${this.viewMode === 'original' ? 'active' : ''}`;
-        btnOriginal.textContent = '🔄 恢复原文';
-        btnOriginal.onclick = () => {
-          this.menuOpen = false;
-          this.controller.restore();
-        };
-        menu.appendChild(btnOriginal);
-
+        menu.appendChild(
+          this.menuButton('双语对照', this.viewMode === 'bilingual', () => {
+            this.menuOpen = false;
+            this.controller.setViewMode('bilingual');
+          }),
+        );
+        menu.appendChild(
+          this.menuButton('仅显示译文', this.viewMode === 'translation_only', () => {
+            this.menuOpen = false;
+            this.controller.setViewMode('translation_only');
+          }),
+        );
+        menu.appendChild(
+          this.menuButton('只看原文', false, () => {
+            this.menuOpen = false;
+            this.controller.restore();
+          }),
+        );
         const divider = document.createElement('div');
         divider.className = 'fab-menu-divider';
         menu.appendChild(divider);
-
-        const btnRetranslate = document.createElement('button');
-        btnRetranslate.className = 'fab-menu-btn';
-        btnRetranslate.textContent = '⚡ 重新翻译';
-        btnRetranslate.onclick = () => {
-          this.menuOpen = false;
-          this.controller.restore();
-          void this.controller.translate({ force: true });
-        };
-        menu.appendChild(btnRetranslate);
+        menu.appendChild(
+          this.menuButton('重新翻译', false, () => {
+            this.menuOpen = false;
+            this.controller.restore();
+            void this.controller.translate({ force: true });
+          }),
+        );
       }
 
       container.appendChild(menu);
     }
 
     const pill = document.createElement('div');
-    pill.className = `fab-pill ${this.status === 'translated' ? 'active' : ''}`;
+    const expanded =
+      this.menuOpen || this.status === 'translating' || this.status === 'error';
+    pill.className = `fab-pill${this.status === 'translated' ? ' active' : ''}${expanded ? ' expanded' : ''}`;
+    pill.setAttribute('role', 'button');
+    pill.setAttribute('tabindex', '0');
+    pill.setAttribute('aria-label', '网页翻译');
 
-    let labelText = '翻译网页';
+    let labelText = '翻译';
     if (this.status === 'translating') {
-      labelText = `翻译中 ${this.progress.completed}/${this.progress.total || '…'}`;
+      const total = this.progress.total || 0;
+      labelText = total
+        ? `${this.progress.completed}/${total}`
+        : '翻译中';
     } else if (this.status === 'translated') {
-      labelText = this.viewMode === 'bilingual' ? '双语对照' : this.viewMode === 'translation_only' ? '仅译文' : '已还原';
+      labelText =
+        this.viewMode === 'bilingual'
+          ? '双语'
+          : this.viewMode === 'translation_only'
+            ? '译文'
+            : '原文';
+    } else if (this.status === 'error') {
+      labelText = '重试';
     }
 
-    pill.innerHTML = `
-      <div class="fab-icon">
-        ${this.status === 'translating' ? '<div class="fab-spinner"></div>' : TRANSLATE_ICON_SVG}
-      </div>
-      <span>${labelText}</span>
-    `;
+    const icon = document.createElement('div');
+    icon.className = 'fab-icon';
+    if (this.status === 'translating') {
+      const spinner = document.createElement('div');
+      spinner.className = 'fab-spinner';
+      icon.appendChild(spinner);
+    } else {
+      icon.innerHTML = TRANSLATE_ICON_SVG;
+    }
 
-    pill.onclick = (e) => {
+    const label = document.createElement('span');
+    label.className = 'fab-label';
+    label.textContent = labelText;
+
+    pill.appendChild(icon);
+    pill.appendChild(label);
+
+    const activate = (e: Event) => {
       e.stopPropagation();
-      if (this.status === 'idle' || this.status === 'restored') {
+      if (this.status === 'idle' || this.status === 'restored' || this.status === 'error') {
         void this.controller.translate();
-      } else {
-        this.menuOpen = !this.menuOpen;
-        this.render();
+        return;
       }
+      this.menuOpen = !this.menuOpen;
+      this.render();
     };
+    pill.addEventListener('click', activate);
+    pill.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        activate(e);
+      }
+    });
 
     container.appendChild(pill);
   }
 
+  private menuButton(
+    text: string,
+    active: boolean,
+    onClick: () => void,
+  ): HTMLButtonElement {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `fab-menu-btn${active ? ' active' : ''}`;
+    btn.textContent = text;
+    btn.setAttribute('role', 'menuitem');
+    btn.onclick = onClick;
+    return btn;
+  }
+
   hide(): void {
-    if (this.unsubscribe) {
-      this.unsubscribe();
-      this.unsubscribe = null;
-    }
+    this.teardownListeners();
     if (this.host) {
       this.host.remove();
       this.host = null;
       this.shadow = null;
     }
+  }
+
+  private teardownListeners(): void {
+    if (this.unsubscribe) {
+      this.unsubscribe();
+      this.unsubscribe = null;
+    }
+    if (this.onScroll) {
+      window.removeEventListener('scroll', this.onScroll, true);
+      this.onScroll = null;
+    }
+    if (this.onDocClick) {
+      document.removeEventListener('click', this.onDocClick, true);
+      this.onDocClick = null;
+    }
+    window.clearTimeout(this.scrollHideTimer);
   }
 
   destroy(): void {

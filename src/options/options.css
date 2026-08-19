@@ -519,31 +519,69 @@ input[type='number'] {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
+  gap: 0;
   padding: 0 16px;
   pointer-events: none;
   box-sizing: border-box;
 }
 
+.ueh-sub-preview-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.28em;
+  width: fit-content;
+  max-width: min(920px, 94%);
+  box-sizing: border-box;
+  padding: 8px 18px 9px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  box-shadow:
+    0 10px 36px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(14px) saturate(1.25);
+  pointer-events: auto;
+}
+
+.ueh-sub-preview-layer.ueh-sub-split .ueh-sub-preview-card {
+  display: contents;
+  padding: 0;
+  border: none;
+  box-shadow: none;
+  background: none;
+}
+
 /*
- * Cue chips: block-level centered, wrap long text (NOT inline-block).
- * Mirrors #ueh-sub-en / #ueh-sub-tr.
+ * Cue lines: stacked = text only inside the glass card.
+ * Split = individual glass pills (mirrors #ueh-sub-en / #ueh-sub-tr).
  */
 .ueh-sub-preview-line {
   display: block;
   box-sizing: border-box;
-  max-width: min(920px, 94%);
+  max-width: 100%;
   width: fit-content;
   text-align: center;
-  line-height: 1.35;
-  padding: 4px 10px;
-  border-radius: 6px;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
-  /* Critical: long cues wrap inside the chip (settings "换行") */
+  line-height: 1.42;
+  letter-spacing: 0.01em;
+  padding: 0;
+  border-radius: 0;
+  text-shadow:
+    0 1px 1px rgba(0, 0, 0, 0.55),
+    0 0 14px rgba(0, 0, 0, 0.28);
   white-space: normal;
   overflow-wrap: anywhere;
   word-break: break-word;
   pointer-events: auto;
+}
+
+.ueh-sub-preview-layer.ueh-sub-split .ueh-sub-preview-line {
+  padding: 7px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  box-shadow:
+    0 10px 36px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
 .ueh-sub-preview-en {
@@ -552,21 +590,23 @@ input[type='number'] {
 }
 
 .ueh-sub-preview-tr {
-  color: oklch(88% 0.08 82);
+  color: #f3e2b0;
   font-weight: 500;
+  letter-spacing: 0.03em;
+  line-height: 1.5;
 }
 
 /* Word chips like PiP .ueh-word (inline spans inside the block line) */
 .ueh-sub-preview-word {
   display: inline;
   cursor: default;
-  border-bottom: 1px dashed rgba(255, 255, 255, 0.35);
-  padding: 0 1px;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 32%, transparent);
+  padding: 0 0.12em 0.04em;
+  border-radius: 4px;
 }
 
 .ueh-sub-preview-word:hover {
-  background: color-mix(in srgb, oklch(76% 0.12 82) 45%, transparent);
-  border-radius: 3px;
+  background: color-mix(in srgb, currentColor 18%, transparent);
 }
 
 .ueh-sub-preview-off {

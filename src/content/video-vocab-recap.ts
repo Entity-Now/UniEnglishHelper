@@ -92,8 +92,8 @@ export class VideoVocabRecap {
   async show(): Promise<void> {
     this.open = true;
     this.mount();
-    await this.refresh();
     this.setRootClass(true);
+    await this.refresh();
   }
 
   close(): void {
@@ -136,13 +136,15 @@ export class VideoVocabRecap {
     if (this.root) return;
 
     if (this.mode === 'pip') {
-      const host =
-        this.hostDoc.getElementById('ueh-pip-root') || this.hostDoc.body;
+      const slot =
+        this.hostDoc.getElementById('ueh-pip-recap-slot') ||
+        this.hostDoc.getElementById('ueh-pip-root') ||
+        this.hostDoc.body;
       const root = this.hostDoc.createElement('div');
       root.id = 'ueh-pip-vocab-recap';
       root.style.cssText =
-        'position:absolute;top:0;left:0;bottom:0;width:min(260px,38%);z-index:11;pointer-events:auto;';
-      host.appendChild(root);
+        'width:100%;height:100%;min-height:0;pointer-events:auto;';
+      slot.appendChild(root);
       this.root = root;
     } else {
       // Dock into left gutter; page layout CSS reserves space so video is not covered

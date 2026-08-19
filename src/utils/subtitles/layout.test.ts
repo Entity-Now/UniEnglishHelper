@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applySubtitleLayerLayout,
   clampPositionPercent,
   describeSubtitlePlacement,
   resolveSubtitlePlacement,
@@ -72,5 +73,49 @@ describe('subtitle layout', () => {
         }),
       ),
     ).toContain('堆叠');
+  });
+
+  it('stacked layout puts bilingual order on the inner card', () => {
+    const layer = document.createElement('div');
+    const card = document.createElement('div');
+    card.id = 'ueh-sub-card';
+    const original = document.createElement('div');
+    const translation = document.createElement('div');
+    card.append(original, translation);
+    layer.append(card);
+
+    applySubtitleLayerLayout(layer, original, translation, {
+      placement: resolveSubtitlePlacement({
+        layout: 'stacked',
+        translationPosition: 'above',
+      }),
+    });
+
+    expect(layer.classList.contains('ueh-sub-stacked')).toBe(true);
+    expect(card.style.display).toBe('flex');
+    expect(card.style.flexDirection).toBe('column-reverse');
+    expect(layer.style.flexDirection).toBe('column');
+  });
+
+  it('split layout makes the inner card display:contents', () => {
+    const layer = document.createElement('div');
+    const card = document.createElement('div');
+    card.className = 'ueh-sub-card';
+    const original = document.createElement('div');
+    const translation = document.createElement('div');
+    card.append(original, translation);
+    layer.append(card);
+
+    applySubtitleLayerLayout(layer, original, translation, {
+      placement: resolveSubtitlePlacement({
+        layout: 'split',
+        translationPosition: 'below',
+      }),
+    });
+
+    expect(layer.classList.contains('ueh-sub-split')).toBe(true);
+    expect(card.style.display).toBe('contents');
+    expect(original.style.position).toBe('absolute');
+    expect(translation.style.position).toBe('absolute');
   });
 });

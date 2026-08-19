@@ -4,6 +4,39 @@
  */
 
 import { ICON_BTN_CSS, iconActionButton } from './ui-icons';
+import { SUBTITLE_FONT_FAMILIES } from '../utils/constants/subtitles';
+
+/** Side-rail widths. Opening a panel grows the PiP window by this much. */
+export const PIP_RECAP_PANEL_PX = 280;
+export const PIP_CUELIST_PANEL_PX = 300;
+
+export function pipSidePanelExtraPx(opts: {
+  recapOpen?: boolean;
+  cueListOpen?: boolean;
+}): number {
+  return (
+    (opts.recapOpen ? PIP_RECAP_PANEL_PX : 0) +
+    (opts.cueListOpen ? PIP_CUELIST_PANEL_PX : 0)
+  );
+}
+
+export function clampPipOuterSize(opts: {
+  width: number;
+  height: number;
+  availWidth: number;
+  availHeight: number;
+  minWidth?: number;
+  minHeight?: number;
+}): { width: number; height: number } {
+  const minW = opts.minWidth ?? 480;
+  const minH = opts.minHeight ?? 320;
+  const availW = Math.max(minW, opts.availWidth || minW);
+  const availH = Math.max(minH, opts.availHeight || minH);
+  return {
+    width: Math.max(minW, Math.min(availW, Math.round(opts.width))),
+    height: Math.max(minH, Math.min(availH, Math.round(opts.height))),
+  };
+}
 
 export function buildPipStyles(opts: {
   fontSize: number;
@@ -12,6 +45,10 @@ export function buildPipStyles(opts: {
   translationPosition?: 'above' | 'below';
   mainColor?: string;
   translationColor?: string;
+  translationFontSize?: number;
+  mainWeight?: number;
+  translationWeight?: number;
+  fontFamily?: string;
   underlineWords?: boolean;
   panelWidth?: number;
 }): string {
@@ -19,13 +56,27 @@ export function buildPipStyles(opts: {
     fontSize,
     bgOpacity,
     mainColor = '#fff',
-    translationColor = 'oklch(88% 0.08 82)',
+    translationColor = 'oklch(90% 0.055 88)',
+    translationFontSize,
+    mainWeight = 600,
+    translationWeight = 500,
+    fontFamily = SUBTITLE_FONT_FAMILIES.system,
     underlineWords = true,
     panelWidth = 280,
   } = opts;
   const bg = Math.max(0, Math.min(1, bgOpacity));
+  const trSize = translationFontSize ?? Math.round(fontSize * 0.86);
+  const bare = bg < 0.04;
+  const glassBg = bare
+    ? 'transparent'
+    : `linear-gradient(180deg, rgba(16,18,26,${(bg * 0.78).toFixed(3)}) 0%, rgba(0,0,0,${bg.toFixed(3)}) 100%)`;
+  const glassBorder = bare ? 'none' : '1px solid rgba(255,255,255,0.13)';
+  const glassShadow = bare
+    ? 'none'
+    : '0 10px 36px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.12)';
+  const glassBlur = bare ? 'none' : 'blur(14px) saturate(1.25)';
   const wordBorder = underlineWords
-    ? 'border-bottom: 1px dashed rgba(255,255,255,.35);'
+    ? 'border-bottom: 1px solid color-mix(in srgb, currentColor 32%, transparent);'
     : 'border-bottom: none;';
   return `
     html, body {
@@ -39,20 +90,50 @@ export function buildPipStyles(opts: {
     }
     body + body { display: none !important; }
     #ueh-pip-root {
+      --ueh-pip-recap-w: ${PIP_RECAP_PANEL_PX}px;
+      --ueh-pip-list-w: ${PIP_CUELIST_PANEL_PX}px;
       position: relative;
       width: 100%; height: 100%;
-      display: flex; flex-direction: column;
+      display: flex; flex-direction: row;
+      align-items: stretch;
       background: #000;
-      /* Isolate layout during window resize/move */
+      overflow: hidden;
+    }
+    #ueh-pip-recap-slot,
+    #ueh-pip-cuelist-slot {
+      flex: 0 0 0;
+      width: 0;
+      min-width: 0;
+      overflow: hidden;
+      align-self: stretch;
+      z-index: 12;
+      background: #101116;
+    }
+    #ueh-pip-root.ueh-recap-open #ueh-pip-recap-slot {
+      flex: 0 0 var(--ueh-pip-recap-w);
+      width: var(--ueh-pip-recap-w);
+      border-right: 1px solid rgba(255,255,255,.1);
+    }
+    #ueh-pip-root.ueh-cue-list-open #ueh-pip-cuelist-slot {
+      flex: 0 0 var(--ueh-pip-list-w);
+      width: var(--ueh-pip-list-w);
+      border-left: 1px solid rgba(255,255,255,.1);
+    }
+    #ueh-pip-stage {
+      position: relative;
+      flex: 1 1 auto;
+      min-width: 200px;
+      min-height: 0;
+      height: 100%;
+      background: #000;
       contain: layout style;
     }
     #ueh-video-slot {
       position: absolute;
-      top: 0; left: 0; right: 0; bottom: 0;
+      inset: 0;
       display: flex; align-items: center; justify-content: center;
       background: #000; overflow: hidden;
       contain: strict;
-      transition: left .18s ease, right .18s ease;
     }
     #ueh-video-slot video, #ueh-video-slot canvas {
       width: 100% !important; height: 100% !important;
@@ -60,55 +141,136 @@ export function buildPipStyles(opts: {
       /* Avoid layout thrash while the OS resizes the PiP window */
       pointer-events: none;
     }
-    /* Current cue only — YouTube-like bottom center */
+    /* Current cue — stacked bilingual reads as one glass card */
     #ueh-sub-layer {
       position: absolute; left: 0; right: 0; bottom: 72px;
       z-index: 6; display: flex; flex-direction: column;
-      align-items: center; gap: 4px;
+      align-items: center; gap: 0;
       padding: 0 16px; pointer-events: none;
-      transition: padding-right .2s ease;
+      transition: padding-right .2s ease, padding-left .2s ease;
     }
     #ueh-pip-root.ueh-word-open #ueh-sub-layer {
-      /* keep subtitles clear of the side panel */
-      padding-right: min(300px, 42vw);
+      padding-right: min(300px, 42%);
       padding-left: 12px;
       z-index: 6;
     }
     #ueh-pip-root.ueh-word-open #ueh-chrome {
       z-index: 8;
     }
-    #ueh-sub-en, #ueh-sub-tr {
+    #ueh-sub-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.28em;
+      width: fit-content;
       max-width: min(920px, 94%);
-      text-align: center;
-      line-height: 1.35;
-      padding: 4px 10px;
-      border-radius: 6px;
-      background: rgba(0,0,0,${bg});
-      text-shadow: 0 1px 2px rgba(0,0,0,.85);
-      word-break: break-word;
+      box-sizing: border-box;
+      padding: 8px 18px 9px;
+      border-radius: 16px;
+      background: ${glassBg};
+      border: ${glassBorder};
+      box-shadow: ${glassShadow};
+      backdrop-filter: ${glassBlur};
+      -webkit-backdrop-filter: ${glassBlur};
       pointer-events: auto;
       cursor: pointer;
     }
+    #ueh-sub-card:has(#ueh-sub-en:empty):has(#ueh-sub-tr:empty) {
+      display: none !important;
+      padding: 0;
+      background: none;
+      border: none;
+      box-shadow: none;
+    }
+    #ueh-sub-layer.ueh-sub-split #ueh-sub-card {
+      display: contents;
+      padding: 0;
+      background: none;
+      border: none;
+      box-shadow: none;
+      backdrop-filter: none;
+    }
+    #ueh-sub-en, #ueh-sub-tr {
+      max-width: 100%;
+      text-align: center;
+      font-family: ${fontFamily};
+      font-optical-sizing: auto;
+      text-wrap: pretty;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+      pointer-events: auto;
+      cursor: pointer;
+      text-shadow:
+        0 1px 1px rgba(0,0,0,.55),
+        0 0 14px rgba(0,0,0,.28);
+    }
+    #ueh-sub-layer.ueh-sub-stacked #ueh-sub-en,
+    #ueh-sub-layer.ueh-sub-stacked #ueh-sub-tr {
+      padding: 0;
+      margin: 0;
+      background: none;
+      border: none;
+      border-radius: 0;
+      box-shadow: none;
+    }
+    #ueh-sub-layer.ueh-sub-split #ueh-sub-en,
+    #ueh-sub-layer.ueh-sub-split #ueh-sub-tr {
+      padding: 7px 16px;
+      border-radius: 14px;
+      background: ${glassBg};
+      border: ${glassBorder};
+      box-shadow: ${glassShadow};
+      backdrop-filter: ${glassBlur};
+      -webkit-backdrop-filter: ${glassBlur};
+    }
     #ueh-sub-en {
       font-size: ${fontSize}px;
-      font-weight: 600;
+      font-weight: ${mainWeight};
+      letter-spacing: 0.008em;
+      line-height: 1.42;
       color: ${mainColor};
     }
     #ueh-sub-tr {
-      font-size: ${Math.round(fontSize * 0.88)}px;
-      font-weight: 500;
+      font-size: ${trSize}px;
+      font-weight: ${translationWeight};
+      letter-spacing: 0.03em;
+      line-height: 1.5;
       color: ${translationColor};
     }
-    #ueh-sub-en:empty, #ueh-sub-tr:empty { display: none; padding: 0; background: transparent; }
+    #ueh-sub-layer.ueh-sub-stacked #ueh-sub-tr:not(:empty) {
+      padding-top: 0.06em;
+      opacity: 0.96;
+    }
+    #ueh-sub-en:empty, #ueh-sub-tr:empty {
+      display: none;
+      padding: 0;
+      background: transparent;
+      border: none;
+      box-shadow: none;
+    }
+    #ueh-sub-card.ueh-cue-in {
+      animation: ueh-cue-in 0.22s ease-out;
+    }
+    @keyframes ueh-cue-in {
+      from { opacity: 0; transform: translateY(7px) scale(0.985); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #ueh-sub-card.ueh-cue-in { animation: none; }
+    }
     .ueh-word {
       position: relative;
       cursor: pointer;
       ${wordBorder}
-      padding: 0 1px;
+      padding: 0 0.12em 0.04em;
+      margin: 0 0.02em;
+      border-radius: 4px;
+      transition: background 0.12s ease, border-color 0.12s ease;
     }
     .ueh-word:hover {
-      background: color-mix(in srgb, oklch(76% 0.12 82) 45%, transparent);
-      border-radius: 3px;
+      background: color-mix(in srgb, currentColor 18%, transparent);
+      border-bottom-color: color-mix(in srgb, currentColor 55%, transparent);
     }
     /* Gloss layout injected via #ueh-hl-style (buildHighlightCss) */
 
@@ -164,7 +326,7 @@ export function buildPipStyles(opts: {
       top: 10px;
       right: 10px;
       bottom: 78px;
-      width: min(${panelWidth}px, 38vw);
+      width: min(${panelWidth}px, 46%);
       z-index: 30;
       display: flex;
       flex-direction: column;
@@ -186,10 +348,7 @@ export function buildPipStyles(opts: {
       opacity: 1;
       pointer-events: auto;
     }
-    /* When cue list is open on the right, keep word panel on top and slightly inset */
     #ueh-pip-root.ueh-word-open.ueh-cue-list-open #ueh-word-panel {
-      right: 12px;
-      width: min(${panelWidth}px, 36vw);
       z-index: 32;
     }
     #ueh-word-panel-head {
@@ -257,7 +416,7 @@ export function buildPipStyles(opts: {
       word-break: break-word;
     }
     ${ICON_BTN_CSS}
-    /* Small PiP window: word panel goes full-screen */
+    /* Small PiP window: word panel goes full-screen of the video stage */
     @media (max-height: 400px), (max-width: 420px) {
       #ueh-pip-root.ueh-word-open #ueh-word-panel {
         top: 0 !important;
@@ -309,44 +468,6 @@ export function buildPipStyles(opts: {
     }
     #ueh-pip-root.ueh-ad-active #ueh-sub-layer { opacity: 0.15; }
     #ueh-pip-root.ueh-subs-off #ueh-sub-layer { display: none !important; }
-    /* Side panels own gutters; video + chrome + subs shrink into remaining area */
-    #ueh-pip-root.ueh-cue-list-open #ueh-video-slot {
-      right: min(280px, 42%) !important;
-    }
-    #ueh-pip-root.ueh-cue-list-open #ueh-sub-layer {
-      right: min(280px, 42%);
-      padding-right: 12px;
-      box-sizing: border-box;
-    }
-    #ueh-pip-root.ueh-cue-list-open #ueh-chrome {
-      right: min(280px, 42%) !important;
-    }
-    #ueh-pip-root.ueh-recap-open #ueh-video-slot {
-      left: min(260px, 38%) !important;
-    }
-    #ueh-pip-root.ueh-recap-open #ueh-sub-layer {
-      left: min(260px, 38%);
-      padding-left: 12px;
-      box-sizing: border-box;
-    }
-    #ueh-pip-root.ueh-recap-open #ueh-chrome {
-      left: min(260px, 38%) !important;
-    }
-    #ueh-pip-root.ueh-recap-open.ueh-cue-list-open #ueh-video-slot {
-      left: min(260px, 38%) !important;
-      right: min(280px, 42%) !important;
-    }
-    #ueh-pip-root.ueh-recap-open.ueh-cue-list-open #ueh-sub-layer {
-      left: min(260px, 38%);
-      right: min(280px, 42%);
-      padding-left: 12px;
-      padding-right: 12px;
-      box-sizing: border-box;
-    }
-    #ueh-pip-root.ueh-recap-open.ueh-cue-list-open #ueh-chrome {
-      left: min(260px, 38%) !important;
-      right: min(280px, 42%) !important;
-    }
     .ueh-ico.recap-wrap {
       position: relative;
     }
@@ -500,6 +621,8 @@ export function iconButton(
 export function buildPipMarkup(): string {
   return `
     <div id="ueh-pip-root">
+      <aside id="ueh-pip-recap-slot" aria-label="生词回顾"></aside>
+      <div id="ueh-pip-stage">
       <div id="ueh-video-slot">
         <div style="color:#8b949e;font-size:13px;padding:12px;">加载画面…</div>
       </div>
@@ -511,8 +634,10 @@ export function buildPipMarkup(): string {
         <button type="button" id="ueh-ad-skip" disabled>跳过广告</button>
       </div>
       <div id="ueh-sub-layer">
-        <div id="ueh-sub-en"></div>
-        <div id="ueh-sub-tr"></div>
+        <div id="ueh-sub-card">
+          <div id="ueh-sub-en"></div>
+          <div id="ueh-sub-tr"></div>
+        </div>
       </div>
       <aside id="ueh-word-panel" aria-label="单词释义" aria-hidden="true">
         <div id="ueh-word-panel-head">
@@ -589,6 +714,8 @@ export function buildPipMarkup(): string {
           <span id="ueh-status"></span>
         </div>
       </div>
+      </div>
+      <aside id="ueh-pip-cuelist-slot" aria-label="字幕列表"></aside>
     </div>
   `;
 }

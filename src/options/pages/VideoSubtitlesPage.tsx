@@ -782,14 +782,17 @@ function PipStyleSubtitlePreview(props: {
 
   const lineStyle = (kind: 'en' | 'tr'): React.CSSProperties => {
     const isEn = kind === 'en';
+    const split = appearance.placement.layout === 'split';
     const base: React.CSSProperties = {
       fontSize: isEn ? appearance.enFontPx : appearance.trFontPx,
       fontFamily: appearance.fontCss,
       fontWeight: isEn ? appearance.enWeight : appearance.trWeight,
       color: isEn ? appearance.enColor : appearance.trColor,
-      background: `rgba(0,0,0,${appearance.bg})`,
+      background: split
+        ? `linear-gradient(180deg, rgba(16,18,26,${appearance.bg * 0.78}) 0%, rgba(0,0,0,${appearance.bg}) 100%)`
+        : 'none',
     };
-    if (appearance.placement.layout !== 'split') return base;
+    if (!split) return base;
     const edge = isEn
       ? appearance.placement.originalEdge
       : appearance.placement.translationEdge;
@@ -806,6 +809,25 @@ function PipStyleSubtitlePreview(props: {
     };
   };
 
+  const cardStyle: React.CSSProperties =
+    appearance.placement.layout === 'split'
+      ? {}
+      : {
+          flexDirection: appearance.placement.flexDirection,
+          background:
+            appearance.bg < 0.04
+              ? 'transparent'
+              : `linear-gradient(180deg, rgba(16,18,26,${appearance.bg * 0.78}) 0%, rgba(0,0,0,${appearance.bg}) 100%)`,
+          border:
+            appearance.bg < 0.04
+              ? 'none'
+              : '1px solid rgba(255,255,255,0.13)',
+          boxShadow:
+            appearance.bg < 0.04
+              ? 'none'
+              : '0 10px 36px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.12)',
+        };
+
   const layerStyle: React.CSSProperties =
     appearance.placement.layout === 'split'
       ? {
@@ -816,7 +838,7 @@ function PipStyleSubtitlePreview(props: {
           top: undefined,
         }
       : {
-          flexDirection: appearance.placement.flexDirection,
+          flexDirection: 'column',
           ...(appearance.placement.stackAnchor === 'top'
             ? {
                 top: `${Math.max(6, appearance.placement.percent)}%`,
@@ -852,23 +874,30 @@ function PipStyleSubtitlePreview(props: {
         {!enabled || appearance.mode === 'off' ? (
           <div className="ueh-sub-preview-off">字幕已关闭</div>
         ) : (
-          <div className="ueh-sub-preview-layer" style={layerStyle}>
-            {appearance.showEn ? (
-              <div
-                className="ueh-sub-preview-line ueh-sub-preview-en"
-                style={lineStyle('en')}
-              >
-                {wordNodes}
-              </div>
-            ) : null}
-            {appearance.showTr ? (
-              <div
-                className="ueh-sub-preview-line ueh-sub-preview-tr"
-                style={lineStyle('tr')}
-              >
-                {PREVIEW_TR}
-              </div>
-            ) : null}
+          <div
+            className={`ueh-sub-preview-layer${
+              appearance.placement.layout === 'split' ? ' ueh-sub-split' : ' ueh-sub-stacked'
+            }`}
+            style={layerStyle}
+          >
+            <div className="ueh-sub-preview-card" style={cardStyle}>
+              {appearance.showEn ? (
+                <div
+                  className="ueh-sub-preview-line ueh-sub-preview-en"
+                  style={lineStyle('en')}
+                >
+                  {wordNodes}
+                </div>
+              ) : null}
+              {appearance.showTr ? (
+                <div
+                  className="ueh-sub-preview-line ueh-sub-preview-tr"
+                  style={lineStyle('tr')}
+                >
+                  {PREVIEW_TR}
+                </div>
+              ) : null}
+            </div>
           </div>
         )}
       </div>

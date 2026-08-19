@@ -37,7 +37,7 @@ export const DEFAULT_CONTROLS_HEIGHT = 60;
 export const DEFAULT_SUBTITLE_POSITION = { percent: 10, anchor: 'bottom' as const };
 
 export const SUBTITLE_FONT_FAMILIES: Record<string, string> = {
-  system: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  system: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", sans-serif',
   roboto: 'Roboto, sans-serif',
   'noto-sans': '"Noto Sans", "Noto Sans SC", "Noto Sans JP", "Noto Sans KR", sans-serif',
   'noto-serif': '"Noto Serif", "Noto Serif SC", "Noto Serif JP", "Noto Serif KR", serif',

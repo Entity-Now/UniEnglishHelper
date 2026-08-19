@@ -1,6 +1,7 @@
 /**
- * DOM Tree Walker for Webpage Translation.
- * Extracts translatable text blocks and paragraphs while respecting Site Rules.
+ * DOM walker for webpage translation.
+ * Prefers cheap tag/selector checks over getComputedStyle / innerText so
+ * large articles don't lock the main thread before the first batch goes out.
  */
 
 import type { ResolvedSiteRule } from '../../utils/site-rules/resolve';
@@ -9,6 +10,12 @@ export interface TranslatableParagraph {
   id: string;
   element: HTMLElement;
   text: string;
+  inline: boolean;
+}
+
+export interface ExtractOptions {
+  minCharacters?: number;
+  targetLang?: string;
 }
 
 const IGNORED_TAGS = new Set([
@@ -43,97 +50,264 @@ const BLOCK_TAGS = new Set([
   'H6',
   'LI',
   'BLOCKQUOTE',
-  'ARTICLE',
-  'SECTION',
-  'ASIDE',
-  'HEADER',
-  'FOOTER',
   'FIGCAPTION',
   'DD',
   'DT',
   'TD',
   'TH',
+  'SUMMARY',
+  'CAPTION',
+  'LEGEND',
+  'LABEL',
 ]);
 
+const BLOCK_SELECTOR = [
+  'p',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'li',
+  'blockquote',
+  'figcaption',
+  'dd',
+  'dt',
+  'td',
+  'th',
+  'summary',
+  'caption',
+].join(',');
+
+const SKIP_CLOSEST =
+  'nav, [role="navigation"], [role="menu"], [role="menubar"], [role="tablist"], [role="combobox"]';
+
+const HIDDEN_CLOSEST = '[hidden], [aria-hidden="true"]';
+
 let paragraphCounter = 0;
+
+function isExtensionHost(el: HTMLElement): boolean {
+  return Boolean(
+    el.id?.startsWith('ueh-') ||
+      el.closest?.('#ueh-web-translate-host, [data-ueh-translated]'),
+  );
+}
+
+function isExplicitlySkipped(el: HTMLElement): boolean {
+  return (
+    el.classList?.contains('notranslate') ||
+    el.getAttribute('translate') === 'no' ||
+    el.getAttribute('contenteditable') === 'true' ||
+    el.hasAttribute('data-ueh-translated') ||
+    el.hasAttribute('data-ueh-trans-id') ||
+    el.classList?.contains('ueh-translated-block') ||
+    el.classList?.contains('ueh-translated-inline') ||
+    el.classList?.contains('ueh-original-wrap') ||
+    el.classList?.contains('ueh-has-translation')
+  );
+}
+
+/**
+ * True when `text` is already predominantly written in `targetLang`.
+ * Used to skip CJK (etc.) hosts when the user is translating into that language.
+ */
+export function looksLikeTargetLanguage(text: string, targetLang: string): boolean {
+  const lang = targetLang.toLowerCase();
+  const compact = text.replace(/\s+/g, '');
+  if (compact.length < 6) return false;
+
+  const ratio = (re: RegExp): number => {
+    const m = compact.match(re);
+    return (m ? m.length : 0) / compact.length;
+  };
+
+  if (
+    lang.startsWith('zh') ||
+    lang.startsWith('yue') ||
+    lang === 'cht' ||
+    lang === 'chs'
+  ) {
+    return ratio(/[\u4e00-\u9fff]/g) >= 0.32;
+  }
+  if (lang.startsWith('ja')) {
+    return ratio(/[\u3040-\u30ff\u4e00-\u9fff]/g) >= 0.32;
+  }
+  if (lang.startsWith('ko')) {
+    return ratio(/[\uac00-\ud7af]/g) >= 0.32;
+  }
+  if (
+    lang.startsWith('ar') ||
+    lang.startsWith('he') ||
+    lang.startsWith('fa') ||
+    lang.startsWith('ur')
+  ) {
+    return ratio(/[\u0600-\u06ff\u0590-\u05ff]/g) >= 0.32;
+  }
+  if (lang.startsWith('en') || lang.startsWith('fr') || lang.startsWith('de') || lang.startsWith('es')) {
+    return ratio(/[A-Za-z]/g) >= 0.62 && ratio(/[\u4e00-\u9fff]/g) < 0.08;
+  }
+  return false;
+}
+
+function readableText(el: HTMLElement): string {
+  const raw = (el.textContent ?? '').replace(/\s+/g, ' ').trim();
+  return raw;
+}
+
+function isLeafDiv(el: HTMLElement): boolean {
+  if (el.tagName !== 'DIV') return false;
+  for (const child of el.children) {
+    const tag = child.tagName;
+    if (
+      BLOCK_TAGS.has(tag) ||
+      tag === 'DIV' ||
+      tag === 'UL' ||
+      tag === 'OL' ||
+      tag === 'DL' ||
+      tag === 'TABLE' ||
+      tag === 'SECTION' ||
+      tag === 'ARTICLE' ||
+      tag === 'NAV' ||
+      tag === 'HEADER' ||
+      tag === 'FOOTER' ||
+      tag === 'PRE' ||
+      tag === 'FIGURE'
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function acceptElement(
+  el: HTMLElement,
+  siteRule: ResolvedSiteRule,
+): boolean {
+  if (!el.tagName || IGNORED_TAGS.has(el.tagName)) return false;
+  if (isExtensionHost(el) || isExplicitlySkipped(el)) return false;
+  if (el.closest(SKIP_CLOSEST) || el.closest(HIDDEN_CLOSEST)) return false;
+  if (siteRule.excludeSelector) {
+    try {
+      if (el.matches(siteRule.excludeSelector) || el.closest(siteRule.excludeSelector)) {
+        return false;
+      }
+    } catch {
+      // Invalid selector already filtered at resolve time; ignore.
+    }
+  }
+  return true;
+}
+
+function collectCandidates(
+  root: HTMLElement,
+  siteRule: ResolvedSiteRule,
+): HTMLElement[] {
+  const out: HTMLElement[] = [];
+  const seen = new Set<HTMLElement>();
+
+  const push = (el: HTMLElement) => {
+    if (seen.has(el)) return;
+    seen.add(el);
+    out.push(el);
+  };
+
+  const scopes: HTMLElement[] = [];
+  if (siteRule.includeSelector) {
+    try {
+      if (root.matches(siteRule.includeSelector)) scopes.push(root);
+      root.querySelectorAll(siteRule.includeSelector).forEach((n) => {
+        if (n instanceof HTMLElement) scopes.push(n);
+      });
+    } catch {
+      scopes.push(root);
+    }
+  }
+  if (scopes.length === 0) scopes.push(root);
+
+  const extraBlock = siteRule.forceBlockSelector;
+  const extraInline = siteRule.forceInlineSelector;
+  const query = extraBlock ? `${BLOCK_SELECTOR},${extraBlock}` : BLOCK_SELECTOR;
+
+  for (const scope of scopes) {
+    try {
+      if (acceptElement(scope, siteRule)) push(scope);
+      scope.querySelectorAll(query).forEach((n) => {
+        if (n instanceof HTMLElement) push(n);
+      });
+      if (extraInline) {
+        scope.querySelectorAll(extraInline).forEach((n) => {
+          if (n instanceof HTMLElement) push(n);
+        });
+      }
+    } catch {
+      // malformed extra selector
+    }
+  }
+
+  // Semantic-tag sparse pages (div soup): pick leaf divs inside main/article.
+  if (out.length < 4) {
+    const article =
+      (root.matches?.('article, main, [role="main"]') ? root : null) ??
+      (root.querySelector('article, main, [role="main"]') as HTMLElement | null) ??
+      root;
+    article.querySelectorAll('div').forEach((n) => {
+      if (n instanceof HTMLElement && isLeafDiv(n)) push(n);
+    });
+  }
+
+  return out;
+}
 
 export function extractTranslatableParagraphs(
   root: HTMLElement | Document = document.body,
   siteRule: ResolvedSiteRule,
-  minCharacters = 2,
+  minCharactersOrOptions: number | ExtractOptions = 2,
 ): TranslatableParagraph[] {
+  const options: ExtractOptions =
+    typeof minCharactersOrOptions === 'number'
+      ? { minCharacters: minCharactersOrOptions }
+      : minCharactersOrOptions ?? {};
+
   const list: TranslatableParagraph[] = [];
   if (!root || !('querySelectorAll' in root)) return list;
 
-  const minChars = siteRule.minCharacters ?? minCharacters;
+  const host = (root as Document).body ?? (root as HTMLElement);
+  if (!host) return list;
+
+  const minChars = options.minCharacters ?? siteRule.minCharacters ?? 2;
   const minWords = siteRule.minWords ?? 0;
+  const targetLang = options.targetLang;
 
-  const walker = document.createTreeWalker(
-    root === document ? document.body : (root as HTMLElement),
-    NodeFilter.SHOW_ELEMENT,
-    {
-      acceptNode(node: Node): number {
-        const el = node as HTMLElement;
-        if (!el || !el.tagName) return NodeFilter.FILTER_REJECT;
+  const candidates = collectCandidates(host, siteRule);
 
-        // Skip ignored tags
-        if (IGNORED_TAGS.has(el.tagName)) return NodeFilter.FILTER_REJECT;
-
-        // Skip extension hosts and components
-        if (
-          el.id?.startsWith('ueh-') ||
-          el.classList?.contains('notranslate') ||
-          el.getAttribute('translate') === 'no' ||
-          el.getAttribute('contenteditable') === 'true' ||
-          el.hasAttribute('data-ueh-translated')
-        ) {
-          return NodeFilter.FILTER_REJECT;
-        }
-
-        // Apply site rule exclude selector
-        if (siteRule.excludeSelector && el.matches(siteRule.excludeSelector)) {
-          return NodeFilter.FILTER_REJECT;
-        }
-
-        return NodeFilter.FILTER_ACCEPT;
-      },
-    },
-  );
-
-  const candidateElements: HTMLElement[] = [];
-  let current = walker.nextNode() as HTMLElement | null;
-  while (current) {
-    candidateElements.push(current);
-    current = walker.nextNode() as HTMLElement | null;
-  }
-
-  for (const el of candidateElements) {
-    if (el.hasAttribute('data-ueh-trans-id')) continue;
-    if (el.querySelector('.ueh-translated-block, .ueh-translated-inline')) continue;
-
-    // If include selector is active, enforce it
-    if (siteRule.includeSelector && !el.matches(siteRule.includeSelector) && !el.closest(siteRule.includeSelector)) {
+  for (const el of candidates) {
+    if (!acceptElement(el, siteRule)) continue;
+    if (el.querySelector('.ueh-translated-block, .ueh-translated-inline, .ueh-original-wrap')) {
       continue;
     }
 
-    const isBlock =
-      BLOCK_TAGS.has(el.tagName) ||
-      (siteRule.forceBlockSelector && el.matches(siteRule.forceBlockSelector)) ||
-      window.getComputedStyle(el).display === 'block';
-
-    if (!isBlock) continue;
-
-    // Ensure we don't select a parent block if its children are blocks with translatable content
-    const hasBlockChildren = Array.from(el.children).some(
-      (child) =>
-        BLOCK_TAGS.has(child.tagName) ||
-        (child instanceof HTMLElement &&
-          window.getComputedStyle(child).display === 'block'),
+    const forcedInline = Boolean(
+      siteRule.forceInlineSelector && el.matches(siteRule.forceInlineSelector),
     );
+    const forcedBlock = Boolean(
+      siteRule.forceBlockSelector && el.matches(siteRule.forceBlockSelector),
+    );
+    const isBlock = forcedBlock || BLOCK_TAGS.has(el.tagName) || isLeafDiv(el);
 
-    if (hasBlockChildren) continue;
+    if (!forcedInline && !isBlock) continue;
 
-    const rawText = el.innerText?.trim() ?? '';
+    // Prefer leaf blocks: skip containers that wrap other paragraphs/headings/items.
+    if (
+      !forcedInline &&
+      !forcedBlock &&
+      el.querySelector('p, h1, h2, h3, h4, h5, h6, li, blockquote')
+    ) {
+      continue;
+    }
+    if (el.tagName === 'LI' && el.querySelector('ul, ol')) continue;
+
+    const rawText = readableText(el);
     if (!rawText || rawText.length < minChars) continue;
 
     if (minWords > 0) {
@@ -141,9 +315,33 @@ export function extractTranslatableParagraphs(
       if (wordsCount < minWords) continue;
     }
 
-    const id = `ueh-p-${Date.now()}-${++paragraphCounter}`;
-    list.push({ id, element: el, text: rawText });
+    if (targetLang && looksLikeTargetLanguage(rawText, targetLang)) continue;
+
+    const id = `ueh-p-${++paragraphCounter}`;
+    list.push({
+      id,
+      element: el,
+      text: rawText,
+      inline: forcedInline && !forcedBlock,
+    });
   }
 
   return list;
+}
+
+export function isOwnTranslationNode(el: Element): boolean {
+  if (!(el instanceof HTMLElement)) return false;
+  return (
+    el.id === 'ueh-web-translate-host' ||
+    el.id === 'ueh-webpage-translate-style' ||
+    el.hasAttribute('data-ueh-translated') ||
+    el.classList.contains('ueh-translated-block') ||
+    el.classList.contains('ueh-translated-inline') ||
+    el.classList.contains('ueh-original-wrap') ||
+    Boolean(
+      el.closest(
+        '#ueh-web-translate-host, [data-ueh-translated], .ueh-original-wrap, .ueh-translated-block, .ueh-translated-inline',
+      ),
+    )
+  );
 }

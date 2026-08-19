@@ -58,8 +58,9 @@ export function SubtitlePanel(props: {
   if (!cue) {
     return (
       <div ref={scrollRef} className="ueh-subtitle-panel">
-        <div className="ueh-cue-en ueh-cue-empty">No subtitle</div>
-        <div className="ueh-cue-tr" />
+        <div className="ueh-cue-card">
+          <div className="ueh-cue-en ueh-cue-empty">No subtitle</div>
+        </div>
       </div>
     );
   }
@@ -122,18 +123,18 @@ export function SubtitlePanel(props: {
       className="ueh-subtitle-panel"
       onClick={handlePanelClick}
     >
-      <div
-        className={
-          hasGloss ? 'ueh-cue-en ueh-en-has-gloss' : 'ueh-cue-en'
-        }
-      >
-        {wordNodes}
+      <div className="ueh-cue-card">
+        <div
+          className={
+            hasGloss ? 'ueh-cue-en ueh-en-has-gloss' : 'ueh-cue-en'
+          }
+        >
+          {wordNodes}
+        </div>
+        {cue.translation?.trim() ? (
+          <div className="ueh-cue-tr">{cue.translation}</div>
+        ) : null}
       </div>
-      {cue.translation?.trim() ? (
-        <div className="ueh-cue-tr">{cue.translation}</div>
-      ) : (
-        <div className="ueh-cue-tr" aria-hidden />
-      )}
     </div>
   );
 }

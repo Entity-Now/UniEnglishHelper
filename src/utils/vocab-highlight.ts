@@ -173,16 +173,16 @@ export function buildWordGlossCss(): string {
     .ueh-word-gloss {
       position: absolute;
       left: 50%;
-      top: calc(100% + 0.18em);
+      top: calc(100% + 0.2em);
       transform: translateX(-50%);
       z-index: 2;
       display: block;
       box-sizing: border-box;
-      font-size: 0.52em;
+      font-size: 0.5em;
       font-weight: 600;
       line-height: 1.15;
-      letter-spacing: 0.02em;
-      opacity: 0.95;
+      letter-spacing: 0.03em;
+      opacity: 0.96;
       max-width: 6.5em;
       min-width: 1.2em;
       overflow: hidden;
@@ -191,10 +191,11 @@ export function buildWordGlossCss(): string {
       color: #fff;
       pointer-events: none;
       user-select: none;
-      padding: 0.12em 0.35em;
+      padding: 0.14em 0.4em;
       border-radius: 999px;
-      background: rgba(0, 0, 0, 0.55);
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+      background: rgba(8, 10, 16, 0.72);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
       text-shadow: none;
       filter: none;
     }
@@ -249,19 +250,19 @@ export function buildHighlightCss(cfg: VocabHighlightConfig): string {
   return `
     ${buildWordGlossCss()}
     .ueh-word.ueh-hl-new {
-      background: color-mix(in srgb, ${cfg.newColor} 42%, transparent);
+      background: color-mix(in srgb, ${cfg.newColor} 34%, transparent);
       border-bottom-color: ${cfg.newColor} !important;
-      border-radius: 3px;
+      border-radius: 5px;
     }
     .ueh-word.ueh-hl-learning {
-      background: color-mix(in srgb, ${cfg.learningColor} 42%, transparent);
+      background: color-mix(in srgb, ${cfg.learningColor} 34%, transparent);
       border-bottom-color: ${cfg.learningColor} !important;
-      border-radius: 3px;
+      border-radius: 5px;
     }
     .ueh-word.ueh-hl-learned {
-      background: color-mix(in srgb, ${cfg.learnedColor} 38%, transparent);
+      background: color-mix(in srgb, ${cfg.learnedColor} 30%, transparent);
       border-bottom-color: ${cfg.learnedColor} !important;
-      border-radius: 3px;
+      border-radius: 5px;
     }
   `;
 }

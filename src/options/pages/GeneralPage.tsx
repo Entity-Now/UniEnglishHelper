@@ -83,7 +83,7 @@ export function GeneralPage(props: {
       <div className="card">
         <h2>网页全文翻译</h2>
         <p className="hint">
-          浏览普通网页或英文文档时提供段落双语对照与全文翻译能力。
+          浏览网页时在原文下方插入一行译文。译文继承原文的字体、字重与颜色，作为同一段落的第二行，而不是悬浮字幕。
         </p>
         <label className="checkbox">
           <input
@@ -159,13 +159,13 @@ export function GeneralPage(props: {
               type="number"
               min={60}
               max={160}
-              value={form.webPageTranslate?.fontSizeScale ?? 88}
+              value={form.webPageTranslate?.fontSizeScale ?? 94}
               onChange={(e) =>
                 setForm({
                   ...form,
                   webPageTranslate: {
                     ...form.webPageTranslate,
-                    fontSizeScale: Number(e.target.value) || 88,
+                    fontSizeScale: Number(e.target.value) || 94,
                   },
                 })
               }
@@ -241,24 +241,43 @@ export function GeneralPage(props: {
         <div
           style={{
             marginTop: 12,
-            padding: '10px 14px',
+            padding: '12px 14px',
             borderRadius: 6,
             background: 'var(--rf-secondary)',
             border: '1px solid var(--rf-border)',
           }}
         >
-          <div style={{ fontSize: 13, fontWeight: 500 }}>
+          <div style={{ fontSize: 18, fontWeight: 700, lineHeight: 1.35 }}>
             Stay hungry, stay foolish.
+            <div
+              style={{
+                marginTop: '0.18em',
+                fontSize: `${(form.webPageTranslate?.fontSizeScale ?? 94) / 100}em`,
+                fontWeight: 'inherit',
+                color:
+                  form.webPageTranslate?.translationColor ||
+                  'color-mix(in srgb, currentColor 68%, transparent)',
+                lineHeight: 'inherit',
+              }}
+            >
+              求知若饥，虚心若愚。
+            </div>
           </div>
-          <div
-            style={{
-              marginTop: '0.25em',
-              fontSize: `${(form.webPageTranslate?.fontSizeScale ?? 88) / 100}em`,
-              color: form.webPageTranslate?.translationColor || '#6b7280',
-              lineHeight: 1.5,
-            }}
-          >
-            求知若饥，虚心若愚。（排版预览）
+          <div style={{ marginTop: 12, fontSize: 13, fontWeight: 400, lineHeight: 1.6 }}>
+            The translation sits in the same type scale as the original.
+            <div
+              style={{
+                marginTop: '0.18em',
+                fontSize: `${(form.webPageTranslate?.fontSizeScale ?? 94) / 100}em`,
+                fontWeight: 'inherit',
+                color:
+                  form.webPageTranslate?.translationColor ||
+                  'color-mix(in srgb, currentColor 68%, transparent)',
+                lineHeight: 'inherit',
+              }}
+            >
+              译文与原文共用同一套字号、字重和行高。
+            </div>
           </div>
         </div>
       </div>

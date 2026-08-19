@@ -161,6 +161,30 @@ export function applySubtitleLayerLayout(
   clearEdge(originalEl);
   clearEdge(translationEl);
 
+  const card =
+    (layer.querySelector('#ueh-sub-card') as HTMLElement | null) ??
+    (layer.querySelector('.ueh-sub-card') as HTMLElement | null);
+  layer.classList.toggle('ueh-sub-split', placement.layout === 'split');
+  layer.classList.toggle('ueh-sub-stacked', placement.layout !== 'split');
+  if (card) {
+    if (placement.layout === 'split') {
+      card.style.display = 'contents';
+      card.style.flexDirection = '';
+      card.style.width = '';
+      card.style.maxWidth = '';
+      card.style.gap = '';
+    } else {
+      card.style.display = 'flex';
+      card.style.flexDirection = placement.flexDirection;
+      card.style.alignItems = 'center';
+      card.style.justifyContent = 'center';
+      card.style.gap = '';
+      card.style.width = 'fit-content';
+      card.style.maxWidth = 'min(920px, 94%)';
+      card.style.boxSizing = 'border-box';
+    }
+  }
+
   if (placement.layout === 'split') {
     layer.style.position = 'absolute';
     layer.style.left = '0';
@@ -203,9 +227,10 @@ export function applySubtitleLayerLayout(
   layer.style.left = '0';
   layer.style.right = '0';
   layer.style.display = 'flex';
-  layer.style.flexDirection = placement.flexDirection;
+  // Inner card owns bilingual order so the glass capsule stays one unit.
+  layer.style.flexDirection = card ? 'column' : placement.flexDirection;
   layer.style.alignItems = 'center';
-  layer.style.gap = '4px';
+  layer.style.gap = card ? '0' : '4px';
   layer.style.padding = '0 12px';
   layer.style.pointerEvents = 'none';
   layer.style.transform = '';

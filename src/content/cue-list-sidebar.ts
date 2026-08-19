@@ -200,13 +200,15 @@ export class CueListSidebar {
   }
 
   private mountPip(): void {
-    const host =
-      this.hostDoc.getElementById('ueh-pip-root') || this.hostDoc.body;
+    const slot =
+      this.hostDoc.getElementById('ueh-pip-cuelist-slot') ||
+      this.hostDoc.getElementById('ueh-pip-root') ||
+      this.hostDoc.body;
     const root = this.hostDoc.createElement('div');
     root.id = 'ueh-pip-cue-list';
     root.style.cssText =
-      'position:absolute;top:0;right:0;bottom:0;width:min(280px,42%);z-index:11;pointer-events:auto;';
-    host.appendChild(root);
+      'width:100%;height:100%;min-height:0;pointer-events:auto;';
+    slot.appendChild(root);
     this.root = root;
     this.shadow = root.attachShadow({ mode: 'open' });
     this.injectChrome();

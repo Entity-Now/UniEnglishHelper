@@ -137,14 +137,14 @@ export const DEFAULT_PIP_SUBTITLE_SURFACE: SubtitleSurfaceConfig = {
     displayMode: 'bilingual',
     layout: 'stacked',
     translationPosition: 'below',
-    main: { ...DEFAULT_SUBTITLE_TEXT_STYLE, fontScale: 85, fontWeight: 600 },
+    main: { ...DEFAULT_SUBTITLE_TEXT_STYLE, fontScale: 90, fontWeight: 600 },
     translation: {
       fontFamily: 'system',
-      fontScale: 75,
-      color: '#E8D5A3',
+      fontScale: 80,
+      color: '#F3E2B0',
       fontWeight: 500,
     },
-    container: { backgroundOpacity: 60 },
+    container: { backgroundOpacity: 48 },
   },
   position: { percent: 12, anchor: 'bottom' },
 };

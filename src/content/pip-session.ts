@@ -22,8 +22,10 @@ import {
 import {
   buildPipMarkup,
   buildPipStyles,
+  clampPipOuterSize,
   formatTime,
   ICONS,
+  pipSidePanelExtraPx,
 } from './pip-ui-shell';
 import {
   detectYoutubeAdStatus,
@@ -41,6 +43,7 @@ import {
   applySubtitleLayerLayout,
   resolveSubtitlePlacement,
 } from '../utils/subtitles/layout';
+import { SUBTITLE_FONT_FAMILIES } from '../utils/constants/subtitles';
 import { CueListSidebar } from './cue-list-sidebar';
 import { CueTranslateScheduler } from './cue-translate';
 import {
@@ -98,6 +101,13 @@ export class PipSessionController {
   private vocabRecap: VideoVocabRecap | null = null;
   /** Throttle PiP chrome / bridge UI updates (ms timestamp). */
   private lastUiPushMs = 0;
+  /** Last cue id painted in PiP — used to replay the enter animation. */
+  private lastPipCueId = '';
+  /** PiP outer width minus side-panel extras (video stage). */
+  private pipBaseOuterWidth = 0;
+  /** Extra pixels currently added for recap / cue-list rails. */
+  private pipPanelExtraPx = 0;
+  private syncingPipSize = false;
   private lastUiKey = '';
   /** Last cue id we already scheduled translate prefetch for. */
   private lastPrefetchCueId = '';
@@ -194,8 +204,13 @@ export class PipSessionController {
 
   private buildPipStyleSheet(): string {
     const vs = this.pipSurface().style;
-    const fontSize = Math.round(18 * ((vs?.main.fontScale ?? 85) / 100));
-    const bgOpacity = (vs?.container.backgroundOpacity ?? 60) / 100;
+    const mainScale = vs?.main.fontScale ?? 90;
+    const fontSize = Math.round(18 * (mainScale / 100));
+    const trScale = vs?.translation.fontScale ?? Math.round(mainScale * 0.86);
+    const bgOpacity = (vs?.container.backgroundOpacity ?? 48) / 100;
+    const fontFamily =
+      SUBTITLE_FONT_FAMILIES[vs?.main.fontFamily ?? 'system'] ??
+      SUBTITLE_FONT_FAMILIES.system;
     return buildPipStyles({
       fontSize,
       bgOpacity,
@@ -203,6 +218,10 @@ export class PipSessionController {
       translationPosition: vs?.translationPosition ?? 'below',
       mainColor: vs?.main.color,
       translationColor: vs?.translation.color,
+      translationFontSize: Math.round(18 * (trScale / 100)),
+      mainWeight: vs?.main.fontWeight ?? 600,
+      translationWeight: vs?.translation.fontWeight ?? 500,
+      fontFamily,
       underlineWords: this.config.wordShow?.underlineWords !== false,
       panelWidth: this.config.wordShow?.panelWidth ?? 280,
     });
@@ -307,6 +326,43 @@ export class PipSessionController {
     }
 
     this.vocabRecap.toggle();
+    this.syncPipSidePanelWindow();
+  }
+
+  /**
+   * Grow / shrink the Document PiP window so recap / cue-list rails sit
+   * beside the video instead of covering it.
+   */
+  private syncPipSidePanelWindow(): void {
+    const win = this.pipWindow;
+    if (!win) return;
+    const root = win.document.getElementById('ueh-pip-root');
+    const extra = pipSidePanelExtraPx({
+      recapOpen: root?.classList.contains('ueh-recap-open'),
+      cueListOpen: root?.classList.contains('ueh-cue-list-open'),
+    });
+    if (!this.pipBaseOuterWidth) {
+      this.pipBaseOuterWidth = Math.max(480, win.outerWidth - this.pipPanelExtraPx);
+    }
+    const availW = (win.screen.availWidth || win.screen.width || 1280) - 16;
+    const availH = (win.screen.availHeight || win.screen.height || 720) - 16;
+    const opening = extra > this.pipPanelExtraPx;
+    const next = clampPipOuterSize({
+      width: this.pipBaseOuterWidth + extra,
+      height: opening ? Math.max(win.outerHeight, 420) : win.outerHeight,
+      availWidth: availW,
+      availHeight: availH,
+    });
+    this.syncingPipSize = true;
+    try {
+      win.resizeTo(next.width, next.height);
+    } catch {
+      // Document PiP may ignore resizeTo on some hosts; layout still won't overlay.
+    }
+    window.setTimeout(() => {
+      this.syncingPipSize = false;
+      this.pipPanelExtraPx = extra;
+    }, 40);
   }
 
   private injectHighlightCss(): void {
@@ -416,6 +472,15 @@ export class PipSessionController {
       this.sampler.attach(this.video);
       this.startTicker();
       this.bindHotkeys(this.pipWindow);
+      this.pipBaseOuterWidth = this.pipWindow.outerWidth;
+      this.pipPanelExtraPx = 0;
+      this.pipWindow.addEventListener('resize', () => {
+        if (this.syncingPipSize || !this.pipWindow) return;
+        this.pipBaseOuterWidth = Math.max(
+          480,
+          this.pipWindow.outerWidth - this.pipPanelExtraPx,
+        );
+      });
       this.pipWindow.addEventListener('pagehide', () => {
         void this.close();
       });
@@ -656,6 +721,10 @@ export class PipSessionController {
     this.setPagePlayerDimmed(false);
     this.hideClickToOpenBanner();
     this.lastUiPushMs = 0;
+    this.lastPipCueId = '';
+    this.pipBaseOuterWidth = 0;
+    this.pipPanelExtraPx = 0;
+    this.syncingPipSize = false;
     this.lastUiKey = '';
     this.lastPrefetchCueId = '';
     this.lastPlayIconPaused = null;
@@ -1469,12 +1538,21 @@ export class PipSessionController {
       en.textContent = '';
       tr.textContent = '';
       syncEnGlossClass(en);
+      this.lastPipCueId = '';
       return;
     }
 
     const layer = doc.getElementById('ueh-sub-layer');
     if (layer) {
       this.applyPipSubtitleLayout(layer, en, tr);
+    }
+
+    const card = doc.getElementById('ueh-sub-card');
+    if (card && cue.id !== this.lastPipCueId) {
+      card.classList.remove('ueh-cue-in');
+      void card.offsetWidth;
+      card.classList.add('ueh-cue-in');
+      this.lastPipCueId = cue.id;
     }
 
     const showOriginal = this.resolveShowOriginal();
@@ -1853,6 +1931,7 @@ export class PipSessionController {
       this.cueList.setHighlightMap(this.highlightMap);
     }
     this.cueList.toggle();
+    this.syncPipSidePanelWindow();
     if (this.cueList.isOpen()) {
       this.cueList.setActiveCueId(this.currentCue?.id ?? null);
       if (this.wantsAutoTranslate()) void this.translateScheduler.drainAll();

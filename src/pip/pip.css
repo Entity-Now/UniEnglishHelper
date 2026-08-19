@@ -66,11 +66,31 @@ body,
   background: transparent;
 }
 
+.ueh-cue-card {
+  width: fit-content;
+  max-width: 100%;
+  padding: 8px 16px 9px;
+  border-radius: 16px;
+  background: linear-gradient(
+    180deg,
+    rgba(16, 18, 26, 0.42) 0%,
+    rgba(0, 0, 0, 0.48) 100%
+  );
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  box-shadow:
+    0 10px 36px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(14px) saturate(1.25);
+}
+
 .ueh-cue-en {
   font-size: 18px;
-  line-height: 1.4;
+  font-weight: 600;
+  letter-spacing: 0.008em;
+  line-height: 1.42;
   word-break: break-word;
   overflow-wrap: anywhere;
+  text-wrap: pretty;
 }
 
 .ueh-cue-en.ueh-cue-empty {
@@ -80,10 +100,13 @@ body,
 }
 
 .ueh-cue-tr {
-  margin-top: 6px;
+  margin-top: 0.28em;
   font-size: 15px;
-  color: #9ecbff;
-  opacity: 0.9;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  line-height: 1.5;
+  color: #f3e2b0;
+  opacity: 0.96;
   word-break: break-word;
   overflow-wrap: anywhere;
 }
@@ -91,13 +114,14 @@ body,
 .ueh-word {
   position: relative;
   cursor: pointer;
-  border-bottom: 1px dashed rgba(255, 255, 255, 0.3);
-  padding: 0 1px;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 32%, transparent);
+  padding: 0 0.12em 0.04em;
+  border-radius: 4px;
+  transition: background 0.12s ease;
 }
 
 .ueh-word:hover {
-  background: rgba(31, 111, 235, 0.35);
-  border-radius: 2px;
+  background: color-mix(in srgb, currentColor 18%, transparent);
 }
 
 /* Under-word gloss: absolute, clear gap under English word */
@@ -124,16 +148,16 @@ body,
 .ueh-word-gloss {
   position: absolute;
   left: 50%;
-  top: calc(100% + 0.18em);
+  top: calc(100% + 0.2em);
   transform: translateX(-50%);
   z-index: 2;
   display: block;
   box-sizing: border-box;
-  font-size: 0.52em;
+  font-size: 0.5em;
   font-weight: 600;
   line-height: 1.15;
-  letter-spacing: 0.02em;
-  opacity: 0.95;
+  letter-spacing: 0.03em;
+  opacity: 0.96;
   max-width: 6.5em;
   min-width: 1.2em;
   overflow: hidden;
@@ -142,10 +166,11 @@ body,
   color: #fff;
   pointer-events: none;
   user-select: none;
-  padding: 0.12em 0.35em;
+  padding: 0.14em 0.4em;
   border-radius: 999px;
-  background: rgba(0, 0, 0, 0.55);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  background: rgba(8, 10, 16, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
   text-shadow: none;
   filter: none;
 }
