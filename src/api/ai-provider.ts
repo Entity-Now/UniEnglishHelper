@@ -201,11 +201,11 @@ async function explainWithFreeMt(
 }
 
 const QUERY_PREFIX_PATTERN =
-  /^(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境)?(?:待查内容|待查词|待查单词|待查|查询|释义|翻译|解释|Query|Definition|Translation|Word|Target|Input)\s*[:：]\s*/i;
+  /^(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境)?(?:待查内容|待查单词|待查词|待查|单\s*词|生\s*词|词|查询|释义|中文释义|语境释义|核心释义|翻译|解释|Query|Definition|Translation|Word|Target|Input)\s*[:：]\s*/i;
 
 /**
  * Extract concise target-language definition from LLM markdown response.
- * Strips title lines, query echoes ("查询：word", "待查内容：word", "Query: word"), headers, IPA phonetics,
+ * Strips title lines, query echoes ("词：word", "查询：word", "待查内容：word", "Query: word"), headers, IPA phonetics,
  * and example sentences, extracting only the clean meaning.
  */
 export function extractDefinitionFromLlm(
@@ -216,11 +216,11 @@ export function extractDefinitionFromLlm(
   if (!explanation) return '';
 
   const cleanLine = (l: string): string => {
-    return l
-      .replace(/\*\*/g, '')
-      .replace(/^[#>\-\s*•|]+/gm, '')
-      .replace(QUERY_PREFIX_PATTERN, '')
-      .trim();
+    let res = l.replace(/\*\*/g, '').replace(/^[#>\-\s*•|]+/gm, '').trim();
+    while (QUERY_PREFIX_PATTERN.test(res)) {
+      res = res.replace(QUERY_PREFIX_PATTERN, '').trim();
+    }
+    return res;
   };
 
   const lines = explanation
@@ -252,7 +252,7 @@ export function extractDefinitionFromLlm(
       );
       if (match) {
         const cleaned = cleanLine(match[1].replace(/[\[\]]/g, ''));
-        if (cleaned && !cleaned.startsWith('待查内容')) return cleaned;
+        if (cleaned && !cleaned.startsWith('待查内容') && !cleaned.startsWith('查询')) return cleaned;
       }
     }
 
@@ -260,7 +260,7 @@ export function extractDefinitionFromLlm(
     for (const line of sectionLines) {
       if (/^\|/.test(line)) continue;
       const cleaned = cleanLine(line);
-      if (!cleaned || cleaned.startsWith('待查内容')) continue;
+      if (!cleaned || cleaned.startsWith('待查内容') || cleaned.startsWith('查询')) continue;
       if (cleaned.startsWith('{{') || cleaned.endsWith('}}')) continue;
       if (/[\u4e00-\u9fa5]/.test(cleaned)) {
         // Skip lines that look like whole example sentences with English and Chinese translation in parens
@@ -278,7 +278,13 @@ export function extractDefinitionFromLlm(
     for (const line of sectionLines) {
       if (/^\|/.test(line)) continue;
       const cleaned = cleanLine(line);
-      if (cleaned && !cleaned.startsWith('待查内容') && !cleaned.startsWith('{{') && !cleaned.endsWith('}}')) {
+      if (
+        cleaned &&
+        !cleaned.startsWith('待查内容') &&
+        !cleaned.startsWith('查询') &&
+        !cleaned.startsWith('{{') &&
+        !cleaned.endsWith('}}')
+      ) {
         return cleaned;
       }
     }
@@ -288,13 +294,13 @@ export function extractDefinitionFromLlm(
   for (const line of lines) {
     if (/^\|/.test(line)) continue;
     const cleaned = cleanLine(line);
-    if (!cleaned || cleaned.startsWith('待查内容')) continue;
+    if (!cleaned || cleaned.startsWith('待查内容') || cleaned.startsWith('查询')) continue;
     if (cleaned.startsWith('{{') || cleaned.endsWith('}}')) continue;
     // Skip titles / query echoes / headers
     if (
       QUERY_PREFIX_PATTERN.test(line) ||
       /^#+\s+/.test(line) ||
-      /^(?:待查内容|待查词|待查单词|待查|查询|Query|单词|Word|Target)\b/i.test(line)
+      /^(?:待查内容|待查词|待查单词|待查|查询|Query|单\s*词|生\s*词|词|Word|Target)\b/i.test(line)
     ) {
       continue;
     }
@@ -323,12 +329,12 @@ export function extractDefinitionFromLlm(
   for (const line of lines) {
     if (/^\|/.test(line)) continue;
     const cleaned = cleanLine(line);
-    if (!cleaned || cleaned.startsWith('待查内容')) continue;
+    if (!cleaned || cleaned.startsWith('待查内容') || cleaned.startsWith('查询')) continue;
     if (cleaned.startsWith('{{') || cleaned.endsWith('}}')) continue;
     if (
       QUERY_PREFIX_PATTERN.test(line) ||
       /^#+\s+/.test(line) ||
-      /^(?:待查内容|待查词|待查单词|待查|查询|Query|单词|Word|Target)\b/i.test(line)
+      /^(?:待查内容|待查词|待查单词|待查|查询|Query|单\s*词|生\s*词|词|Word|Target)\b/i.test(line)
     ) {
       continue;
     }

@@ -562,15 +562,16 @@ export class VideoVocabRecap {
 
     let defText = w.translation?.trim();
     if (defText) {
-      defText = defText
-        .replace(
-          /^(?:待查内容|待查词|待查单词|待查|查询|释义|中文|中文释义|语境释义|核心释义|翻译|解释|Query|Definition|Translation|Word|Target)\s*[:：]\s*/i,
-          '',
-        )
-        .trim();
+      const PREFIX_REGEX =
+        /^(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境)?(?:待查内容|待查单词|待查词|待查|单\s*词|生\s*词|词|查询|释义|中文释义|语境释义|核心释义|翻译|解释|Query|Definition|Translation|Word|Target|Input)\s*[:：]\s*/i;
+      while (PREFIX_REGEX.test(defText)) {
+        defText = defText.replace(PREFIX_REGEX, '').trim();
+      }
       if (
         defText.startsWith('待查内容') ||
         defText.startsWith('查询') ||
+        defText.startsWith('词：') ||
+        defText.startsWith('词:') ||
         defText.toLowerCase() === w.surface.toLowerCase().trim()
       ) {
         defText = '';

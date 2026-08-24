@@ -170,10 +170,52 @@ export class UehDatabase extends Dexie {
             }
           });
       });
+    this.version(6)
+      .stores({
+        words:
+          '++id, wordKey, nextReviewAt, createdAt, reviewStage, learningStatus, kind',
+        audio_clips: '++id, createdAt',
+        translation_cache: '++id, key, createdAt',
+        tts_cache: '++id, key, createdAt',
+        skills: 'id, updatedAt',
+        review_logs: '++id, wordId, createdAt',
+        meta: 'key',
+      })
+      .upgrade(async (tx) => {
+        const PREFIX_REGEX =
+          /^(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境)?(?:待查内容|待查单词|待查词|待查|单\s*词|生\s*词|词|查询|释义|中文释义|语境释义|核心释义|翻译|解释|Query|Definition|Translation|Word|Target|Input)\s*[:：]\s*/i;
+        await tx
+          .table('words')
+          .toCollection()
+          .modify((w: Record<string, unknown>) => {
+            if (typeof w.translation === 'string') {
+              let cleaned = (w.translation as string).trim();
+              while (PREFIX_REGEX.test(cleaned)) {
+                cleaned = cleaned.replace(PREFIX_REGEX, '').trim();
+              }
+              if (
+                typeof w.surface === 'string' &&
+                (cleaned.toLowerCase() ===
+                  (w.surface as string).toLowerCase().trim() ||
+                  cleaned.startsWith('待查内容') ||
+                  cleaned.startsWith('查询') ||
+                  cleaned.startsWith('词：') ||
+                  cleaned.startsWith('词:'))
+              ) {
+                w.translation = '';
+              } else {
+                w.translation = cleaned;
+              }
+            }
+          });
+      });
   }
 }
 
 export const db = new UehDatabase();
+
+const STORED_PREFIX_REGEX =
+  /^(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境)?(?:待查内容|待查单词|待查词|待查|单\s*词|生\s*词|词|查询|释义|中文释义|语境释义|核心释义|翻译|解释|Query|Definition|Translation|Word|Target|Input)\s*[:：]\s*/i;
 
 function cleanStoredTranslation(
   translation: string | undefined,
@@ -181,15 +223,14 @@ function cleanStoredTranslation(
 ): string | undefined {
   if (!translation) return undefined;
   let t = translation.trim();
-  t = t
-    .replace(
-      /^(?:待查内容|待查词|待查单词|待查|查询|释义|中文|中文释义|语境释义|核心释义|翻译|解释|Query|Definition|Translation|Word|Target|Input)\s*[:：]\s*/i,
-      '',
-    )
-    .trim();
+  while (STORED_PREFIX_REGEX.test(t)) {
+    t = t.replace(STORED_PREFIX_REGEX, '').trim();
+  }
   if (
     t.startsWith('待查内容') ||
     t.startsWith('查询') ||
+    t.startsWith('词：') ||
+    t.startsWith('词:') ||
     (surface && t.toLowerCase() === surface.toLowerCase().trim())
   ) {
     return undefined;
