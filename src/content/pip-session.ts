@@ -563,7 +563,7 @@ export class PipSessionController {
     if (this.adapter.supportsMove && this.config.pip.preferMove !== false) {
       try {
         this.moveVideoToPip(source, pipWindow);
-        this.setPagePlayerDimmed(true);
+        this.setPagePlayerDimmed(true, false);
         return 'move';
       } catch (err) {
         console.warn('[UEH] move video failed, falling back to mirror', err);
@@ -573,7 +573,7 @@ export class PipSessionController {
     this.mirrorHandle = startVideoMirror(source, pipWindow, slot);
     if (this.mirrorHandle.mode !== 'none') {
       // Page still decodes; dim/cover the heavy player chrome to cut compositor work.
-      this.setPagePlayerDimmed(true);
+      this.setPagePlayerDimmed(true, true);
       return 'mirror';
     }
 
@@ -581,38 +581,134 @@ export class PipSessionController {
   }
 
   /**
+   * Render an energy-saving standby overlay on the host player container.
+   * This covers the host player so the user has clear status and the browser avoids dual rasterization.
+   */
+  private renderPageStandbyOverlay(on: boolean): void {
+    const existing = document.getElementById('ueh-pip-page-standby');
+    if (!on) {
+      existing?.remove();
+      return;
+    }
+    if (existing) return;
+
+    const player =
+      this.video?.closest('.html5-video-player') ||
+      this.video?.parentElement ||
+      document.querySelector('#movie_player, .video-stream')?.parentElement;
+    if (!player) return;
+
+    const compPos = getComputedStyle(player).position;
+    if (compPos === 'static') {
+      (player as HTMLElement).style.position = 'relative';
+    }
+
+    const overlay = document.createElement('div');
+    overlay.id = 'ueh-pip-page-standby';
+    overlay.style.cssText = `
+      position: absolute;
+      inset: 0;
+      z-index: 2147483640;
+      background: #0b0d14;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: #f0f3f8;
+      font-family: system-ui, -apple-system, sans-serif;
+      user-select: none;
+      padding: 24px;
+      box-sizing: border-box;
+      text-align: center;
+    `;
+
+    overlay.innerHTML = `
+      <div style="font-size:36px;margin-bottom:12px;filter:drop-shadow(0 2px 8px rgba(0,0,0,0.5));">📺</div>
+      <div style="font-size:18px;font-weight:700;margin-bottom:6px;letter-spacing:0.3px;">画中画 (PiP) 学习模式运行中</div>
+      <div style="font-size:13px;color:#9aa5b8;max-width:380px;line-height:1.5;margin-bottom:20px;">
+        已休眠原页面视频画面渲染与字幕计算以节省硬件能耗与电量
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center;">
+        <button type="button" id="ueh-standby-focus" style="
+          padding:8px 18px;border-radius:8px;border:0;
+          background:oklch(76% 0.12 82);color:#1a1a1a;font-size:13px;font-weight:600;cursor:pointer;
+          box-shadow:0 2px 8px rgba(0,0,0,0.25);transition:transform 0.1s ease;
+        ">聚焦画中画窗口</button>
+        <button type="button" id="ueh-standby-close" style="
+          padding:8px 18px;border-radius:8px;border:1px solid rgba(255,255,255,0.2);
+          background:rgba(255,255,255,0.08);color:#fff;font-size:13px;font-weight:500;cursor:pointer;
+          transition:background 0.1s ease;
+        ">退出画中画</button>
+      </div>
+    `;
+
+    overlay.querySelector('#ueh-standby-focus')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      try {
+        this.pipWindow?.focus();
+      } catch {
+        // ignore
+      }
+    });
+
+    overlay.querySelector('#ueh-standby-close')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void this.close();
+    });
+
+    player.appendChild(overlay);
+  }
+
+  /**
    * While PiP is open, cut compositor work on the opener tab.
    * Does not pause media (mirror still needs decoded frames from <video>).
    */
-  private setPagePlayerDimmed(on: boolean): void {
+  private setPagePlayerDimmed(on: boolean, isMirror = false): void {
     const STYLE_ID = 'ueh-pip-page-dim';
     if (!on) {
       document.getElementById(STYLE_ID)?.remove();
-      document.documentElement.classList.remove('ueh-pip-active');
+      this.renderPageStandbyOverlay(false);
+      document.documentElement.classList.remove('ueh-pip-active', 'ueh-pip-mirroring');
       return;
     }
     document.documentElement.classList.add('ueh-pip-active');
+    if (isMirror) {
+      document.documentElement.classList.add('ueh-pip-mirroring');
+    }
+    this.renderPageStandbyOverlay(true);
+
     if (document.getElementById(STYLE_ID)) return;
     const style = document.createElement('style');
     style.id = STYLE_ID;
-    // Hide heavy secondary UI / player chrome while learning in PiP.
-    // Keep the <video> itself (required for canvas mirror & timeline).
     style.textContent = `
+      /* Freeze secondary heavy sections completely */
       html.ueh-pip-active ytd-watch-flexy #secondary,
       html.ueh-pip-active ytd-watch-flexy #below,
       html.ueh-pip-active ytd-watch-flexy #chat,
       html.ueh-pip-active ytd-watch-flexy #comments {
-        content-visibility: auto;
-        contain-intrinsic-size: 1px 500px;
+        content-visibility: hidden !important;
+        contain: strict !important;
       }
+      /* Hide YouTube player controls and overlay popups */
       html.ueh-pip-active #movie_player .ytp-chrome-top,
       html.ueh-pip-active #movie_player .ytp-chrome-bottom,
       html.ueh-pip-active #movie_player .ytp-gradient-top,
       html.ueh-pip-active #movie_player .ytp-gradient-bottom,
       html.ueh-pip-active #movie_player .ytp-cards-teaser,
-      html.ueh-pip-active #movie_player .ytp-ce-element {
+      html.ueh-pip-active #movie_player .ytp-ce-element,
+      html.ueh-pip-active #movie_player .ytp-bezel,
+      html.ueh-pip-active #movie_player .ytp-spinner {
         visibility: hidden !important;
         pointer-events: none !important;
+      }
+      /* In mirror mode, reduce opacity of the main video element so compositor skips page rasterization */
+      html.ueh-pip-active.ueh-pip-mirroring #movie_player video.html5-main-video,
+      html.ueh-pip-active.ueh-pip-mirroring video.ueh-video-source {
+        opacity: 0.001 !important;
+      }
+      /* Hide page subtitles overlay when PiP is active */
+      html.ueh-pip-active #ueh-page-subs-root {
+        display: none !important;
       }
     `;
     document.head.appendChild(style);

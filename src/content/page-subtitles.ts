@@ -432,6 +432,11 @@ export class PageSubtitlesOverlay {
   }
 
   private tick = (): void => {
+    if (document.documentElement.classList.contains('ueh-pip-active')) {
+      // Pause in-page subtitle tick/DOM work while PiP is open to save CPU/GPU cycles
+      this.raf = requestAnimationFrame(this.tick);
+      return;
+    }
     if (!this.video || !this.shadow) return;
     // Re-find video if SPA swapped it
     if (!document.contains(this.video)) {
