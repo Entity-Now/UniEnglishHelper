@@ -681,15 +681,7 @@ export class PipSessionController {
     const style = document.createElement('style');
     style.id = STYLE_ID;
     style.textContent = `
-      /* Freeze secondary heavy sections completely */
-      html.ueh-pip-active ytd-watch-flexy #secondary,
-      html.ueh-pip-active ytd-watch-flexy #below,
-      html.ueh-pip-active ytd-watch-flexy #chat,
-      html.ueh-pip-active ytd-watch-flexy #comments {
-        content-visibility: hidden !important;
-        contain: strict !important;
-      }
-      /* Hide YouTube player controls and overlay popups */
+      /* Hide YouTube player controls and overlay popups over the video area */
       html.ueh-pip-active #movie_player .ytp-chrome-top,
       html.ueh-pip-active #movie_player .ytp-chrome-bottom,
       html.ueh-pip-active #movie_player .ytp-gradient-top,
@@ -706,7 +698,7 @@ export class PipSessionController {
       html.ueh-pip-active.ueh-pip-mirroring video.ueh-video-source {
         opacity: 0.001 !important;
       }
-      /* Hide page subtitles overlay when PiP is active */
+      /* Hide in-page subtitles overlay when PiP is active */
       html.ueh-pip-active #ueh-page-subs-root {
         display: none !important;
       }
