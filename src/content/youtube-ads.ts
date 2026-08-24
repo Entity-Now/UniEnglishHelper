@@ -13,23 +13,15 @@ export interface YoutubeAdStatus {
   canSkip: boolean;
 }
 
-const SKIP_SELECTORS = [
-  '.ytp-ad-skip-button',
-  '.ytp-ad-skip-button-modern',
+const STRICT_SKIP_SELECTORS = [
   '.ytp-skip-ad-button',
+  '.ytp-ad-skip-button-modern',
+  '.ytp-ad-skip-button',
   'button.ytp-ad-skip-button-modern',
   '.ytp-ad-skip-button-container button',
   '.ytp-ad-skip-button-slot button',
-  '.ytp-ad-skip-button-container',
   'button.ytp-skip-ad-button',
-  '.ytp-ad-overlay-close-button',
-  'button[id^="skip-button"]',
-  'button[class*="skip-button"]',
-  '[class*="ytp-ad-skip-button"]',
-  '.ytp-ad-text[id^="skip-button"]',
-  '.ytp-ad-action-interstitial-slot button',
-  'ytd-ad-slot-renderer button',
-  '.video-ads button',
+  '.ytp-ad-skip-button-container',
 ].join(', ');
 
 const AD_PLAYER_SELECTORS = [
@@ -55,39 +47,74 @@ function isAdElementPresent(el: Element | null): boolean {
   return true;
 }
 
-function findSkipButton(): HTMLElement | null {
-  const nodes = document.querySelectorAll(SKIP_SELECTORS);
+/**
+ * Checks if an element is strictly a Skip button and NOT an advertiser CTA link
+ * like "Learn More", "Visit Advertiser", "Shop Now", etc.
+ */
+function isStrictSkipButton(el: Element | null): el is HTMLElement {
+  if (!el || !(el instanceof HTMLElement)) return false;
+  // Guard against advertiser links / CTAs
+  if (el.tagName.toLowerCase() === 'a') return false;
+  if (el.getAttribute('href') || el.getAttribute('target') === '_blank') return false;
+  if (
+    el.closest(
+      'a, [href], .ytp-ad-action-interstitial-slot, .ytp-ad-visit-advertiser-button, .ytp-ad-button-icon, ytd-ad-slot-renderer',
+    )
+  ) {
+    return false;
+  }
+
+  const text = (el.textContent || '').trim().toLowerCase();
+  // Exclude CTA texts
+  if (
+    text.includes('visit') ||
+    text.includes('learn') ||
+    text.includes('shop') ||
+    text.includes('详情') ||
+    text.includes('访问') ||
+    text.includes('安装') ||
+    text.includes('下载') ||
+    text.includes('install') ||
+    text.includes('download')
+  ) {
+    return false;
+  }
+
+  // Must match skip selectors OR contain explicit skip keywords
+  if (el.matches(STRICT_SKIP_SELECTORS) || el.closest(STRICT_SKIP_SELECTORS)) {
+    return isAdElementPresent(el);
+  }
+
+  if (
+    text.includes('skip') ||
+    text.includes('跳过') ||
+    text.includes('略過') ||
+    text.includes('スキップ') ||
+    text.includes('passer') ||
+    text.includes('überspringen')
+  ) {
+    return isAdElementPresent(el);
+  }
+
+  return false;
+}
+
+function findStrictSkipButton(): HTMLElement | null {
+  const nodes = document.querySelectorAll(STRICT_SKIP_SELECTORS);
   for (const node of nodes) {
-    if (node instanceof HTMLElement && isAdElementPresent(node)) {
+    if (isStrictSkipButton(node)) {
       return node;
     }
   }
-  // Text fallback (localized skip labels)
+
+  // Text fallback for buttons only
   const candidates = document.querySelectorAll(
-    'button, .ytp-ad-skip-button-text, .ytp-ad-text, [role="button"]',
+    '.ytp-ad-skip-button-text, .ytp-ad-module button, #movie_player button',
   );
   for (const el of candidates) {
-    const text = (el.textContent || '').trim().toLowerCase();
-    if (
-      !text ||
-      !(
-        text.includes('skip') ||
-        text.includes('跳过') ||
-        text.includes('略過') ||
-        text.includes('スキップ') ||
-        text.includes('passer') ||
-        text.includes('überspringen')
-      )
-    ) {
-      continue;
-    }
-    const btn =
-      el.closest('button') ||
-      (el instanceof HTMLElement && el.getAttribute('role') === 'button'
-        ? el
-        : null) ||
-      (el instanceof HTMLElement ? el : null);
-    if (btn && isAdElementPresent(btn)) return btn;
+    if (isStrictSkipButton(el)) return el as HTMLElement;
+    const parentBtn = el.closest('button');
+    if (parentBtn && isStrictSkipButton(parentBtn)) return parentBtn;
   }
   return null;
 }
@@ -112,7 +139,7 @@ export function detectYoutubeAdStatus(): YoutubeAdStatus {
     return { phase: 'none', label: '', canSkip: false };
   }
 
-  const skip = findSkipButton();
+  const skip = findStrictSkipButton();
   if (skip) {
     return {
       phase: 'ad_skippable',
@@ -124,31 +151,35 @@ export function detectYoutubeAdStatus(): YoutubeAdStatus {
   return {
     phase: 'ad',
     label: '广告播放中',
-    canSkip: true, // Always allow clicking skip in PiP to trigger fast-forward / API skip
+    canSkip: true, // Always allow user to trigger fast-forward skip
   };
 }
 
 /**
- * Click YouTube's native skip control if present, and fast-forward ad video if stuck.
+ * Safely skip YouTube ads by fast-forwarding the ad video stream and clicking
+ * the native skip button without ever triggering advertiser landing pages.
  */
 export function trySkipYoutubeAd(): boolean {
   let skipped = false;
 
-  // 1. Try finding and clicking native skip button
-  const skip = findSkipButton();
-  if (skip) {
+  // 1. Fast-forward the ad video stream directly — 100% safe, instantaneous, never redirects to advertiser
+  if (isYoutubeAdPlaying()) {
     try {
-      skip.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
-      skip.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-      skip.click();
-      skip.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
-      skip.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-      const nested = skip.querySelector('button');
-      if (nested && nested !== skip) nested.click();
-      skipped = true;
-    } catch (err) {
-      console.warn('[UEH] skip click error', err);
-    }
+      const video =
+        (document.querySelector('#movie_player video') as HTMLVideoElement | null) ||
+        (document.querySelector('video.html5-main-video') as HTMLVideoElement | null) ||
+        (document.querySelector('video') as HTMLVideoElement | null);
+      if (video) {
+        video.muted = true;
+        if (Number.isFinite(video.duration) && video.duration > 0) {
+          video.currentTime = video.duration - 0.05;
+        } else {
+          video.currentTime = 99999;
+        }
+        video.playbackRate = 16;
+        skipped = true;
+      }
+    } catch {}
   }
 
   // 2. Try YouTube movie_player internal skip API
@@ -166,18 +197,15 @@ export function trySkipYoutubeAd(): boolean {
     }
   } catch {}
 
-  // 3. If ad is actively playing on HTML5 video, fast-forward the ad stream to instantly finish it
-  if (isYoutubeAdPlaying()) {
+  // 3. If a strict, verified skip button exists, click it safely
+  const skip = findStrictSkipButton();
+  if (skip) {
     try {
-      const video =
-        (document.querySelector('#movie_player video') as HTMLVideoElement | null) ||
-        (document.querySelector('video.html5-main-video') as HTMLVideoElement | null);
-      if (video && Number.isFinite(video.duration) && video.duration > 0) {
-        video.muted = true;
-        video.currentTime = video.duration || 99999;
-        skipped = true;
-      }
-    } catch {}
+      skip.click();
+      skipped = true;
+    } catch (err) {
+      console.warn('[UEH] skip click error', err);
+    }
   }
 
   return skipped;
