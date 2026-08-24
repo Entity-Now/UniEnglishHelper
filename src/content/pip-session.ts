@@ -629,6 +629,12 @@ export class PipSessionController {
         已休眠原页面视频画面渲染与字幕计算以节省硬件能耗与电量
       </div>
       <div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center;">
+        <button type="button" id="ueh-standby-skip-ad" style="
+          display: none;
+          padding:8px 18px;border-radius:8px;border:0;
+          background:oklch(72% 0.14 145);color:#1a1a1a;font-size:13px;font-weight:600;cursor:pointer;
+          box-shadow:0 2px 8px rgba(0,0,0,0.25);
+        ">⚡ 跳过广告</button>
         <button type="button" id="ueh-standby-focus" style="
           padding:8px 18px;border-radius:8px;border:0;
           background:oklch(76% 0.12 82);color:#1a1a1a;font-size:13px;font-weight:600;cursor:pointer;
@@ -641,6 +647,11 @@ export class PipSessionController {
         ">退出画中画</button>
       </div>
     `;
+
+    overlay.querySelector('#ueh-standby-skip-ad')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.handleSkipAd();
+    });
 
     overlay.querySelector('#ueh-standby-focus')?.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1338,11 +1349,13 @@ export class PipSessionController {
     const label = doc.getElementById('ueh-ad-label');
     const hint = doc.getElementById('ueh-ad-hint');
     const skipBtn = doc.getElementById('ueh-ad-skip') as HTMLButtonElement | null;
+    const hostSkipBtn = document.getElementById('ueh-standby-skip-ad') as HTMLButtonElement | null;
 
     if (status.phase === 'none') {
       root?.classList.remove('ueh-ad-active');
       banner?.classList.remove('ueh-ad-visible', 'ueh-ad-skippable');
       if (skipBtn) skipBtn.disabled = true;
+      if (hostSkipBtn) hostSkipBtn.style.display = 'none';
       if (prev !== 'none') {
         // Ad ended — swap to main-video captions (not just re-sync old ad cues)
         void this.reloadCuesAfterAd();
@@ -1352,10 +1365,12 @@ export class PipSessionController {
 
     root?.classList.add('ueh-ad-active');
     banner?.classList.add('ueh-ad-visible');
+    if (hostSkipBtn) hostSkipBtn.style.display = 'inline-block';
+
     if (status.phase === 'ad_skippable') {
       banner?.classList.add('ueh-ad-skippable');
       if (label) label.textContent = '广告可跳过';
-      if (hint) hint.textContent = '点击跳过，或在原标签页操作';
+      if (hint) hint.textContent = '点击「跳过广告」或快进';
       if (skipBtn) {
         skipBtn.disabled = false;
         skipBtn.textContent = '跳过广告';
@@ -1364,15 +1379,15 @@ export class PipSessionController {
         this.toast('info', '广告可跳过 — 点击「跳过广告」');
       }
     } else {
-      banner?.classList.remove('ueh-ad-skippable');
+      banner?.classList.add('ueh-ad-skippable');
       if (label) label.textContent = '广告播放中';
-      if (hint) hint.textContent = '暂不可跳过，请稍候或回原页';
+      if (hint) hint.textContent = '点击「跳过广告」可直接跳过';
       if (skipBtn) {
-        skipBtn.disabled = true;
-        skipBtn.textContent = '等待跳过…';
+        skipBtn.disabled = false;
+        skipBtn.textContent = '跳过广告';
       }
       if (prev === 'none') {
-        this.toast('warn', 'YouTube 广告播放中');
+        this.toast('warn', 'YouTube 广告播放中，可点击跳过');
       }
     }
   }
@@ -1380,19 +1395,20 @@ export class PipSessionController {
   private handleSkipAd(): void {
     const ok = trySkipYoutubeAd();
     if (ok) {
-      this.toast('info', '已点击跳过广告');
-      // Re-check shortly after click
-      window.setTimeout(() => this.syncYoutubeAdUi(), 300);
-      window.setTimeout(() => this.syncYoutubeAdUi(), 900);
-      // Also schedule a caption reload in case phase detection is delayed
-      window.setTimeout(() => {
-        if (detectYoutubeAdStatus().phase === 'none') {
-          void this.reloadCuesAfterAd();
-        }
-      }, 1200);
+      this.toast('info', '已执行跳过广告');
     } else {
-      this.toast('warn', '未找到跳过按钮，请在原页面点击 Skip');
+      this.toast('info', '正在跳过广告…');
     }
+    // Re-check shortly after click
+    window.setTimeout(() => this.syncYoutubeAdUi(), 200);
+    window.setTimeout(() => this.syncYoutubeAdUi(), 600);
+    window.setTimeout(() => this.syncYoutubeAdUi(), 1200);
+    // Also schedule a caption reload in case phase detection is delayed
+    window.setTimeout(() => {
+      if (detectYoutubeAdStatus().phase === 'none') {
+        void this.reloadCuesAfterAd();
+      }
+    }, 1500);
   }
 
   private isPipActive(): boolean {
