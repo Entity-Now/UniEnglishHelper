@@ -41,7 +41,18 @@ export async function injectContentScripts(tabId: number): Promise<void> {
     ) {
       throw new AppError(
         'HOST_NOT_GRANTED',
-        `Cannot inject content script: ${msg}. Reload the extension after update, then refresh this tab.`,
+        `无法向该页面注入脚本: ${msg}。更新插件后请重新加载扩展并刷新该网页标签页。`,
+        err,
+      );
+    }
+    if (
+      lower.includes('could not load file') ||
+      lower.includes('cannot load file') ||
+      lower.includes('no such file')
+    ) {
+      throw new AppError(
+        'PIP_OPEN_FAILED',
+        `插件代码已更新（旧脚本资源失效）。请在扩展管理页 (chrome://extensions) 重新点击「重新加载」扩展，并刷新当前视频标签页后再试。`,
         err,
       );
     }
