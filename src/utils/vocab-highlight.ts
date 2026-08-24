@@ -43,12 +43,12 @@ export function translationForSurface(
 }
 
 export const VOCAB_PREFIX_REGEX =
-  /^(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境)?(?:待查内容|待查单词|待查词|待查|单\s*词|生\s*词|词|查询|释义|中文释义|语境释义|核心释义|翻译|解释|Query|Definition|Translation|Word|Target|Input)\s*[:：]\s*/i;
+  /^(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境|上下文|句子|整句)?(?:待查内容|待查单词|待查词|待查|单\s*词|生\s*词|词|查询|释义|中文释义|语境释义|核心释义|翻译|解释|上下文|语境|句子翻译|上下文翻译|Query|Definition|Translation|Word|Target|Input|Context|Sentence)\s*[:：]\s*/i;
 
 /**
  * Compact gloss under a highlighted word.
  * Takes the first sense and truncates for inline display.
- * Strips prefixes like "词：", "查询：", "Query:", "释义：" and avoids echoing the surface word.
+ * Strips prefixes like "词：", "上下文：", "查询：", "Query:", "释义：" and avoids echoing the surface word.
  * Keep short so absolute under-word labels stay unobtrusive.
  */
 export function shortGloss(
@@ -64,13 +64,19 @@ export function shortGloss(
     .filter(Boolean);
   let t = '';
 
+  const isPrefixOnly = (l: string): boolean => {
+    return /^(?:待查内容|待查词|待查单词|待查|Query|查询|单\s*词|生\s*词|词|Word|Target|上下文|语境|句子|整句|例句|Context|Sentence|Example|语境翻译|句子翻译|上下文翻译)\s*[:：]/i.test(
+      l,
+    );
+  };
+
   if (rawLines.length > 1) {
-    // Prefer line containing Chinese characters that is not a header or example
+    // Prefer line containing Chinese characters that is not a header, context line, or example
     const zhCandidate = rawLines.find((l) => {
       if (/^#+/.test(l)) return false;
       const cleaned = l.replace(/\*\*/g, '').replace(/^[#>\-\s*•|]+/g, '').trim();
       if (!cleaned || /^(?:例句|e\.g\.)/i.test(cleaned)) return false;
-      if (/^(?:待查内容|待查词|待查单词|待查|Query|查询|单\s*词|生\s*词|词|Word|Target)\s*[:：]/i.test(cleaned)) return false;
+      if (isPrefixOnly(cleaned)) return false;
       if (/^(?:释义|Definition|词根|扩展|语法点|讲解|同义词|反义词|例句)$/i.test(cleaned)) return false;
       return /[\u4e00-\u9fa5]/.test(cleaned);
     });
@@ -79,7 +85,7 @@ export function shortGloss(
       if (/^#+/.test(l)) return false;
       const cleaned = l.replace(/\*\*/g, '').replace(/^[#>\-\s*•|]+/g, '').trim();
       if (!cleaned || /^(?:例句|e\.g\.)/i.test(cleaned)) return false;
-      if (/^(?:待查内容|待查词|待查单词|待查|Query|查询|单\s*词|生\s*词|词|Word|Target)\s*[:：]/i.test(cleaned)) return false;
+      if (isPrefixOnly(cleaned)) return false;
       if (/^[\[/][^\]/]+[\]/]$/.test(cleaned)) return false;
       if (/^(?:释义|Definition|词根|扩展|语法点|讲解|同义词|反义词|例句)$/i.test(cleaned)) return false;
       return true;
@@ -95,7 +101,7 @@ export function shortGloss(
     .replace(/^[#>\-\s*•|]+/gm, '')
     .trim();
 
-  // Strip query / definition / word prefixes repeatedly
+  // Strip query / definition / word / context prefixes repeatedly
   while (VOCAB_PREFIX_REGEX.test(t)) {
     t = t.replace(VOCAB_PREFIX_REGEX, '').trim();
   }

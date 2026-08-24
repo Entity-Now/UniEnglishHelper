@@ -27,6 +27,9 @@ describe('vocab-highlight', () => {
   it('shortGloss strips query and definition prefixes', () => {
     expect(shortGloss('词：单词', 6)).toBe('单词');
     expect(shortGloss('词: 计算机', 6)).toBe('计算机');
+    expect(shortGloss('上下文：单词', 6)).toBe('单词');
+    expect(shortGloss('语境：计算机', 6)).toBe('计算机');
+    expect(shortGloss('句子翻译：测试', 6)).toBe('测试');
     expect(shortGloss('单词：测试', 6)).toBe('测试');
     expect(shortGloss('生词：问候', 6)).toBe('问候');
     expect(shortGloss('查询：单词', 6)).toBe('单词');
@@ -42,6 +45,7 @@ describe('vocab-highlight', () => {
 
   it('shortGloss suppresses gloss when translation is just the surface word', () => {
     expect(shortGloss('词：word', 6, 'word')).toBe('');
+    expect(shortGloss('上下文：word', 6, 'word')).toBe('');
     expect(shortGloss('单词：word', 6, 'word')).toBe('');
     expect(shortGloss('查询：word', 6, 'word')).toBe('');
     expect(shortGloss('待查内容：word', 6, 'word')).toBe('');

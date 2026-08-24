@@ -170,7 +170,7 @@ export class UehDatabase extends Dexie {
             }
           });
       });
-    this.version(6)
+    this.version(7)
       .stores({
         words:
           '++id, wordKey, nextReviewAt, createdAt, reviewStage, learningStatus, kind',
@@ -183,7 +183,7 @@ export class UehDatabase extends Dexie {
       })
       .upgrade(async (tx) => {
         const PREFIX_REGEX =
-          /^(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境)?(?:待查内容|待查单词|待查词|待查|单\s*词|生\s*词|词|查询|释义|中文释义|语境释义|核心释义|翻译|解释|Query|Definition|Translation|Word|Target|Input)\s*[:：]\s*/i;
+          /^(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境|上下文|句子|整句)?(?:待查内容|待查单词|待查词|待查|单\s*词|生\s*词|词|查询|释义|中文释义|语境释义|核心释义|翻译|解释|上下文|语境|句子翻译|上下文翻译|Query|Definition|Translation|Word|Target|Input|Context|Sentence)\s*[:：]\s*/i;
         await tx
           .table('words')
           .toCollection()
@@ -200,7 +200,9 @@ export class UehDatabase extends Dexie {
                   cleaned.startsWith('待查内容') ||
                   cleaned.startsWith('查询') ||
                   cleaned.startsWith('词：') ||
-                  cleaned.startsWith('词:'))
+                  cleaned.startsWith('词:') ||
+                  cleaned.startsWith('上下文：') ||
+                  cleaned.startsWith('上下文:'))
               ) {
                 w.translation = '';
               } else {
@@ -215,7 +217,7 @@ export class UehDatabase extends Dexie {
 export const db = new UehDatabase();
 
 const STORED_PREFIX_REGEX =
-  /^(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境)?(?:待查内容|待查单词|待查词|待查|单\s*词|生\s*词|词|查询|释义|中文释义|语境释义|核心释义|翻译|解释|Query|Definition|Translation|Word|Target|Input)\s*[:：]\s*/i;
+  /^(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境|上下文|句子|整句)?(?:待查内容|待查单词|待查词|待查|单\s*词|生\s*词|词|查询|释义|中文释义|语境释义|核心释义|翻译|解释|上下文|语境|句子翻译|上下文翻译|Query|Definition|Translation|Word|Target|Input|Context|Sentence)\s*[:：]\s*/i;
 
 function cleanStoredTranslation(
   translation: string | undefined,
@@ -231,6 +233,8 @@ function cleanStoredTranslation(
     t.startsWith('查询') ||
     t.startsWith('词：') ||
     t.startsWith('词:') ||
+    t.startsWith('上下文：') ||
+    t.startsWith('上下文:') ||
     (surface && t.toLowerCase() === surface.toLowerCase().trim())
   ) {
     return undefined;

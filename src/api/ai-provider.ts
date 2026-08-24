@@ -200,13 +200,13 @@ async function explainWithFreeMt(
   };
 }
 
-const QUERY_PREFIX_PATTERN =
-  /^(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境)?(?:待查内容|待查单词|待查词|待查|单\s*词|生\s*词|词|查询|释义|中文释义|语境释义|核心释义|翻译|解释|Query|Definition|Translation|Word|Target|Input)\s*[:：]\s*/i;
+export const QUERY_PREFIX_PATTERN =
+  /^(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境|上下文|句子|整句)?(?:待查内容|待查单词|待查词|待查|单\s*词|生\s*词|词|查询|释义|中文释义|语境释义|核心释义|翻译|解释|上下文|语境|句子翻译|上下文翻译|Query|Definition|Translation|Word|Target|Input|Context|Sentence)\s*[:：]\s*/i;
 
 /**
  * Extract concise target-language definition from LLM markdown response.
- * Strips title lines, query echoes ("词：word", "查询：word", "待查内容：word", "Query: word"), headers, IPA phonetics,
- * and example sentences, extracting only the clean meaning.
+ * Strips title lines, query echoes ("词：word", "查询：word", "待查内容：word", "上下文：..."), headers, IPA phonetics,
+ * context/sentence translations, and example sentences, extracting only the pure word definition.
  */
 export function extractDefinitionFromLlm(
   explanation: string,
@@ -223,10 +223,18 @@ export function extractDefinitionFromLlm(
     return res;
   };
 
+  const isSentenceLine = (l: string): boolean => {
+    return /^(?:上下文|语境|句子|整句|例句|Context|Sentence|Example|语境翻译|句子翻译|上下文翻译)\s*[:：]/i.test(
+      l,
+    );
+  };
+
   const lines = explanation
     .split(/[\r\n]+/)
     .map((l) => l.trim())
     .filter(Boolean);
+
+  const isWord = !surface || !surface.includes(' ') || surface.split(/\s+/).length <= 3;
 
   // 1. Try to extract from "## 释义" / "### 释义" / "## Definition" / "1. 核心单词卡片" section
   let inSection = false;
@@ -252,13 +260,21 @@ export function extractDefinitionFromLlm(
       );
       if (match) {
         const cleaned = cleanLine(match[1].replace(/[\[\]]/g, ''));
-        if (cleaned && !cleaned.startsWith('待查内容') && !cleaned.startsWith('查询')) return cleaned;
+        if (
+          cleaned &&
+          !cleaned.startsWith('待查内容') &&
+          !cleaned.startsWith('查询') &&
+          (!isWord || !isSentenceLine(match[1]))
+        ) {
+          return cleaned;
+        }
       }
     }
 
     // Look for Chinese definition line first
     for (const line of sectionLines) {
       if (/^\|/.test(line)) continue;
+      if (isWord && isSentenceLine(line)) continue;
       const cleaned = cleanLine(line);
       if (!cleaned || cleaned.startsWith('待查内容') || cleaned.startsWith('查询')) continue;
       if (cleaned.startsWith('{{') || cleaned.endsWith('}}')) continue;
@@ -277,6 +293,7 @@ export function extractDefinitionFromLlm(
     // Fallback in section: take first non-template non-header line
     for (const line of sectionLines) {
       if (/^\|/.test(line)) continue;
+      if (isWord && isSentenceLine(line)) continue;
       const cleaned = cleanLine(line);
       if (
         cleaned &&
@@ -290,9 +307,10 @@ export function extractDefinitionFromLlm(
     }
   }
 
-  // 2. Scan all lines for target language definition or sentence translation
+  // 2. Scan all lines for target language definition (excluding context sentence lines for single words)
   for (const line of lines) {
     if (/^\|/.test(line)) continue;
+    if (isWord && isSentenceLine(line)) continue;
     const cleaned = cleanLine(line);
     if (!cleaned || cleaned.startsWith('待查内容') || cleaned.startsWith('查询')) continue;
     if (cleaned.startsWith('{{') || cleaned.endsWith('}}')) continue;
@@ -325,9 +343,10 @@ export function extractDefinitionFromLlm(
     }
   }
 
-  // 3. Fallback: filter out obvious header/query lines and return first reasonable line
+  // 3. Fallback: filter out obvious header/query/context lines and return first reasonable line
   for (const line of lines) {
     if (/^\|/.test(line)) continue;
+    if (isWord && isSentenceLine(line)) continue;
     const cleaned = cleanLine(line);
     if (!cleaned || cleaned.startsWith('待查内容') || cleaned.startsWith('查询')) continue;
     if (cleaned.startsWith('{{') || cleaned.endsWith('}}')) continue;
@@ -365,10 +384,8 @@ async function explainWithLlm(
     config.wordShow?.langLevel ?? 'intermediate',
     config.wordShow?.customSystemPrompt,
   );
-  const userContent =
-    context?.trim() && context.trim() !== surface.trim()
-      ? `Word: ${surface}\nContext: ${context.trim()}`
-      : `Word: ${surface}`;
+  // Only provide the word itself so LLM focuses purely on translating the word without context confusion
+  const userContent = surface.trim();
 
   const explanation = await chatCompletion(
     config,

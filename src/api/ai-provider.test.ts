@@ -77,6 +77,8 @@ n. 单词
     expect(extractDefinitionFromLlm('Query: word\n释义：单词', 'word')).toBe('单词');
     expect(extractDefinitionFromLlm('# 待查内容：word\n\n## 释义\n单词；话语', 'word')).toBe('单词；话语');
     expect(extractDefinitionFromLlm('待查内容：word\n核心释义：单词', 'word')).toBe('单词');
+    expect(extractDefinitionFromLlm('# word\n\n## 释义\n单词\n\n上下文：这是一句字幕的翻译。', 'word')).toBe('单词');
+    expect(extractDefinitionFromLlm('上下文：这是一句字幕的翻译。\n单词：测试', 'word')).toBe('测试');
   });
 });
 
