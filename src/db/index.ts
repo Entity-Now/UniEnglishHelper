@@ -134,6 +134,42 @@ export class UehDatabase extends Dexie {
             }
           });
       });
+    this.version(5)
+      .stores({
+        words:
+          '++id, wordKey, nextReviewAt, createdAt, reviewStage, learningStatus, kind',
+        audio_clips: '++id, createdAt',
+        translation_cache: '++id, key, createdAt',
+        tts_cache: '++id, key, createdAt',
+        skills: 'id, updatedAt',
+        review_logs: '++id, wordId, createdAt',
+        meta: 'key',
+      })
+      .upgrade(async (tx) => {
+        await tx
+          .table('words')
+          .toCollection()
+          .modify((w: Record<string, unknown>) => {
+            if (typeof w.translation === 'string') {
+              const cleaned = (w.translation as string)
+                .replace(
+                  /^(?:待查内容|待查词|待查单词|待查|查询|释义|中文|中文释义|语境释义|核心释义|翻译|解释|Query|Definition|Translation|Word|Target)\s*[:：]\s*/i,
+                  '',
+                )
+                .trim();
+              if (
+                typeof w.surface === 'string' &&
+                (cleaned.toLowerCase() ===
+                  (w.surface as string).toLowerCase().trim() ||
+                  cleaned.startsWith('待查内容'))
+              ) {
+                w.translation = '';
+              } else {
+                w.translation = cleaned;
+              }
+            }
+          });
+      });
   }
 }
 
@@ -147,11 +183,15 @@ function cleanStoredTranslation(
   let t = translation.trim();
   t = t
     .replace(
-      /^(?:查询|释义|中文|中文释义|语境释义|核心释义|翻译|解释|Query|Definition|Translation)\s*[:：]\s*/i,
+      /^(?:待查内容|待查词|待查单词|待查|查询|释义|中文|中文释义|语境释义|核心释义|翻译|解释|Query|Definition|Translation|Word|Target|Input)\s*[:：]\s*/i,
       '',
     )
     .trim();
-  if (surface && t.toLowerCase() === surface.toLowerCase().trim()) {
+  if (
+    t.startsWith('待查内容') ||
+    t.startsWith('查询') ||
+    (surface && t.toLowerCase() === surface.toLowerCase().trim())
+  ) {
     return undefined;
   }
   return t || undefined;

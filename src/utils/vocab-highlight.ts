@@ -67,7 +67,7 @@ export function shortGloss(
       if (/^#+/.test(l)) return false;
       const cleaned = l.replace(/\*\*/g, '').replace(/^[#>\-\s*•|]+/g, '').trim();
       if (!cleaned || /^(?:例句|e\.g\.)/i.test(cleaned)) return false;
-      if (/^(?:Query|查询|单词|Word)\s*[:：]/i.test(cleaned)) return false;
+      if (/^(?:待查内容|待查词|待查单词|待查|Query|查询|单词|Word|Target)\s*[:：]/i.test(cleaned)) return false;
       if (/^(?:释义|Definition|词根|扩展|语法点|讲解|同义词|反义词|例句)$/i.test(cleaned)) return false;
       return /[\u4e00-\u9fa5]/.test(cleaned);
     });
@@ -76,7 +76,7 @@ export function shortGloss(
       if (/^#+/.test(l)) return false;
       const cleaned = l.replace(/\*\*/g, '').replace(/^[#>\-\s*•|]+/g, '').trim();
       if (!cleaned || /^(?:例句|e\.g\.)/i.test(cleaned)) return false;
-      if (/^(?:Query|查询|单词|Word)\s*[:：]/i.test(cleaned)) return false;
+      if (/^(?:待查内容|待查词|待查单词|待查|Query|查询|单词|Word|Target)\s*[:：]/i.test(cleaned)) return false;
       if (/^[\[/][^\]/]+[\]/]$/.test(cleaned)) return false;
       if (/^(?:释义|Definition|词根|扩展|语法点|讲解|同义词|反义词|例句)$/i.test(cleaned)) return false;
       return true;
@@ -93,13 +93,13 @@ export function shortGloss(
     .trim();
 
   // Strip query / definition / translation prefixes
-  t = t.replace(/^(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境)?(?:释义|翻译|解释|查询|Query|Definition|Translation)\s*[:：]\s*/i, '').trim();
+  t = t.replace(/^(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境)?(?:待查内容|待查词|待查单词|待查|查询|释义|翻译|解释|Query|Definition|Translation|Word|Target|Input)\s*[:：]\s*/i, '').trim();
 
   // Drop leading POS tags like "n. " / "v. " / "adj. " / "[n.] " / "(n.) "
   t = t.replace(/^(?:\[?[a-z]{1,5}\]?\.\s+|\[[a-z]{1,5}\]\s*|\([a-z]{1,5}\)\s*)+/i, '').trim();
 
   // Re-strip prefix in case POS tag was before prefix (e.g. "n. 释义：单词")
-  t = t.replace(/^(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境)?(?:释义|翻译|解释|查询|Query|Definition|Translation)\s*[:：]\s*/i, '').trim();
+  t = t.replace(/^(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境)?(?:待查内容|待查词|待查单词|待查|查询|释义|翻译|解释|Query|Definition|Translation|Word|Target|Input)\s*[:：]\s*/i, '').trim();
 
   // Take first sense before delimiter
   t = t.split(/[;；|/｜]/)[0]?.trim() ?? t;
@@ -107,7 +107,7 @@ export function shortGloss(
   // Clean trailing punctuation
   t = t.replace(/[.,:;!?，。：；！？]+$/, '').trim();
 
-  if (!t) return '';
+  if (!t || t.startsWith('待查内容') || t.startsWith('查询')) return '';
 
   // If the translation ended up being just the English surface word itself, omit gloss
   if (surface && t.toLowerCase() === surface.toLowerCase().trim()) {

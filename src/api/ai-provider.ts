@@ -200,9 +200,12 @@ async function explainWithFreeMt(
   };
 }
 
+const QUERY_PREFIX_PATTERN =
+  /^(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境)?(?:待查内容|待查词|待查单词|待查|查询|释义|翻译|解释|Query|Definition|Translation|Word|Target|Input)\s*[:：]\s*/i;
+
 /**
  * Extract concise target-language definition from LLM markdown response.
- * Strips title lines, query echoes ("查询：word", "Query: word"), headers, IPA phonetics,
+ * Strips title lines, query echoes ("查询：word", "待查内容：word", "Query: word"), headers, IPA phonetics,
  * and example sentences, extracting only the clean meaning.
  */
 export function extractDefinitionFromLlm(
@@ -216,10 +219,7 @@ export function extractDefinitionFromLlm(
     return l
       .replace(/\*\*/g, '')
       .replace(/^[#>\-\s*•|]+/gm, '')
-      .replace(
-        /^(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境)?(?:释义|翻译|解释|查询|Query|Definition|Translation)\s*[:：]\s*/i,
-        '',
-      )
+      .replace(QUERY_PREFIX_PATTERN, '')
       .trim();
   };
 
@@ -252,7 +252,7 @@ export function extractDefinitionFromLlm(
       );
       if (match) {
         const cleaned = cleanLine(match[1].replace(/[\[\]]/g, ''));
-        if (cleaned) return cleaned;
+        if (cleaned && !cleaned.startsWith('待查内容')) return cleaned;
       }
     }
 
@@ -260,7 +260,7 @@ export function extractDefinitionFromLlm(
     for (const line of sectionLines) {
       if (/^\|/.test(line)) continue;
       const cleaned = cleanLine(line);
-      if (!cleaned) continue;
+      if (!cleaned || cleaned.startsWith('待查内容')) continue;
       if (cleaned.startsWith('{{') || cleaned.endsWith('}}')) continue;
       if (/[\u4e00-\u9fa5]/.test(cleaned)) {
         // Skip lines that look like whole example sentences with English and Chinese translation in parens
@@ -278,7 +278,7 @@ export function extractDefinitionFromLlm(
     for (const line of sectionLines) {
       if (/^\|/.test(line)) continue;
       const cleaned = cleanLine(line);
-      if (cleaned && !cleaned.startsWith('{{') && !cleaned.endsWith('}}')) {
+      if (cleaned && !cleaned.startsWith('待查内容') && !cleaned.startsWith('{{') && !cleaned.endsWith('}}')) {
         return cleaned;
       }
     }
@@ -288,12 +288,13 @@ export function extractDefinitionFromLlm(
   for (const line of lines) {
     if (/^\|/.test(line)) continue;
     const cleaned = cleanLine(line);
-    if (!cleaned) continue;
+    if (!cleaned || cleaned.startsWith('待查内容')) continue;
     if (cleaned.startsWith('{{') || cleaned.endsWith('}}')) continue;
     // Skip titles / query echoes / headers
     if (
-      /^(?:Query|查询|单词|Word)\s*[:：]/i.test(line) ||
-      /^#+\s+/.test(line)
+      QUERY_PREFIX_PATTERN.test(line) ||
+      /^#+\s+/.test(line) ||
+      /^(?:待查内容|待查词|待查单词|待查|查询|Query|单词|Word|Target)\b/i.test(line)
     ) {
       continue;
     }
@@ -322,11 +323,12 @@ export function extractDefinitionFromLlm(
   for (const line of lines) {
     if (/^\|/.test(line)) continue;
     const cleaned = cleanLine(line);
-    if (!cleaned) continue;
+    if (!cleaned || cleaned.startsWith('待查内容')) continue;
     if (cleaned.startsWith('{{') || cleaned.endsWith('}}')) continue;
     if (
-      /^(?:Query|查询|单词|Word)\s*[:：]/i.test(line) ||
-      /^#+\s+/.test(line)
+      QUERY_PREFIX_PATTERN.test(line) ||
+      /^#+\s+/.test(line) ||
+      /^(?:待查内容|待查词|待查单词|待查|查询|Query|单词|Word|Target)\b/i.test(line)
     ) {
       continue;
     }
@@ -359,8 +361,8 @@ async function explainWithLlm(
   );
   const userContent =
     context?.trim() && context.trim() !== surface.trim()
-      ? `待查内容：${surface}\n上下文：${context.trim()}`
-      : `待查内容：${surface}`;
+      ? `Word: ${surface}\nContext: ${context.trim()}`
+      : `Word: ${surface}`;
 
   const explanation = await chatCompletion(
     config,

@@ -564,11 +564,15 @@ export class VideoVocabRecap {
     if (defText) {
       defText = defText
         .replace(
-          /^(?:查询|释义|中文|中文释义|语境释义|核心释义|翻译|解释|Query|Definition|Translation)\s*[:：]\s*/i,
+          /^(?:待查内容|待查词|待查单词|待查|查询|释义|中文|中文释义|语境释义|核心释义|翻译|解释|Query|Definition|Translation|Word|Target)\s*[:：]\s*/i,
           '',
         )
         .trim();
-      if (defText.toLowerCase() === w.surface.toLowerCase().trim()) {
+      if (
+        defText.startsWith('待查内容') ||
+        defText.startsWith('查询') ||
+        defText.toLowerCase() === w.surface.toLowerCase().trim()
+      ) {
         defText = '';
       }
     }
