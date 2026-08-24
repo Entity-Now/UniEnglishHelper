@@ -644,6 +644,7 @@ export function buildPipMarkup(): string {
           <div id="ueh-word-panel-title"></div>
           <div id="ueh-word-panel-head-actions">
             ${iconActionButton('add', '加生词本', 'primary', { 'data-word-act': 'add' })}
+            ${iconActionButton('refresh', '重新翻译 (AI)', '', { 'data-word-act': 'retranslate' })}
             ${iconActionButton('tts', '朗读', '', { 'data-word-act': 'tts' })}
             <button type="button" id="ueh-word-panel-close" class="ueh-ibtn" title="关闭" aria-label="关闭">×</button>
           </div>

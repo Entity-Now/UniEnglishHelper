@@ -560,7 +560,18 @@ export class VideoVocabRecap {
 
     card.appendChild(top);
 
-    const defText = w.translation?.trim();
+    let defText = w.translation?.trim();
+    if (defText) {
+      defText = defText
+        .replace(
+          /^(?:查询|释义|中文|中文释义|语境释义|核心释义|翻译|解释|Query|Definition|Translation)\s*[:：]\s*/i,
+          '',
+        )
+        .trim();
+      if (defText.toLowerCase() === w.surface.toLowerCase().trim()) {
+        defText = '';
+      }
+    }
     if (defText) {
       const def = this.hostDoc.createElement('div');
       def.className = 'def';

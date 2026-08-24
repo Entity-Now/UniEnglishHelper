@@ -4,7 +4,7 @@
  */
 
 /** Bump when built-in prompts change; triggers prompt refresh for built-in skills. */
-export const BUILTIN_SKILLS_SEED_VERSION = 3;
+export const BUILTIN_SKILLS_SEED_VERSION = 4;
 
 export const BUILTIN_SKILL_IDS = {
   wordExplain: 'builtin-word-explain',
@@ -40,6 +40,7 @@ export const SKILL_WORD_EXPLAIN_PROMPT = `你是一位专业的英语教师，�
 
 # 输出规则
 - 严格按模板输出，不要输出模板名称本身；
+- 标题行直接输出「# {{单词}}」，禁止添加「查询：」或「Query:」等前缀；
 - 不要寒暄、不要额外解释「我将如何回答」；
 - 除专有名词、缩写、代码外，讲解与释义使用简体中文；
 - 音标使用 IPA（如有把握）；不确定则省略音标行。

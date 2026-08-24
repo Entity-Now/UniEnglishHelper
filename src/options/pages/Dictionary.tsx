@@ -24,6 +24,7 @@ export function DictionaryPage(props: {
   const [sort, setSort] = useState<'newest' | 'due' | 'alpha'>('newest');
   const [selected, setSelected] = useState<WordRecord | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [retranslatingId, setRetranslatingId] = useState<number | null>(null);
   const [importModalOpen, setImportModalOpen] = useState(false);
 
   const now = Date.now();
@@ -115,6 +116,52 @@ export function DictionaryPage(props: {
       await props.onRefresh();
     } finally {
       setRefreshing(false);
+    }
+  };
+
+  const handleRetranslate = async (w: WordRecord) => {
+    if (w.id == null) return;
+    setRetranslatingId(w.id);
+    try {
+      const res = await sendRuntime<{
+        surface: string;
+        definition?: string;
+        explanation?: string;
+      }>(
+        'word.retranslate',
+        {
+          id: w.id,
+          surface: w.surface,
+          context: w.context,
+          forceLlm: true,
+        },
+        'options',
+      );
+      if (!res.ok) {
+        props.onToast?.(`重译失败: ${res.error.message}`, 'error');
+        return;
+      }
+      props.onToast?.(`已更新「${w.surface}」的 AI 释义`, 'success');
+      await props.onRefresh();
+      if (selected?.id === w.id) {
+        setSelected((prev) =>
+          prev
+            ? {
+                ...prev,
+                translation: res.data.definition || prev.translation,
+                explanation: res.data.explanation || prev.explanation,
+                explainEngine: 'llm',
+              }
+            : null,
+        );
+      }
+    } catch (e) {
+      props.onToast?.(
+        `重译异常: ${e instanceof Error ? e.message : String(e)}`,
+        'error',
+      );
+    } finally {
+      setRetranslatingId(null);
     }
   };
 
@@ -377,6 +424,15 @@ export function DictionaryPage(props: {
                 <button
                   type="button"
                   className="primary"
+                  disabled={retranslatingId === w.id}
+                  onClick={() => void handleRetranslate(w)}
+                  title="调用大模型重新获取单词释义并更新"
+                >
+                  {retranslatingId === w.id ? '重译中…' : '重新翻译'}
+                </button>
+                <button
+                  type="button"
+                  className="primary"
                   onClick={() => w.id != null && props.onDelete(w.id)}
                 >
                   删除
@@ -407,6 +463,23 @@ export function DictionaryPage(props: {
               {selected.translation}
             </pre>
           )}
+          {selected.explanation && selected.explainEngine === 'llm' && (
+            <pre
+              style={{
+                whiteSpace: 'pre-wrap',
+                fontFamily: 'inherit',
+                fontSize: 12,
+                lineHeight: 1.45,
+                margin: '8px 0',
+                padding: '8px 10px',
+                background: 'rgba(255,255,255,.04)',
+                borderRadius: 6,
+                color: '#ccc',
+              }}
+            >
+              {selected.explanation}
+            </pre>
+          )}
           <p>
             <strong>上下文</strong>
             <br />
@@ -422,13 +495,23 @@ export function DictionaryPage(props: {
               </a>
             </p>
           )}
-          <button
-            type="button"
-            className="primary"
-            onClick={() => setSelected(null)}
-          >
-            关闭详情
-          </button>
+          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+            <button
+              type="button"
+              className="primary"
+              disabled={retranslatingId === selected.id}
+              onClick={() => void handleRetranslate(selected)}
+            >
+              {retranslatingId === selected.id ? '正在重新翻译…' : '重新翻译 (AI)'}
+            </button>
+            <button
+              type="button"
+              className="primary"
+              onClick={() => setSelected(null)}
+            >
+              关闭详情
+            </button>
+          </div>
         </div>
       )}
 

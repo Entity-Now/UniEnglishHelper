@@ -99,10 +99,63 @@ export class UehDatabase extends Dexie {
             }
           });
       });
+    this.version(4)
+      .stores({
+        words:
+          '++id, wordKey, nextReviewAt, createdAt, reviewStage, learningStatus, kind',
+        audio_clips: '++id, createdAt',
+        translation_cache: '++id, key, createdAt',
+        tts_cache: '++id, key, createdAt',
+        skills: 'id, updatedAt',
+        review_logs: '++id, wordId, createdAt',
+        meta: 'key',
+      })
+      .upgrade(async (tx) => {
+        await tx
+          .table('words')
+          .toCollection()
+          .modify((w: Record<string, unknown>) => {
+            if (typeof w.translation === 'string') {
+              const cleaned = (w.translation as string)
+                .replace(
+                  /^(?:查询|释义|中文|中文释义|语境释义|核心释义|翻译|解释|Query|Definition|Translation)\s*[:：]\s*/i,
+                  '',
+                )
+                .trim();
+              if (
+                typeof w.surface === 'string' &&
+                cleaned.toLowerCase() ===
+                  (w.surface as string).toLowerCase().trim()
+              ) {
+                w.translation = '';
+              } else {
+                w.translation = cleaned;
+              }
+            }
+          });
+      });
   }
 }
 
 export const db = new UehDatabase();
+
+function cleanStoredTranslation(
+  translation: string | undefined,
+  surface?: string,
+): string | undefined {
+  if (!translation) return undefined;
+  let t = translation.trim();
+  t = t
+    .replace(
+      /^(?:查询|释义|中文|中文释义|语境释义|核心释义|翻译|解释|Query|Definition|Translation)\s*[:：]\s*/i,
+      '',
+    )
+    .trim();
+  if (surface && t.toLowerCase() === surface.toLowerCase().trim()) {
+    return undefined;
+  }
+  return t || undefined;
+}
 
 const STAGE_INTERVALS_MS = [
   0,
@@ -117,11 +170,12 @@ const STAGE_INTERVALS_MS = [
 export async function addWord(input: WordCreate): Promise<WordRecord> {
   const now = Date.now();
   const wordKey = normalizeWordKey(input.surface);
+  const translation = cleanStoredTranslation(input.translation, input.surface);
   const existing = await db.words.where('wordKey').equals(wordKey).first();
   if (existing) {
     const updated: WordRecord = {
       ...existing,
-      translation: input.translation ?? existing.translation,
+      translation: translation ?? existing.translation,
       phonetic: input.phonetic ?? existing.phonetic,
       context: input.context || existing.context,
       contextTranslation:
@@ -146,7 +200,7 @@ export async function addWord(input: WordCreate): Promise<WordRecord> {
   const record: WordRecord = {
     wordKey,
     surface: input.surface.trim(),
-    translation: input.translation,
+    translation,
     phonetic: input.phonetic,
     context: input.context,
     contextTranslation: input.contextTranslation,
@@ -170,6 +224,53 @@ export async function addWord(input: WordCreate): Promise<WordRecord> {
   const id = await db.words.add(record);
   await bumpWordsRevision();
   return { ...record, id };
+}
+
+export async function updateWordTranslation(
+  id: number,
+  data: {
+    translation?: string;
+    contextTranslation?: string;
+    explanation?: string;
+    explainEngine?: 'llm' | 'free_mt' | 'none';
+    explainProvider?: string;
+    phonetic?: string;
+  },
+): Promise<WordRecord | null> {
+  const existing = await db.words.get(id);
+  if (!existing) return null;
+  const now = Date.now();
+  const translation = cleanStoredTranslation(data.translation, existing.surface);
+  const updated: WordRecord = {
+    ...existing,
+    translation: translation ?? existing.translation,
+    contextTranslation: data.contextTranslation ?? existing.contextTranslation,
+    explanation: data.explanation ?? existing.explanation,
+    explainEngine: data.explainEngine ?? existing.explainEngine,
+    explainProvider: data.explainProvider ?? existing.explainProvider,
+    phonetic: data.phonetic ?? existing.phonetic,
+    updatedAt: now,
+  };
+  await db.words.put(updated);
+  await bumpWordsRevision();
+  return updated;
+}
+
+export async function updateWordTranslationBySurface(
+  surface: string,
+  data: {
+    translation?: string;
+    contextTranslation?: string;
+    explanation?: string;
+    explainEngine?: 'llm' | 'free_mt' | 'none';
+    explainProvider?: string;
+    phonetic?: string;
+  },
+): Promise<WordRecord | null> {
+  const wordKey = normalizeWordKey(surface);
+  const existing = await db.words.where('wordKey').equals(wordKey).first();
+  if (!existing || existing.id == null) return null;
+  return updateWordTranslation(existing.id, data);
 }
 
 export async function listWords(query: WordQuery = {}): Promise<WordRecord[]> {

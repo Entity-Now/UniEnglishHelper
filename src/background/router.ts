@@ -18,6 +18,8 @@ import {
   resetBuiltinSkill,
   saveSkill,
   updateReview,
+  updateWordTranslation,
+  updateWordTranslationBySurface,
   setLearningStatus,
   getHighlightMap,
   getVideoVocabRecap,
@@ -325,10 +327,56 @@ async function dispatch(
         config,
         String(p.surface ?? p.word),
         String(p.context ?? ''),
+        {
+          forceLlm: Boolean(p.forceLlm),
+          resetCircuit: Boolean(p.resetCircuit || p.forceLlm),
+          timeoutMs: typeof p.timeoutMs === 'number' ? p.timeoutMs : undefined,
+        },
       );
       return {
         ...result,
         text: formatWordExplainForDisplay(result),
+      };
+    }
+
+    case 'word.retranslate': {
+      const config = await getConfig();
+      const surface = String(p.surface ?? p.word ?? '');
+      const context = String(p.context ?? '');
+      const result = await explainWord(
+        config,
+        surface,
+        context,
+        {
+          forceLlm: true,
+          resetCircuit: true,
+          timeoutMs: typeof p.timeoutMs === 'number' ? p.timeoutMs : undefined,
+        },
+      );
+
+      let updatedWord = null;
+      if (p.id != null) {
+        updatedWord = await updateWordTranslation(Number(p.id), {
+          translation: result.definition || undefined,
+          contextTranslation: result.contextTranslation,
+          explanation: result.explanation,
+          explainEngine: result.engine,
+          explainProvider: result.provider,
+        });
+      } else if (surface) {
+        updatedWord = await updateWordTranslationBySurface(surface, {
+          translation: result.definition || undefined,
+          contextTranslation: result.contextTranslation,
+          explanation: result.explanation,
+          explainEngine: result.engine,
+          explainProvider: result.provider,
+        });
+      }
+
+      return {
+        ...result,
+        text: formatWordExplainForDisplay(result),
+        word: updatedWord,
       };
     }
 

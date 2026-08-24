@@ -39,7 +39,28 @@ export type RuntimeRequest =
     >
   | Envelope<
       'word.explain',
-      { word: string; surface: string; context: string; skillId?: string }
+      {
+        word?: string;
+        surface?: string;
+        context?: string;
+        skillId?: string;
+        forceLlm?: boolean;
+        resetCircuit?: boolean;
+        timeoutMs?: number;
+      }
+    >
+  | Envelope<
+      'word.retranslate',
+      {
+        id?: number;
+        word?: string;
+        surface?: string;
+        context?: string;
+        skillId?: string;
+        forceLlm?: boolean;
+        resetCircuit?: boolean;
+        timeoutMs?: number;
+      }
     >
   | Envelope<'word.add', WordCreate>
   | Envelope<'word.list', WordQuery>

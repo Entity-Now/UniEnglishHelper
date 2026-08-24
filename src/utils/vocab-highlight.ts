@@ -45,23 +45,75 @@ export function translationForSurface(
 /**
  * Compact gloss under a highlighted word.
  * Takes the first sense and truncates for inline display.
+ * Strips prefixes like "查询：", "Query:", "释义：" and avoids echoing the surface word.
  * Keep short so absolute under-word labels stay unobtrusive.
  */
 export function shortGloss(
   translation: string | undefined,
   maxLen = 6,
+  surface?: string,
 ): string {
   if (!translation) return '';
-  let t = translation
+
+  const rawLines = translation
+    .split(/[\r\n]+/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  let t = '';
+
+  if (rawLines.length > 1) {
+    // Prefer line containing Chinese characters that is not a header or example
+    const zhCandidate = rawLines.find((l) => {
+      if (/^#+/.test(l)) return false;
+      const cleaned = l.replace(/\*\*/g, '').replace(/^[#>\-\s*•|]+/g, '').trim();
+      if (!cleaned || /^(?:例句|e\.g\.)/i.test(cleaned)) return false;
+      if (/^(?:Query|查询|单词|Word)\s*[:：]/i.test(cleaned)) return false;
+      if (/^(?:释义|Definition|词根|扩展|语法点|讲解|同义词|反义词|例句)$/i.test(cleaned)) return false;
+      return /[\u4e00-\u9fa5]/.test(cleaned);
+    });
+
+    const candidate = zhCandidate ?? rawLines.find((l) => {
+      if (/^#+/.test(l)) return false;
+      const cleaned = l.replace(/\*\*/g, '').replace(/^[#>\-\s*•|]+/g, '').trim();
+      if (!cleaned || /^(?:例句|e\.g\.)/i.test(cleaned)) return false;
+      if (/^(?:Query|查询|单词|Word)\s*[:：]/i.test(cleaned)) return false;
+      if (/^[\[/][^\]/]+[\]/]$/.test(cleaned)) return false;
+      if (/^(?:释义|Definition|词根|扩展|语法点|讲解|同义词|反义词|例句)$/i.test(cleaned)) return false;
+      return true;
+    });
+
+    t = candidate ?? rawLines[0] ?? translation;
+  } else {
+    t = rawLines[0] ?? translation;
+  }
+
+  t = t
     .replace(/\*\*/g, '')
-    .replace(/^[#>\-\s]+/gm, '')
+    .replace(/^[#>\-\s*•|]+/gm, '')
     .trim();
-  // First line / first sense
-  t = t.split(/[\n\r]+/)[0]?.trim() ?? t;
+
+  // Strip query / definition / translation prefixes
+  t = t.replace(/^(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境)?(?:释义|翻译|解释|查询|Query|Definition|Translation)\s*[:：]\s*/i, '').trim();
+
+  // Drop leading POS tags like "n. " / "v. " / "adj. " / "[n.] " / "(n.) "
+  t = t.replace(/^(?:\[?[a-z]{1,5}\]?\.\s+|\[[a-z]{1,5}\]\s*|\([a-z]{1,5}\)\s*)+/i, '').trim();
+
+  // Re-strip prefix in case POS tag was before prefix (e.g. "n. 释义：单词")
+  t = t.replace(/^(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境)?(?:释义|翻译|解释|查询|Query|Definition|Translation)\s*[:：]\s*/i, '').trim();
+
+  // Take first sense before delimiter
   t = t.split(/[;；|/｜]/)[0]?.trim() ?? t;
-  // Drop leading POS tags like "n. " / "v. "
-  t = t.replace(/^[a-z]{1,5}\.\s+/i, '').trim();
+
+  // Clean trailing punctuation
+  t = t.replace(/[.,:;!?，。：；！？]+$/, '').trim();
+
   if (!t) return '';
+
+  // If the translation ended up being just the English surface word itself, omit gloss
+  if (surface && t.toLowerCase() === surface.toLowerCase().trim()) {
+    return '';
+  }
+
   if (t.length > maxLen) return `${t.slice(0, maxLen)}…`;
   return t;
 }
@@ -96,7 +148,7 @@ export function decorateWordSpan(
   if (cls) span.classList.add(cls);
 
   const full = entry.translation?.trim() || '';
-  const gloss = shortGloss(full);
+  const gloss = shortGloss(full, 6, surface);
   const tip = full
     ? `${surface} · ${full}`
     : `生词 · ${st}`;

@@ -24,6 +24,28 @@ describe('vocab-highlight', () => {
     expect(shortGloss('一二三四五六七')).toBe('一二三四五六…');
   });
 
+  it('shortGloss strips query and definition prefixes', () => {
+    expect(shortGloss('查询：单词', 6)).toBe('单词');
+    expect(shortGloss('查询: 计算机', 6)).toBe('计算机');
+    expect(shortGloss('Query: greeting', 6)).toBe('greeting');
+    expect(shortGloss('释义：单词；话语', 6)).toBe('单词');
+    expect(shortGloss('中文释义：测试', 6)).toBe('测试');
+    expect(shortGloss('n. 释义：单词', 6)).toBe('单词');
+  });
+
+  it('shortGloss suppresses gloss when translation is just the surface word', () => {
+    expect(shortGloss('查询：word', 6, 'word')).toBe('');
+    expect(shortGloss('Query: Word', 6, 'word')).toBe('');
+    expect(shortGloss('word', 6, 'word')).toBe('');
+    expect(shortGloss('WORD', 6, 'word')).toBe('');
+  });
+
+  it('shortGloss handles multiline markdown definitions', () => {
+    expect(
+      shortGloss('# word\n\n**[wɜːd]**\n\n## 释义\n单词；话语', 6, 'word'),
+    ).toBe('单词');
+  });
+
   it('entryForSurface returns status + translation', () => {
     const map: HighlightMap = {
       hello: { status: 'new', translation: '你好' },

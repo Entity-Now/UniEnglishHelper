@@ -40,6 +40,15 @@ const IcoTts = () => (
   </svg>
 );
 
+const IcoRefresh = () => (
+  <svg viewBox="0 0 24 24" aria-hidden>
+    <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
+    <path d="M21 3v5h-5" />
+    <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
+    <path d="M3 21v-5h5" />
+  </svg>
+);
+
 /**
  * Strip trailing "句子译文：…" blocks that may be embedded in formatted text
  * when the UI already shows contextTranslation at the top.
@@ -70,6 +79,7 @@ export function WordPopup(props: {
   /** Fallback / error hint from explainWord */
   note?: string;
   onAdd?: () => void;
+  onRetranslate?: () => void;
   onTts?: () => void;
   onClose?: () => void;
 }) {
@@ -106,6 +116,11 @@ export function WordPopup(props: {
           {props.onAdd ? (
             <IconBtn label="加生词本" primary onClick={props.onAdd}>
               <IcoAdd />
+            </IconBtn>
+          ) : null}
+          {props.onRetranslate ? (
+            <IconBtn label="重新翻译 (AI)" onClick={props.onRetranslate}>
+              <IcoRefresh />
             </IconBtn>
           ) : null}
           {props.onTts ? (

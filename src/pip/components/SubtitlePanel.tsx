@@ -78,7 +78,7 @@ export function SubtitlePanel(props: {
     const st = entry?.status ?? null;
     const hlCls = highlightClass(st);
     const full = entry?.translation?.trim() || '';
-    const gloss = shortGloss(full);
+    const gloss = shortGloss(full, 6, seg.text);
     if (gloss) hasGloss = true;
     const tip = full
       ? `${seg.text} · ${full}`

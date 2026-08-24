@@ -4,12 +4,14 @@
  * so free MT can answer immediately.
  */
 
-const FAILURE_THRESHOLD = 2;
+const FAILURE_THRESHOLD = 4;
 const WINDOW_MS = 60_000;
 /** Skip LLM for this long after the circuit opens. */
-const OPEN_MS = 90_000;
-/** Per-request budget for word explain (must feel snappy). */
-export const LLM_WORD_EXPLAIN_TIMEOUT_MS = 3_500;
+const OPEN_MS = 60_000;
+/** Per-request budget for word explain. */
+export const LLM_WORD_EXPLAIN_TIMEOUT_MS = 8_000;
+/** Timeout budget for explicit manual re-translate. */
+export const LLM_RETRY_TIMEOUT_MS = 15_000;
 
 const failureTimestamps: number[] = [];
 let circuitOpenUntil: number | null = null;

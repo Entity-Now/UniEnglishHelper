@@ -4,9 +4,11 @@ import { getWordExplainPrompt } from '../utils/prompts/word-explain';
 import { translateFree } from './translate';
 import {
   isLlmCircuitOpen,
+  LLM_RETRY_TIMEOUT_MS,
   LLM_WORD_EXPLAIN_TIMEOUT_MS,
   recordLlmFailure,
   recordLlmSuccess,
+  resetLlmCircuit,
   withAbortTimeout,
 } from './llm-circuit';
 
@@ -198,10 +200,156 @@ async function explainWithFreeMt(
   };
 }
 
+/**
+ * Extract concise target-language definition from LLM markdown response.
+ * Strips title lines, query echoes ("查询：word", "Query: word"), headers, IPA phonetics,
+ * and example sentences, extracting only the clean meaning.
+ */
+export function extractDefinitionFromLlm(
+  explanation: string,
+  surface?: string,
+  targetLang = 'zh',
+): string {
+  if (!explanation) return '';
+
+  const cleanLine = (l: string): string => {
+    return l
+      .replace(/\*\*/g, '')
+      .replace(/^[#>\-\s*•|]+/gm, '')
+      .replace(
+        /^(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境)?(?:释义|翻译|解释|查询|Query|Definition|Translation)\s*[:：]\s*/i,
+        '',
+      )
+      .trim();
+  };
+
+  const lines = explanation
+    .split(/[\r\n]+/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  // 1. Try to extract from "## 释义" / "### 释义" / "## Definition" / "1. 核心单词卡片" section
+  let inSection = false;
+  const sectionLines: string[] = [];
+  for (const line of lines) {
+    if (/^#+\s*(?:释义|Definition|.*核心单词卡片|.*单词卡片)/i.test(line)) {
+      inSection = true;
+      continue;
+    }
+    if (inSection) {
+      if (/^#+\s+/.test(line) || /^---/.test(line)) {
+        break; // reached next section
+      }
+      sectionLines.push(line);
+    }
+  }
+
+  if (sectionLines.length > 0) {
+    // Check for table cells like | **当前语境释义** | **[释义]** |
+    for (const line of sectionLines) {
+      const match = line.match(
+        /\|\s*(?:\*\*)?(?:当前语境释义|常用核心释义)(?:\*\*)?\s*\|\s*([^|]+)\|/i,
+      );
+      if (match) {
+        const cleaned = cleanLine(match[1].replace(/[\[\]]/g, ''));
+        if (cleaned) return cleaned;
+      }
+    }
+
+    // Look for Chinese definition line first
+    for (const line of sectionLines) {
+      if (/^\|/.test(line)) continue;
+      const cleaned = cleanLine(line);
+      if (!cleaned) continue;
+      if (cleaned.startsWith('{{') || cleaned.endsWith('}}')) continue;
+      if (/[\u4e00-\u9fa5]/.test(cleaned)) {
+        // Skip lines that look like whole example sentences with English and Chinese translation in parens
+        if (
+          /^[a-zA-Z].*[.!?]["']?\s*[(（].*[\u4e00-\u9fa5]/.test(cleaned) ||
+          /^(?:例句|e\.g\.)/i.test(cleaned)
+        ) {
+          continue;
+        }
+        return cleaned;
+      }
+    }
+
+    // Fallback in section: take first non-template non-header line
+    for (const line of sectionLines) {
+      if (/^\|/.test(line)) continue;
+      const cleaned = cleanLine(line);
+      if (cleaned && !cleaned.startsWith('{{') && !cleaned.endsWith('}}')) {
+        return cleaned;
+      }
+    }
+  }
+
+  // 2. Scan all lines for target language definition or sentence translation
+  for (const line of lines) {
+    if (/^\|/.test(line)) continue;
+    const cleaned = cleanLine(line);
+    if (!cleaned) continue;
+    if (cleaned.startsWith('{{') || cleaned.endsWith('}}')) continue;
+    // Skip titles / query echoes / headers
+    if (
+      /^(?:Query|查询|单词|Word)\s*[:：]/i.test(line) ||
+      /^#+\s+/.test(line)
+    ) {
+      continue;
+    }
+    // Skip IPA phonetics: [wɜːd], /wɜːd/, **[wɜːd]**
+    if (/^[\[/][^\]/]+[\]/]$/.test(cleaned) || /^\*\*\[.*\]\*\*$/.test(line)) {
+      continue;
+    }
+    // Skip standalone POS tags: n. / v. / adj. / etc.
+    if (
+      /^[a-z]{1,5}\.?$/i.test(cleaned) ||
+      /^\[?[a-z]{1,5}\]?$/i.test(cleaned)
+    ) {
+      continue;
+    }
+    // Skip if it's literally the surface word
+    if (surface && cleaned.toLowerCase() === surface.toLowerCase().trim()) {
+      continue;
+    }
+    // If target is Chinese and line has Chinese characters
+    if (/[\u4e00-\u9fa5]/.test(cleaned)) {
+      return cleaned;
+    }
+  }
+
+  // 3. Fallback: filter out obvious header/query lines and return first reasonable line
+  for (const line of lines) {
+    if (/^\|/.test(line)) continue;
+    const cleaned = cleanLine(line);
+    if (!cleaned) continue;
+    if (cleaned.startsWith('{{') || cleaned.endsWith('}}')) continue;
+    if (
+      /^(?:Query|查询|单词|Word)\s*[:：]/i.test(line) ||
+      /^#+\s+/.test(line)
+    ) {
+      continue;
+    }
+    if (surface && cleaned.toLowerCase() === surface.toLowerCase().trim()) {
+      continue;
+    }
+    if (cleaned.length < 200) return cleaned;
+  }
+
+  return cleanLine(lines[0] || explanation.slice(0, 200));
+}
+
+export interface ExplainWordOptions {
+  forceLlm?: boolean;
+  resetCircuit?: boolean;
+  timeoutMs?: number;
+}
+
 async function explainWithLlm(
   config: AppConfig,
   surface: string,
   context: string,
+  opts?: { timeoutMs?: number },
 ): Promise<WordExplainResult> {
   const system = getWordExplainPrompt(
     config.sourceLang,
@@ -209,20 +357,24 @@ async function explainWithLlm(
     config.wordShow?.langLevel ?? 'intermediate',
     config.wordShow?.customSystemPrompt,
   );
+  const userContent =
+    context?.trim() && context.trim() !== surface.trim()
+      ? `待查内容：${surface}\n上下文：${context.trim()}`
+      : `待查内容：${surface}`;
+
   const explanation = await chatCompletion(
     config,
     [
       { role: 'system', content: system },
-      { role: 'user', content: `Query: ${surface}\nContext: ${context}` },
+      { role: 'user', content: userContent },
     ],
-    { timeoutMs: LLM_WORD_EXPLAIN_TIMEOUT_MS },
+    { timeoutMs: opts?.timeoutMs ?? LLM_WORD_EXPLAIN_TIMEOUT_MS },
   );
-  const definition =
-    explanation
-      .split('\n')
-      .map((l) => l.replace(/^[#*\s-]+/, '').trim())
-      .find((l) => l && !l.startsWith('{{') && l.length < 200) ||
-    explanation.slice(0, 200);
+  const definition = extractDefinitionFromLlm(
+    explanation,
+    surface,
+    config.targetLang,
+  );
   return {
     surface,
     definition,
@@ -238,17 +390,35 @@ async function explainWithLlm(
  *
  * Strategy:
  * 1. Start free MT immediately (parallel) so the user is never blocked on a hung LLM.
- * 2. Try LLM with a hard ~3.5s timeout when a key is present and the circuit is closed.
+ * 2. Try LLM with configured timeout when a key is present and the circuit is closed.
  * 3. Prefer LLM if it wins; otherwise return free MT.
  * 4. After repeated LLM failures, open a short circuit → free MT only (instant path).
+ * 5. If options.forceLlm is set, bypass circuit breaker and try LLM with extended timeout.
  */
 export async function explainWord(
   config: AppConfig,
   surface: string,
   context: string,
+  options?: ExplainWordOptions,
 ): Promise<WordExplainResult> {
   const key = config.ai.apiKeys[config.ai.providerId];
-  const circuitOpen = isLlmCircuitOpen();
+  if (options?.resetCircuit || options?.forceLlm) {
+    resetLlmCircuit();
+  }
+  const circuitOpen = options?.forceLlm ? false : isLlmCircuitOpen();
+
+  // If forceLlm is set and key exists, try LLM with extended timeout
+  if (options?.forceLlm && key) {
+    try {
+      const timeoutMs = options.timeoutMs ?? LLM_RETRY_TIMEOUT_MS;
+      const res = await explainWithLlm(config, surface, context, { timeoutMs });
+      recordLlmSuccess();
+      return res;
+    } catch (err) {
+      console.warn('[UEH] force LLM explain failed, falling back to free MT', err);
+      // fallback to standard path below
+    }
+  }
 
   // Free MT always starts for word popup (UX) — not gated on feature flags.
   // Feature flags still apply to bulk subtitle translation elsewhere.
@@ -285,7 +455,9 @@ export async function explainWord(
   }
 
   // Race: free runs in parallel while LLM has a hard deadline
-  const llmPromise = explainWithLlm(config, surface, context).then(
+  const llmPromise = explainWithLlm(config, surface, context, {
+    timeoutMs: options?.timeoutMs ?? LLM_WORD_EXPLAIN_TIMEOUT_MS,
+  }).then(
     (r) => ({ ok: true as const, r }),
     (e) => ({
       ok: false as const,

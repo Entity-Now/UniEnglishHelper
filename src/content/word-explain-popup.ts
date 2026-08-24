@@ -227,6 +227,7 @@ export async function showWordExplainPopup(
         </div>
         <div class="head-actions" id="ueh-head-actions">
           ${iconActionButton('add', '加生词本', 'primary', { id: 'ueh-add', disabled: 'true' })}
+          ${iconActionButton('refresh', '重新翻译 (AI)', '', { id: 'ueh-retranslate' })}
           ${iconActionButton('tts', '朗读', '', { id: 'ueh-tts' })}
           <button type="button" class="ueh-ibtn close" id="ueh-close" title="关闭" aria-label="关闭">×</button>
         </div>
@@ -414,19 +415,34 @@ export async function showWordExplainPopup(
 
   applyCardPosition();
 
-  sendRuntime<WordExplainResult & { text?: string }>(
-    'word.explain',
-    { word: surface, surface, context },
-    'content',
-  )
-    .then((res) => {
+  const executeExplain = async (forceLlm = false) => {
+    const bodyEl = shadow.getElementById('ueh-popup-body');
+    const badgeEl = shadow.getElementById('ueh-badge');
+    const noteEl = shadow.getElementById('ueh-note');
+    if (!bodyEl) return;
+
+    if (forceLlm) {
+      bodyEl.className = 'body';
+      bodyEl.textContent = '⏳ 正在调用 AI 重新翻译…';
+      if (badgeEl) {
+        badgeEl.hidden = false;
+        badgeEl.className = 'badge llm';
+        badgeEl.textContent = 'AI 重译中…';
+      }
+      if (noteEl) {
+        noteEl.hidden = true;
+        noteEl.textContent = '';
+      }
+    }
+
+    try {
+      const res = await sendRuntime<WordExplainResult & { text?: string }>(
+        forceLlm ? 'word.retranslate' : 'word.explain',
+        { word: surface, surface, context, forceLlm },
+        'content',
+      );
+
       if (!hostDoc.documentElement.contains(host)) return;
-
-      const bodyEl = shadow.getElementById('ueh-popup-body');
-      if (!bodyEl) return;
-
-      const badgeEl = shadow.getElementById('ueh-badge');
-      const noteEl = shadow.getElementById('ueh-note');
 
       if (!res.ok) {
         bodyEl.className = 'body err';
@@ -492,17 +508,30 @@ export async function showWordExplainPopup(
 
       bindAdd();
 
+      if (forceLlm) {
+        try {
+          await onAddSuccess?.();
+        } catch {
+          // ignore refresh error
+        }
+      }
+
       window.clearTimeout(timer);
-      timer = window.setTimeout(remove, 25_000);
-    })
-    .catch((err) => {
+      timer = window.setTimeout(remove, 30_000);
+    } catch (err) {
       if (!hostDoc.documentElement.contains(host)) return;
-      const bodyEl = shadow.getElementById('ueh-popup-body');
       if (bodyEl) {
         bodyEl.className = 'body err';
         bodyEl.textContent = `查询异常: ${
           err instanceof Error ? err.message : String(err)
         }`;
       }
-    });
+    }
+  };
+
+  shadow.getElementById('ueh-retranslate')?.addEventListener('click', () => {
+    void executeExplain(true);
+  });
+
+  void executeExplain(false);
 }

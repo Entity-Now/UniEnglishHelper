@@ -1982,14 +1982,19 @@ export class PipSessionController {
     this.openWordPanel();
 
     let explain: WordExplainResult | null = null;
-    if (wordShow?.autoExplain !== false) {
-      if (body) body.textContent = '查询中…（AI 超时将自动免费翻译）';
+
+    const fetchExplain = async (forceLlm = false) => {
+      if (body) {
+        body.textContent = forceLlm
+          ? '⏳ 正在调用 AI 重新翻译…'
+          : '查询中…（AI 超时将自动免费翻译）';
+      }
       if (title) {
         title.dataset.engine = '';
       }
       const res = await sendRuntime<WordExplainResult & { text?: string }>(
-        'word.explain',
-        { word: surface, surface, context },
+        forceLlm ? 'word.retranslate' : 'word.explain',
+        { word: surface, surface, context, forceLlm },
         'content',
       );
       if (res.ok) {
@@ -2046,10 +2051,17 @@ export class PipSessionController {
           if (!body.textContent?.trim()) {
             body.textContent = res.data.text || surface;
           }
+          if (forceLlm) {
+            void this.refreshWordHighlights();
+          }
         }
       } else if (body) {
         body.textContent = res.error.message;
       }
+    };
+
+    if (wordShow?.autoExplain !== false) {
+      void fetchExplain(false);
     } else if (body) {
       body.textContent = '点击右上角加入生词本，或等待自动释义。';
     }
@@ -2058,9 +2070,19 @@ export class PipSessionController {
       const addBtn = headActions.querySelector(
         '[data-word-act="add"]',
       ) as HTMLButtonElement | null;
+      const retranslateBtn = headActions.querySelector(
+        '[data-word-act="retranslate"]',
+      ) as HTMLButtonElement | null;
       const ttsBtn = headActions.querySelector(
         '[data-word-act="tts"]',
       ) as HTMLButtonElement | null;
+
+      if (retranslateBtn) {
+        retranslateBtn.onclick = (e) => {
+          e.stopPropagation();
+          void fetchExplain(true);
+        };
+      }
 
       if (addBtn) {
         addBtn.onclick = async (e) => {
