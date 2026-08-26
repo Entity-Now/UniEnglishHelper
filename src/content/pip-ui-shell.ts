@@ -250,11 +250,11 @@ export function buildPipStyles(opts: {
       box-shadow: none;
     }
     #ueh-sub-card.ueh-cue-in {
-      animation: ueh-cue-in 0.22s ease-out;
+      animation: ueh-cue-in 0.18s ease-out;
     }
     @keyframes ueh-cue-in {
-      from { opacity: 0; transform: translateY(7px) scale(0.985); }
-      to { opacity: 1; transform: translateY(0) scale(1); }
+      from { opacity: 0.35; }
+      to { opacity: 1; }
     }
     @media (prefers-reduced-motion: reduce) {
       #ueh-sub-card.ueh-cue-in { animation: none; }

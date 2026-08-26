@@ -329,6 +329,8 @@ export class PipSessionController {
     this.syncPipSidePanelWindow();
   }
 
+  private syncPipSidePanelTimer = 0;
+
   /**
    * Grow / shrink the Document PiP window so recap / cue-list rails sit
    * beside the video instead of covering it.
@@ -354,15 +356,16 @@ export class PipSessionController {
       availHeight: availH,
     });
     this.syncingPipSize = true;
+    this.pipPanelExtraPx = extra;
     try {
       win.resizeTo(next.width, next.height);
     } catch {
       // Document PiP may ignore resizeTo on some hosts; layout still won't overlay.
     }
-    window.setTimeout(() => {
+    window.clearTimeout(this.syncPipSidePanelTimer);
+    this.syncPipSidePanelTimer = window.setTimeout(() => {
       this.syncingPipSize = false;
-      this.pipPanelExtraPx = extra;
-    }, 40);
+    }, 200);
   }
 
   private injectHighlightCss(): void {
@@ -704,11 +707,6 @@ export class PipSessionController {
         visibility: hidden !important;
         pointer-events: none !important;
       }
-      /* In mirror mode, reduce opacity of the main video element so compositor skips page rasterization */
-      html.ueh-pip-active.ueh-pip-mirroring #movie_player video.html5-main-video,
-      html.ueh-pip-active.ueh-pip-mirroring video.ueh-video-source {
-        opacity: 0.001 !important;
-      }
       /* Hide in-page subtitles overlay when PiP is active */
       html.ueh-pip-active #ueh-page-subs-root {
         display: none !important;
@@ -824,6 +822,8 @@ export class PipSessionController {
     this.pipBaseOuterWidth = 0;
     this.pipPanelExtraPx = 0;
     this.syncingPipSize = false;
+    window.clearTimeout(this.syncPipSidePanelTimer);
+    this.syncPipSidePanelTimer = 0;
     this.lastUiKey = '';
     this.lastPrefetchCueId = '';
     this.lastPlayIconPaused = null;
@@ -1653,10 +1653,11 @@ export class PipSessionController {
 
     const card = doc.getElementById('ueh-sub-card');
     if (card && cue.id !== this.lastPipCueId) {
-      card.classList.remove('ueh-cue-in');
-      void card.offsetWidth;
-      card.classList.add('ueh-cue-in');
       this.lastPipCueId = cue.id;
+      card.classList.remove('ueh-cue-in');
+      requestAnimationFrame(() => {
+        card.classList.add('ueh-cue-in');
+      });
     }
 
     const showOriginal = this.resolveShowOriginal();
