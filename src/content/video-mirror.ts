@@ -193,7 +193,6 @@ export function startVideoMirror(
 
       const ctx = pageCanvas.getContext('2d', {
         alpha: false,
-        desynchronized: true,
       });
       if (!ctx) throw new Error('no 2d context');
       ctx.imageSmoothingEnabled = true;
@@ -210,9 +209,9 @@ export function startVideoMirror(
         onResizeNeed: () => {
           // Throttle size recompute (slot resize / layout)
           resizeAccum++;
-          if (resizeAccum % 8 !== 0) return;
+          if (resizeAccum % 10 !== 0) return;
           const next = computeCanvasSize(source, slot);
-          if (next.w !== lastW || next.h !== lastH) {
+          if (Math.abs(next.w - lastW) > 4 || Math.abs(next.h - lastH) > 4) {
             lastW = next.w;
             lastH = next.h;
             pageCanvas.width = next.w;
@@ -259,7 +258,7 @@ export function startVideoMirror(
       try {
         ro = new ResizeObserver(() => {
           const next = computeCanvasSize(source, slot);
-          if (next.w !== lastW || next.h !== lastH) {
+          if (Math.abs(next.w - lastW) > 4 || Math.abs(next.h - lastH) > 4) {
             lastW = next.w;
             lastH = next.h;
             pageCanvas.width = next.w;
@@ -315,7 +314,6 @@ export function startVideoMirror(
     slot.appendChild(canvas);
     const ctx = canvas.getContext('2d', {
       alpha: false,
-      desynchronized: true,
     });
     if (!ctx) throw new Error('no pip ctx');
     ctx.imageSmoothingEnabled = true;
@@ -326,7 +324,7 @@ export function startVideoMirror(
 
     const applySize = () => {
       const next = computeCanvasSize(source, slot);
-      if (next.w === lastW && next.h === lastH) return;
+      if (Math.abs(next.w - lastW) <= 4 && Math.abs(next.h - lastH) <= 4) return;
       lastW = next.w;
       lastH = next.h;
       canvas.width = next.w;
