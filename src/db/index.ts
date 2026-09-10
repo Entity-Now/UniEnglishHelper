@@ -15,6 +15,13 @@ import {
   classifyVideoVocab,
   type VideoVocabRecapResult,
 } from '../utils/video-vocab-recap';
+import {
+  cleanLine,
+  extractDefinitionFromLlm,
+  isExplicitDefinitionLine,
+  isQueryEchoLine,
+  isSentenceLine,
+} from '../api/ai-provider';
 
 /** Notify options/popup UIs that the words table changed. */
 async function bumpWordsRevision(): Promise<void> {
@@ -211,30 +218,64 @@ export class UehDatabase extends Dexie {
             }
           });
       });
+    this.version(8)
+      .stores({
+        words:
+          '++id, wordKey, nextReviewAt, createdAt, reviewStage, learningStatus, kind',
+        audio_clips: '++id, createdAt',
+        translation_cache: '++id, key, createdAt',
+        tts_cache: '++id, key, createdAt',
+        skills: 'id, updatedAt',
+        review_logs: '++id, wordId, createdAt',
+        meta: 'key',
+      })
+      .upgrade(async (tx) => {
+        await tx
+          .table('words')
+          .toCollection()
+          .modify((w: Record<string, unknown>) => {
+            const surface = typeof w.surface === 'string' ? w.surface : undefined;
+            if (typeof w.translation === 'string') {
+              const cleaned = cleanStoredTranslation(w.translation, surface);
+              if (cleaned) {
+                w.translation = cleaned;
+              } else if (typeof w.explanation === 'string' && w.kind !== 'sentence') {
+                const extracted = extractDefinitionFromLlm(w.explanation, surface);
+                w.translation = cleanStoredTranslation(extracted, surface) ?? '';
+              } else {
+                w.translation = '';
+              }
+            } else if (typeof w.explanation === 'string' && w.kind !== 'sentence') {
+              const extracted = extractDefinitionFromLlm(w.explanation, surface);
+              w.translation = cleanStoredTranslation(extracted, surface) ?? '';
+            }
+          });
+      });
   }
 }
 
 export const db = new UehDatabase();
 
-const STORED_PREFIX_REGEX =
-  /^(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境|上下文|句子|整句)?(?:待查内容|待查单词|待查词|待查|单\s*词|生\s*词|词|查询|释义|中文释义|语境释义|核心释义|翻译|解释|上下文|语境|句子翻译|上下文翻译|Query|Definition|Translation|Word|Target|Input|Context|Sentence)\s*[:：]\s*/i;
-
-function cleanStoredTranslation(
+export function cleanStoredTranslation(
   translation: string | undefined,
   surface?: string,
 ): string | undefined {
   if (!translation) return undefined;
-  let t = translation.trim();
-  while (STORED_PREFIX_REGEX.test(t)) {
-    t = t.replace(STORED_PREFIX_REGEX, '').trim();
+  const raw = translation.trim();
+  if (!raw) return undefined;
+
+  let t = raw;
+  if (raw.includes('\n')) {
+    const extracted = extractDefinitionFromLlm(raw, surface);
+    if (extracted) t = extracted;
   }
+
+  t = cleanLine(t, surface);
+
   if (
-    t.startsWith('待查内容') ||
-    t.startsWith('查询') ||
-    t.startsWith('词：') ||
-    t.startsWith('词:') ||
-    t.startsWith('上下文：') ||
-    t.startsWith('上下文:') ||
+    !t ||
+    (isSentenceLine(raw) && !isExplicitDefinitionLine(raw)) ||
+    isQueryEchoLine(raw) ||
     (surface && t.toLowerCase() === surface.toLowerCase().trim())
   ) {
     return undefined;
@@ -255,7 +296,11 @@ const STAGE_INTERVALS_MS = [
 export async function addWord(input: WordCreate): Promise<WordRecord> {
   const now = Date.now();
   const wordKey = normalizeWordKey(input.surface);
-  const translation = cleanStoredTranslation(input.translation, input.surface);
+  let translation = cleanStoredTranslation(input.translation, input.surface);
+  if (!translation && input.explanation && input.kind !== 'sentence') {
+    const extracted = extractDefinitionFromLlm(input.explanation, input.surface);
+    translation = cleanStoredTranslation(extracted, input.surface);
+  }
   const existing = await db.words.where('wordKey').equals(wordKey).first();
   if (existing) {
     const updated: WordRecord = {
@@ -325,7 +370,11 @@ export async function updateWordTranslation(
   const existing = await db.words.get(id);
   if (!existing) return null;
   const now = Date.now();
-  const translation = cleanStoredTranslation(data.translation, existing.surface);
+  let translation = cleanStoredTranslation(data.translation, existing.surface);
+  if (!translation && data.explanation && existing.kind !== 'sentence') {
+    const extracted = extractDefinitionFromLlm(data.explanation, existing.surface);
+    translation = cleanStoredTranslation(extracted, existing.surface);
+  }
   const updated: WordRecord = {
     ...existing,
     translation: translation ?? existing.translation,
@@ -452,9 +501,14 @@ export async function importWords(
     const existing = existingMap.get(wordKey);
 
     if (existing && mode !== 'overwrite') {
+      let tr = cleanStoredTranslation(item.translation, surface);
+      if (!tr && item.explanation && (item.kind ?? existing.kind) !== 'sentence') {
+        const extracted = extractDefinitionFromLlm(item.explanation, surface);
+        tr = cleanStoredTranslation(extracted, surface);
+      }
       const updatedRecord: WordRecord = {
         ...existing,
-        translation: item.translation ?? existing.translation,
+        translation: tr ?? existing.translation,
         phonetic: item.phonetic ?? existing.phonetic,
         context: item.context || existing.context,
         contextTranslation:
@@ -477,10 +531,15 @@ export async function importWords(
       toPut.push(updatedRecord);
       updated++;
     } else {
+      let tr = cleanStoredTranslation(item.translation, surface);
+      if (!tr && item.explanation && item.kind !== 'sentence') {
+        const extracted = extractDefinitionFromLlm(item.explanation, surface);
+        tr = cleanStoredTranslation(extracted, surface);
+      }
       const record: WordRecord = {
         wordKey,
         surface,
-        translation: item.translation,
+        translation: tr,
         phonetic: item.phonetic,
         context: item.context ?? '',
         contextTranslation: item.contextTranslation,

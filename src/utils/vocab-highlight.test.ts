@@ -60,6 +60,20 @@ describe('vocab-highlight', () => {
     ).toBe('单词');
   });
 
+  it('shortGloss handles AI translation output with context and word prefixes', () => {
+    const aiOutput1 = `上下文：“xxxx”\n单词：法语\n上下文：xxxx`;
+    expect(shortGloss(aiOutput1, 6, 'French')).toBe('法语');
+
+    const aiOutput2 = `【上下文】xxxx\n【单词】法语\n【上下文】xxxx`;
+    expect(shortGloss(aiOutput2, 6, 'French')).toBe('法语');
+
+    const aiOutput3 = `- 上下文：xxxx\n- 单词：法语`;
+    expect(shortGloss(aiOutput3, 6, 'French')).toBe('法语');
+
+    const aiOutput4 = `上下文: "xxxx"\n单词: 法语`;
+    expect(shortGloss(aiOutput4, 6, 'French')).toBe('法语');
+  });
+
   it('entryForSurface returns status + translation', () => {
     const map: HighlightMap = {
       hello: { status: 'new', translation: '你好' },

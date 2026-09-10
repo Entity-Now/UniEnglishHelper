@@ -80,6 +80,32 @@ n. 单词
     expect(extractDefinitionFromLlm('# word\n\n## 释义\n单词\n\n上下文：这是一句字幕的翻译。', 'word')).toBe('单词');
     expect(extractDefinitionFromLlm('上下文：这是一句字幕的翻译。\n单词：测试', 'word')).toBe('测试');
   });
+
+  it('correctly handles AI translation output with context and word prefixes', () => {
+    const aiOutput1 = `上下文：“xxxx”\n单词：法语\n上下文：xxxx`;
+    expect(extractDefinitionFromLlm(aiOutput1, 'French')).toBe('法语');
+
+    const aiOutput2 = `上下文：xxxx\n单词：法语\n上下文：xxxx`;
+    expect(extractDefinitionFromLlm(aiOutput2, 'French')).toBe('法语');
+
+    const aiOutput3 = `- 上下文：xxxx\n- 单词：法语\n- 上下文：xxxx`;
+    expect(extractDefinitionFromLlm(aiOutput3, 'French')).toBe('法语');
+
+    const aiOutput4 = `**上下文**：xxxx\n**单词**：法语\n**上下文**：xxxx`;
+    expect(extractDefinitionFromLlm(aiOutput4, 'French')).toBe('法语');
+
+    const aiOutput5 = `【上下文】xxxx\n【单词】法语\n【上下文】xxxx`;
+    expect(extractDefinitionFromLlm(aiOutput5, 'French')).toBe('法语');
+
+    const aiOutput6 = `上下文: "xxxx"\n单词: 法语`;
+    expect(extractDefinitionFromLlm(aiOutput6, 'French')).toBe('法语');
+
+    const aiOutput7 = `上下文：“I like French food.”\n单词：法语\n上下文：我喜欢法国菜。`;
+    expect(extractDefinitionFromLlm(aiOutput7, 'French')).toBe('法语');
+
+    const aiOutput8 = `French: 法语\n上下文：xxxx`;
+    expect(extractDefinitionFromLlm(aiOutput8, 'French')).toBe('法语');
+  });
 });
 
 describe('getWordExplainPrompt', () => {

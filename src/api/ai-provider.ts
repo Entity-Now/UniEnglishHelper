@@ -200,13 +200,59 @@ async function explainWithFreeMt(
   };
 }
 
-export const QUERY_PREFIX_PATTERN =
-  /^(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境|上下文|句子|整句)?(?:待查内容|待查单词|待查词|待查|单\s*词|生\s*词|词|查询|释义|中文释义|语境释义|核心释义|翻译|解释|上下文|语境|句子翻译|上下文翻译|Query|Definition|Translation|Word|Target|Input|Context|Sentence)\s*[:：]\s*/i;
+export const DEFINITION_PREFIX_PATTERN =
+  /^(?:[【(\[]|\*{1,2})?\s*(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境)?(?:单\s*词|生\s*词|词|释义|中文释义|语境释义|核心释义|翻译|解释|Word|Target|Definition|Translation)\s*(?:[】)\]]|\*{1,2})?\s*[:：]?\s*/i;
+
+export const SENTENCE_PREFIX_PATTERN =
+  /^(?:[【(\[]|\*{1,2})?\s*(?:结合语境的)?(?:精准)?(?:上下文|语境|句子|整句|例句|Context|Sentence|Example|语境翻译|句子翻译|上下文翻译)\s*(?:[】)\]]|\*{1,2})?\s*[:：]?\s*/i;
+
+export const QUERY_ECHO_PREFIX_PATTERN =
+  /^(?:[【(\[]|\*{1,2})?\s*(?:待查内容|待查单词|待查词|待查|查询|Query|Input)\s*(?:[】)\]]|\*{1,2})?\s*[:：]?\s*/i;
+
+export const ALL_PREFIX_PATTERN =
+  /^(?:[【(\[]|\*{1,2})?\s*(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境|上下文|句子|整句)?(?:待查内容|待查单词|待查词|待查|单\s*词|生\s*词|词|查询|释义|中文释义|语境释义|核心释义|翻译|解释|上下文|语境|句子翻译|上下文翻译|Query|Definition|Translation|Word|Target|Input|Context|Sentence|Example|例句)\s*(?:[】)\]]|\*{1,2})?\s*[:：]?\s*/i;
+
+export const QUERY_PREFIX_PATTERN = ALL_PREFIX_PATTERN;
+
+export function cleanLine(l: string, surface?: string): string {
+  let res = l.replace(/\*\*/g, '').replace(/^[#>\-\s*•|\d.、]+/gm, '').trim();
+
+  // Strip leading surface prefix like "French: " or "French - "
+  if (surface) {
+    const escaped = surface.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const surfacePrefix = new RegExp(`^(?:[【(\\[]|\\*{1,2})?\\s*${escaped}\\s*(?:[】)\\]]|\\*{1,2})?\\s*[:：\\-]\\s*`, 'i');
+    res = res.replace(surfacePrefix, '').trim();
+  }
+
+  while (ALL_PREFIX_PATTERN.test(res)) {
+    const next = res.replace(ALL_PREFIX_PATTERN, '').trim();
+    if (next === res) break;
+    res = next;
+  }
+  // Strip enclosing quotes: “...”, "...", '...', ‘...’, 「...」, 『...』
+  res = res.replace(/^[“”"''`「」『』\s]+|[“”"''`「」『』\s]+$/g, '').trim();
+  return res;
+}
+
+export function isSentenceLine(l: string): boolean {
+  const trimmed = l.replace(/\*\*/g, '').replace(/^[#>\-\s*•|\d.、]+/gm, '').trim();
+  return SENTENCE_PREFIX_PATTERN.test(trimmed);
+}
+
+export function isExplicitDefinitionLine(l: string): boolean {
+  const trimmed = l.replace(/\*\*/g, '').replace(/^[#>\-\s*•|\d.、]+/gm, '').trim();
+  return DEFINITION_PREFIX_PATTERN.test(trimmed);
+}
+
+export function isQueryEchoLine(l: string): boolean {
+  const trimmed = l.replace(/\*\*/g, '').replace(/^[#>\-\s*•|\d.、]+/gm, '').trim();
+  return QUERY_ECHO_PREFIX_PATTERN.test(trimmed);
+}
 
 /**
  * Extract concise target-language definition from LLM markdown response.
- * Strips title lines, query echoes ("词：word", "查询：word", "待查内容：word", "上下文：..."), headers, IPA phonetics,
- * context/sentence translations, and example sentences, extracting only the pure word definition.
+ * Strips title lines, query echoes ("词：word", "查询：word", "待查内容：word"), headers, IPA phonetics,
+ * context/sentence translations ("上下文：..."), and example sentences, extracting only the pure word definition.
  */
 export function extractDefinitionFromLlm(
   explanation: string,
@@ -215,26 +261,14 @@ export function extractDefinitionFromLlm(
 ): string {
   if (!explanation) return '';
 
-  const cleanLine = (l: string): string => {
-    let res = l.replace(/\*\*/g, '').replace(/^[#>\-\s*•|]+/gm, '').trim();
-    while (QUERY_PREFIX_PATTERN.test(res)) {
-      res = res.replace(QUERY_PREFIX_PATTERN, '').trim();
-    }
-    return res;
-  };
-
-  const isSentenceLine = (l: string): boolean => {
-    return /^(?:上下文|语境|句子|整句|例句|Context|Sentence|Example|语境翻译|句子翻译|上下文翻译)\s*[:：]/i.test(
-      l,
-    );
-  };
-
   const lines = explanation
     .split(/[\r\n]+/)
     .map((l) => l.trim())
     .filter(Boolean);
 
   const isWord = !surface || !surface.includes(' ') || surface.split(/\s+/).length <= 3;
+  const isSurface = (text: string) =>
+    Boolean(surface && text.toLowerCase() === surface.toLowerCase().trim());
 
   // 1. Try to extract from "## 释义" / "### 释义" / "## Definition" / "1. 核心单词卡片" section
   let inSection = false;
@@ -259,11 +293,11 @@ export function extractDefinitionFromLlm(
         /\|\s*(?:\*\*)?(?:当前语境释义|常用核心释义)(?:\*\*)?\s*\|\s*([^|]+)\|/i,
       );
       if (match) {
-        const cleaned = cleanLine(match[1].replace(/[\[\]]/g, ''));
+        const cleaned = cleanLine(match[1].replace(/[\[\]]/g, ''), surface);
         if (
           cleaned &&
-          !cleaned.startsWith('待查内容') &&
-          !cleaned.startsWith('查询') &&
+          !isQueryEchoLine(match[1]) &&
+          !isSurface(cleaned) &&
           (!isWord || !isSentenceLine(match[1]))
         ) {
           return cleaned;
@@ -271,12 +305,23 @@ export function extractDefinitionFromLlm(
       }
     }
 
-    // Look for Chinese definition line first
+    // Check explicit word definition line in section
     for (const line of sectionLines) {
       if (/^\|/.test(line)) continue;
       if (isWord && isSentenceLine(line)) continue;
-      const cleaned = cleanLine(line);
-      if (!cleaned || cleaned.startsWith('待查内容') || cleaned.startsWith('查询')) continue;
+      if (isExplicitDefinitionLine(line)) {
+        const cleaned = cleanLine(line, surface);
+        if (cleaned && !isSurface(cleaned)) return cleaned;
+      }
+    }
+
+    // Look for Chinese definition line in section
+    for (const line of sectionLines) {
+      if (/^\|/.test(line)) continue;
+      if (isWord && isSentenceLine(line)) continue;
+      if (isQueryEchoLine(line)) continue;
+      const cleaned = cleanLine(line, surface);
+      if (!cleaned || isSurface(cleaned)) continue;
       if (cleaned.startsWith('{{') || cleaned.endsWith('}}')) continue;
       if (/[\u4e00-\u9fa5]/.test(cleaned)) {
         // Skip lines that look like whole example sentences with English and Chinese translation in parens
@@ -294,11 +339,11 @@ export function extractDefinitionFromLlm(
     for (const line of sectionLines) {
       if (/^\|/.test(line)) continue;
       if (isWord && isSentenceLine(line)) continue;
-      const cleaned = cleanLine(line);
+      if (isQueryEchoLine(line)) continue;
+      const cleaned = cleanLine(line, surface);
       if (
         cleaned &&
-        !cleaned.startsWith('待查内容') &&
-        !cleaned.startsWith('查询') &&
+        !isSurface(cleaned) &&
         !cleaned.startsWith('{{') &&
         !cleaned.endsWith('}}')
       ) {
@@ -307,21 +352,27 @@ export function extractDefinitionFromLlm(
     }
   }
 
-  // 2. Scan all lines for target language definition (excluding context sentence lines for single words)
+  // 2. Scan lines for explicit definition line (e.g. "单词：法语", "【单词】法语", "释义：法语")
   for (const line of lines) {
     if (/^\|/.test(line)) continue;
     if (isWord && isSentenceLine(line)) continue;
-    const cleaned = cleanLine(line);
-    if (!cleaned || cleaned.startsWith('待查内容') || cleaned.startsWith('查询')) continue;
-    if (cleaned.startsWith('{{') || cleaned.endsWith('}}')) continue;
-    // Skip titles / query echoes / headers
-    if (
-      QUERY_PREFIX_PATTERN.test(line) ||
-      /^#+\s+/.test(line) ||
-      /^(?:待查内容|待查词|待查单词|待查|查询|Query|单\s*词|生\s*词|词|Word|Target)\b/i.test(line)
-    ) {
-      continue;
+    if (isExplicitDefinitionLine(line)) {
+      const cleaned = cleanLine(line, surface);
+      if (cleaned && !isSurface(cleaned)) {
+        return cleaned;
+      }
     }
+  }
+
+  // 3. Scan all lines for target language definition (excluding context sentence lines for single words)
+  for (const line of lines) {
+    if (/^\|/.test(line)) continue;
+    if (isWord && isSentenceLine(line)) continue;
+    if (isQueryEchoLine(line)) continue;
+    const cleaned = cleanLine(line, surface);
+    if (!cleaned || isSurface(cleaned)) continue;
+    if (cleaned.startsWith('{{') || cleaned.endsWith('}}')) continue;
+
     // Skip IPA phonetics: [wɜːd], /wɜːd/, **[wɜːd]**
     if (/^[\[/][^\]/]+[\]/]$/.test(cleaned) || /^\*\*\[.*\]\*\*$/.test(line)) {
       continue;
@@ -333,37 +384,41 @@ export function extractDefinitionFromLlm(
     ) {
       continue;
     }
-    // Skip if it's literally the surface word
-    if (surface && cleaned.toLowerCase() === surface.toLowerCase().trim()) {
+    // Skip header lines
+    if (/^#+\s+/.test(line)) {
       continue;
     }
+
     // If target is Chinese and line has Chinese characters
     if (/[\u4e00-\u9fa5]/.test(cleaned)) {
+      if (
+        /^[a-zA-Z].*[.!?]["']?\s*[(（].*[\u4e00-\u9fa5]/.test(cleaned) ||
+        /^(?:例句|e\.g\.)/i.test(cleaned)
+      ) {
+        continue;
+      }
       return cleaned;
     }
   }
 
-  // 3. Fallback: filter out obvious header/query/context lines and return first reasonable line
+  // 4. Fallback: filter out obvious header/query/context lines and return first reasonable line
   for (const line of lines) {
     if (/^\|/.test(line)) continue;
     if (isWord && isSentenceLine(line)) continue;
-    const cleaned = cleanLine(line);
-    if (!cleaned || cleaned.startsWith('待查内容') || cleaned.startsWith('查询')) continue;
+    if (isQueryEchoLine(line)) continue;
+    const cleaned = cleanLine(line, surface);
+    if (!cleaned || isSurface(cleaned)) continue;
     if (cleaned.startsWith('{{') || cleaned.endsWith('}}')) continue;
-    if (
-      QUERY_PREFIX_PATTERN.test(line) ||
-      /^#+\s+/.test(line) ||
-      /^(?:待查内容|待查词|待查单词|待查|查询|Query|单\s*词|生\s*词|词|Word|Target)\b/i.test(line)
-    ) {
-      continue;
-    }
-    if (surface && cleaned.toLowerCase() === surface.toLowerCase().trim()) {
-      continue;
-    }
+    if (/^#+\s+/.test(line)) continue;
     if (cleaned.length < 200) return cleaned;
   }
 
-  return cleanLine(lines[0] || explanation.slice(0, 200));
+  // 5. Final fallback if all lines were filtered: choose first non-sentence, non-echo line if possible
+  const nonSentenceLine = lines.find(
+    (l) => !isSentenceLine(l) && !isQueryEchoLine(l),
+  );
+  const fallbackLine = nonSentenceLine || lines[0] || explanation.slice(0, 200);
+  return cleanLine(fallbackLine, surface);
 }
 
 export interface ExplainWordOptions {

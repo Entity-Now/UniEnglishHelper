@@ -1,6 +1,13 @@
 import type { LearningStatus } from '../db/schema';
 import type { VocabHighlightConfig } from '../shared/domain/types';
 import { DEFAULT_VOCAB_HIGHLIGHT } from '../shared/domain/types';
+import {
+  cleanLine,
+  isExplicitDefinitionLine,
+  isQueryEchoLine,
+  isSentenceLine,
+  ALL_PREFIX_PATTERN,
+} from '../api/ai-provider';
 
 /** Per-word entry for subtitle highlight + inline gloss. */
 export interface HighlightEntry {
@@ -42,13 +49,12 @@ export function translationForSurface(
   return t || undefined;
 }
 
-export const VOCAB_PREFIX_REGEX =
-  /^(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境|上下文|句子|整句)?(?:待查内容|待查单词|待查词|待查|单\s*词|生\s*词|词|查询|释义|中文释义|语境释义|核心释义|翻译|解释|上下文|语境|句子翻译|上下文翻译|Query|Definition|Translation|Word|Target|Input|Context|Sentence)\s*[:：]\s*/i;
+export const VOCAB_PREFIX_REGEX = ALL_PREFIX_PATTERN;
 
 /**
  * Compact gloss under a highlighted word.
  * Takes the first sense and truncates for inline display.
- * Strips prefixes like "词：", "上下文：", "查询：", "Query:", "释义：" and avoids echoing the surface word.
+ * Strips prefixes like "词：", "单词：", "上下文：", "查询：", "Query:", "释义：" and avoids echoing the surface word.
  * Keep short so absolute under-word labels stay unobtrusive.
  */
 export function shortGloss(
@@ -62,57 +68,67 @@ export function shortGloss(
     .split(/[\r\n]+/)
     .map((l) => l.trim())
     .filter(Boolean);
-  let t = '';
+  if (!rawLines.length) return '';
 
-  const isPrefixOnly = (l: string): boolean => {
-    return /^(?:待查内容|待查词|待查单词|待查|Query|查询|单\s*词|生\s*词|词|Word|Target|上下文|语境|句子|整句|例句|Context|Sentence|Example|语境翻译|句子翻译|上下文翻译)\s*[:：]/i.test(
-      l,
-    );
-  };
+  const isSurface = (text: string) =>
+    Boolean(surface && text.toLowerCase() === surface.toLowerCase().trim());
+
+  let chosenLine = '';
 
   if (rawLines.length > 1) {
-    // Prefer line containing Chinese characters that is not a header, context line, or example
-    const zhCandidate = rawLines.find((l) => {
-      if (/^#+/.test(l)) return false;
-      const cleaned = l.replace(/\*\*/g, '').replace(/^[#>\-\s*•|]+/g, '').trim();
-      if (!cleaned || /^(?:例句|e\.g\.)/i.test(cleaned)) return false;
-      if (isPrefixOnly(cleaned)) return false;
-      if (/^(?:释义|Definition|词根|扩展|语法点|讲解|同义词|反义词|例句)$/i.test(cleaned)) return false;
-      return /[\u4e00-\u9fa5]/.test(cleaned);
+    // 1. Look for explicit definition line (e.g. "单词：法语", "【单词】法语", "释义：法语")
+    const defLine = rawLines.find((l) => {
+      if (!isExplicitDefinitionLine(l)) return false;
+      if (isSentenceLine(l)) return false;
+      const cleaned = cleanLine(l, surface);
+      return cleaned && !isSurface(cleaned);
     });
 
-    const candidate = zhCandidate ?? rawLines.find((l) => {
-      if (/^#+/.test(l)) return false;
-      const cleaned = l.replace(/\*\*/g, '').replace(/^[#>\-\s*•|]+/g, '').trim();
-      if (!cleaned || /^(?:例句|e\.g\.)/i.test(cleaned)) return false;
-      if (isPrefixOnly(cleaned)) return false;
-      if (/^[\[/][^\]/]+[\]/]$/.test(cleaned)) return false;
-      if (/^(?:释义|Definition|词根|扩展|语法点|讲解|同义词|反义词|例句)$/i.test(cleaned)) return false;
-      return true;
-    });
+    if (defLine) {
+      chosenLine = defLine;
+    } else {
+      // 2. Find target language line that is not a header, context line, or example
+      const zhCandidate = rawLines.find((l) => {
+        if (/^#+/.test(l)) return false;
+        if (isSentenceLine(l) || isQueryEchoLine(l)) return false;
+        const cleaned = cleanLine(l, surface);
+        if (!cleaned || /^(?:例句|e\.g\.)/i.test(cleaned) || isSurface(cleaned)) return false;
+        if (/^(?:释义|Definition|词根|扩展|语法点|讲解|同义词|反义词|例句)$/i.test(cleaned)) return false;
+        return /[\u4e00-\u9fa5]/.test(cleaned);
+      });
 
-    t = candidate ?? rawLines[0] ?? translation;
+      if (zhCandidate) {
+        chosenLine = zhCandidate;
+      } else {
+        const nonSentence = rawLines.find((l) => {
+          if (/^#+/.test(l)) return false;
+          if (isSentenceLine(l) || isQueryEchoLine(l)) return false;
+          const cleaned = cleanLine(l, surface);
+          if (!cleaned || /^(?:例句|e\.g\.)/i.test(cleaned) || isSurface(cleaned)) return false;
+          if (/^[\[/][^\]/]+[\]/]$/.test(cleaned)) return false;
+          if (/^(?:释义|Definition|词根|扩展|语法点|讲解|同义词|反义词|例句)$/i.test(cleaned)) return false;
+          return true;
+        });
+        chosenLine = nonSentence ?? '';
+      }
+    }
   } else {
-    t = rawLines[0] ?? translation;
+    // Single line: if it's purely a sentence/context line, reject it so subtitle doesn't show context sentence
+    if (isSentenceLine(rawLines[0]) && !isExplicitDefinitionLine(rawLines[0])) {
+      return '';
+    }
+    chosenLine = rawLines[0];
   }
 
-  t = t
-    .replace(/\*\*/g, '')
-    .replace(/^[#>\-\s*•|]+/gm, '')
-    .trim();
+  if (!chosenLine) return '';
 
-  // Strip query / definition / word / context prefixes repeatedly
-  while (VOCAB_PREFIX_REGEX.test(t)) {
-    t = t.replace(VOCAB_PREFIX_REGEX, '').trim();
-  }
+  let t = cleanLine(chosenLine, surface);
 
   // Drop leading POS tags like "n. " / "v. " / "adj. " / "[n.] " / "(n.) "
   t = t.replace(/^(?:\[?[a-z]{1,5}\]?\.\s+|\[[a-z]{1,5}\]\s*|\([a-z]{1,5}\)\s*)+/i, '').trim();
 
-  // Re-strip prefix in case POS tag was before prefix (e.g. "n. 词：单词")
-  while (VOCAB_PREFIX_REGEX.test(t)) {
-    t = t.replace(VOCAB_PREFIX_REGEX, '').trim();
-  }
+  // Re-clean in case prefix was after POS tag
+  t = cleanLine(t, surface);
 
   // Take first sense before delimiter
   t = t.split(/[;；|/｜]/)[0]?.trim() ?? t;
@@ -120,12 +136,7 @@ export function shortGloss(
   // Clean trailing punctuation
   t = t.replace(/[.,:;!?，。：；！？]+$/, '').trim();
 
-  if (!t || t.startsWith('待查内容') || t.startsWith('查询')) return '';
-
-  // If the translation ended up being just the English surface word itself, omit gloss
-  if (surface && t.toLowerCase() === surface.toLowerCase().trim()) {
-    return '';
-  }
+  if (!t || isSurface(t) || isQueryEchoLine(t)) return '';
 
   if (t.length > maxLen) return `${t.slice(0, maxLen)}…`;
   return t;
