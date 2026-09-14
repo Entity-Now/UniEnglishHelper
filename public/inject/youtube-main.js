@@ -83,15 +83,9 @@
       var lastPot = timedtextCache.get("__last_with_pot__");
       var lastPotVid = timedtextCache.get("__last_with_pot_vid__");
       if (lastPot && lastPotVid === expectedVideoId) return lastPot;
-      // pot-only (no vid tracked) — allow as last resort for pot token reuse
-      if (lastPot && !lastPotVid) return lastPot;
       return null;
     }
-    return (
-      timedtextCache.get("__last_with_pot__") ||
-      timedtextCache.get("__last__") ||
-      null
-    );
+    return null;
   }
 
   // Observe timedtext XHR for pot tokens (read-frog approach)
@@ -145,36 +139,57 @@
     );
   }
 
-  function normalizeTracks(tracks) {
-    return (tracks || []).map(function (t) {
-      var baseUrl = t.baseUrl || "";
-      if (baseUrl && baseUrl.indexOf("://") === -1) {
-        baseUrl = location.origin + baseUrl;
-      }
-      var name = "";
-      try {
-        if (t.name && typeof t.name === "object") {
-          name = t.name.simpleText || t.name.runs && t.name.runs[0] && t.name.runs[0].text || "";
-        } else {
-          name = String(t.name || "");
+  function normalizeTracks(tracks, expectedVideoId) {
+    return (tracks || [])
+      .map(function (t) {
+        var baseUrl = t.baseUrl || "";
+        if (baseUrl && baseUrl.indexOf("://") === -1) {
+          baseUrl = location.origin + baseUrl;
         }
-      } catch (e) {
-        name = "";
-      }
-      return {
-        baseUrl: baseUrl,
-        languageCode: t.languageCode || "",
-        kind: t.kind,
-        vssId: t.vssId || "",
-        name: name,
-        trackName: t.trackName,
-      };
-    });
+        var name = "";
+        try {
+          if (t.name && typeof t.name === "object") {
+            name =
+              t.name.simpleText ||
+              (t.name.runs && t.name.runs[0] && t.name.runs[0].text) ||
+              "";
+          } else {
+            name = String(t.name || "");
+          }
+        } catch (e) {
+          name = "";
+        }
+        return {
+          baseUrl: baseUrl,
+          languageCode: t.languageCode || "",
+          kind: t.kind,
+          vssId: t.vssId || "",
+          name: name,
+          trackName: t.trackName,
+        };
+      })
+      .filter(function (t) {
+        if (!t.baseUrl) return false;
+        if (expectedVideoId) {
+          try {
+            var u = new URL(t.baseUrl, location.href);
+            var v = u.searchParams.get("v") || u.searchParams.get("video_id");
+            if (v && v !== expectedVideoId) return false;
+          } catch (e) {}
+        }
+        return true;
+      });
   }
 
-  function parseAudioTracks(tracks) {
+  function parseAudioTracks(tracks, expectedVideoId) {
     return (tracks || []).flatMap(function (t) {
       try {
+        if (!t.url) return [];
+        if (expectedVideoId) {
+          var u = new URL(t.url, location.href);
+          var v = u.searchParams.get("v") || u.searchParams.get("video_id");
+          if (v && v !== expectedVideoId) return [];
+        }
         return [
           {
             url: t.url,
@@ -245,23 +260,9 @@
           playerResponse.videoDetails &&
           playerResponse.videoDetails.videoId) ||
         null;
-      var tracks =
-        (playerResponse &&
-          playerResponse.captions &&
-          playerResponse.captions.playerCaptionsTracklistRenderer &&
-          playerResponse.captions.playerCaptionsTracklistRenderer
-            .captionTracks) ||
-        [];
-      var captionTracks = normalizeTracks(tracks);
-      var selected = getSelectedTrackSnapshot(player, captionTracks);
 
-      // Soft mismatch: still return data if we have tracks (SPA race)
-      if (
-        expectedVideoId &&
-        videoId &&
-        videoId !== expectedVideoId &&
-        !captionTracks.length
-      ) {
+      // Strict mismatch check: never return previous video's player response data
+      if (expectedVideoId && videoId && videoId !== expectedVideoId) {
         return {
           type: RES,
           requestId: requestId,
@@ -269,6 +270,16 @@
           error: "VIDEO_ID_MISMATCH",
         };
       }
+
+      var tracks =
+        (playerResponse &&
+          playerResponse.captions &&
+          playerResponse.captions.playerCaptionsTracklistRenderer &&
+          playerResponse.captions.playerCaptionsTracklistRenderer
+            .captionTracks) ||
+        [];
+      var captionTracks = normalizeTracks(tracks, expectedVideoId);
+      var selected = getSelectedTrackSnapshot(player, captionTracks);
 
       var device = null;
       try {
@@ -295,7 +306,7 @@
       var audioTracks = [];
       try {
         var at = player.getAudioTrack && player.getAudioTrack();
-        audioTracks = parseAudioTracks(at && at.captionTracks);
+        audioTracks = parseAudioTracks(at && at.captionTracks, expectedVideoId);
       } catch (e) {}
 
       // Prefer expected main video id so ad timedtext is not returned as "live"
@@ -307,7 +318,7 @@
         requestId: requestId,
         success: true,
         data: {
-          videoId: videoId || expectedVideoId || "",
+          videoId: expectedVideoId || videoId || "",
           captionTracks: captionTracks,
           audioCaptionTracks: audioTracks,
           device: device,

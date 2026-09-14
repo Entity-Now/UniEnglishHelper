@@ -348,6 +348,16 @@ async function prefetchMainCuesDuringAd(): Promise<void> {
 
 /** Push cues to page overlay, list, recap, and open PiP. */
 function applyPageCues(cues: SubtitleCue[]): void {
+  if (isYoutubeHost()) {
+    const currentVid = extractYoutubeVideoId();
+    if (currentVid && cues.length > 0 && !cues[0].id.startsWith(`${currentVid}-`)) {
+      console.warn('[UEH] applyPageCues rejected: cues do not match current videoId', {
+        currentVid,
+        cueId: cues[0].id,
+      });
+      return;
+    }
+  }
   pageCues = cues;
   pageCueList?.setCues(cues);
   pageVocabRecap?.setCues(cues);
@@ -915,8 +925,8 @@ async function handleYoutubeVideoSwitch(
       } else if (latest && latest === lastNavVideoId) {
         // Cursor already points at latest; force a follow-up load if cues empty
         // or still from a previous id (cues prefix is videoId-).
-        const cuePrefix = pageCues[0]?.id?.split('-')[0];
-        if (!pageCues.length || (cuePrefix && cuePrefix !== latest)) {
+        const cueMatches = pageCues[0]?.id?.startsWith(`${latest}-`);
+        if (!pageCues.length || !cueMatches) {
           lastNavVideoId = null;
           scheduleYoutubeNavHandle('video-switch-retry-force');
         }
@@ -1035,6 +1045,16 @@ function ensureMainVideoWatch(): void {
 }
 
 function onPageCuesUpdated(cues: SubtitleCue[]): void {
+  if (isYoutubeHost()) {
+    const currentVid = extractYoutubeVideoId();
+    if (currentVid && cues.length > 0 && !cues[0].id.startsWith(`${currentVid}-`)) {
+      console.warn(
+        '[UEH] onPageCuesUpdated rejected: cues do not match current videoId',
+        { currentVid, cueId: cues[0].id },
+      );
+      return;
+    }
+  }
   pageCues = cues;
   pageCueList?.setCues(cues);
   pageVocabRecap?.setCues(cues);

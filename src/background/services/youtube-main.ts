@@ -43,7 +43,7 @@ export async function injectYoutubeMain(tabId: number): Promise<void> {
 }
 
 /** One-shot track list extract (also used as fallback). */
-function extractTracksOnce(): YtCaptionTrack[] {
+function extractTracksOnce(expectedVideoId?: string): YtCaptionTrack[] {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const w = window as any;
@@ -67,19 +67,37 @@ function extractTracksOnce(): YtCaptionTrack[] {
         // ignore
       }
     }
+    const vid = pr?.videoDetails?.videoId;
+    if (expectedVideoId && vid && vid !== expectedVideoId) {
+      return [];
+    }
     const tracks =
       pr?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
-    return (tracks as any[]).map((t) => ({
-      baseUrl: String(t.baseUrl || '').startsWith('http')
-        ? String(t.baseUrl)
-        : t.baseUrl
-          ? `${location.origin}${t.baseUrl}`
-          : '',
-      languageCode: String(t.languageCode || ''),
-      kind: t.kind ? String(t.kind) : undefined,
-      vssId: String(t.vssId || ''),
-      name: String(t.name?.simpleText || t.name || ''),
-    }));
+    return (tracks as any[])
+      .map((t) => ({
+        baseUrl: String(t.baseUrl || '').startsWith('http')
+          ? String(t.baseUrl)
+          : t.baseUrl
+            ? `${location.origin}${t.baseUrl}`
+            : '',
+        languageCode: String(t.languageCode || ''),
+        kind: t.kind ? String(t.kind) : undefined,
+        vssId: String(t.vssId || ''),
+        name: String(t.name?.simpleText || t.name || ''),
+      }))
+      .filter((t) => {
+        if (!t.baseUrl) return false;
+        if (expectedVideoId) {
+          try {
+            const u = new URL(t.baseUrl, location.href);
+            const v = u.searchParams.get('v') || u.searchParams.get('video_id');
+            if (v && v !== expectedVideoId) return false;
+          } catch {
+            // ignore
+          }
+        }
+        return true;
+      });
   } catch {
     return [];
   }
@@ -87,6 +105,7 @@ function extractTracksOnce(): YtCaptionTrack[] {
 
 export async function extractYoutubeCaptionTracks(
   tabId: number,
+  expectedVideoId?: string,
 ): Promise<YtCaptionTrack[]> {
   await injectYoutubeMain(tabId);
   try {
@@ -94,6 +113,7 @@ export async function extractYoutubeCaptionTracks(
       target: { tabId },
       world: 'MAIN',
       func: extractTracksOnce,
+      args: expectedVideoId ? [expectedVideoId] : [],
     });
     const value = results?.[0]?.result;
     return Array.isArray(value) ? value : [];
@@ -143,21 +163,40 @@ export async function getYoutubePlayerData(
           }
           if (!pr) pr = w.ytInitialPlayerResponse || null;
 
-          const vid = pr?.videoDetails?.videoId || videoId;
+          const vid = pr?.videoDetails?.videoId;
+          if (videoId && vid && vid !== videoId) {
+            return null;
+          }
+
           const tracksRaw =
             pr?.captions?.playerCaptionsTracklistRenderer?.captionTracks ||
             [];
-          const captionTracks = (tracksRaw as any[]).map((t) => ({
-            baseUrl: String(t.baseUrl || '').includes('://')
-              ? String(t.baseUrl)
-              : t.baseUrl
-                ? `${location.origin}${t.baseUrl}`
-                : '',
-            languageCode: String(t.languageCode || ''),
-            kind: t.kind ? String(t.kind) : undefined,
-            vssId: String(t.vssId || ''),
-            name: String(t.name?.simpleText || t.name || ''),
-          }));
+          const captionTracks = (tracksRaw as any[])
+            .map((t) => ({
+              baseUrl: String(t.baseUrl || '').includes('://')
+                ? String(t.baseUrl)
+                : t.baseUrl
+                  ? `${location.origin}${t.baseUrl}`
+                  : '',
+              languageCode: String(t.languageCode || ''),
+              kind: t.kind ? String(t.kind) : undefined,
+              vssId: String(t.vssId || ''),
+              name: String(t.name?.simpleText || t.name || ''),
+            }))
+            .filter((t) => {
+              if (!t.baseUrl) return false;
+              if (videoId) {
+                try {
+                  const u = new URL(t.baseUrl, location.href);
+                  const v =
+                    u.searchParams.get('v') || u.searchParams.get('video_id');
+                  if (v && v !== videoId) return false;
+                } catch {
+                  // ignore
+                }
+              }
+              return true;
+            });
 
           let selectedTrackLanguageCode: string | null = null;
           let selectedTrackVssId: string | null = null;
@@ -175,6 +214,13 @@ export async function getYoutubePlayerData(
             audioCaptionTracks = (at?.captionTracks || []).flatMap(
               (t: any) => {
                 try {
+                  if (!t.url) return [];
+                  if (videoId) {
+                    const u = new URL(t.url, location.href);
+                    const v =
+                      u.searchParams.get('v') || u.searchParams.get('video_id');
+                    if (v && v !== videoId) return [];
+                  }
                   return [
                     {
                       url: t.url,
@@ -218,7 +264,7 @@ export async function getYoutubePlayerData(
 
           // timedtext cache lives in inject/youtube-main.js (not visible here)
           return {
-            videoId: vid,
+            videoId: videoId || vid || '',
             captionTracks,
             audioCaptionTracks,
             device,

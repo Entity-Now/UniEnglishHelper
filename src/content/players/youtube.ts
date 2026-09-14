@@ -21,7 +21,12 @@ const mainCuePreload = new Map<
 /** Instant apply after ad: peek preloaded main-video cues (does not remove). */
 export function peekPreloadedMainCues(videoId: string): SubtitleCue[] | null {
   const hit = mainCuePreload.get(videoId);
-  return hit?.cues?.length ? hit.cues : null;
+  if (!hit?.cues?.length) return null;
+  if (hit.cues[0] && !hit.cues[0].id.startsWith(`${videoId}-`)) {
+    mainCuePreload.delete(videoId);
+    return null;
+  }
+  return hit.cues;
 }
 
 export function storePreloadedMainCues(
@@ -30,6 +35,13 @@ export function storePreloadedMainCues(
   key: string,
 ): void {
   if (!videoId || !cues.length) return;
+  if (cues[0] && !cues[0].id.startsWith(`${videoId}-`)) {
+    console.warn('[UEH] storePreloadedMainCues rejected mismatched cues', {
+      videoId,
+      cueId: cues[0].id,
+    });
+    return;
+  }
   mainCuePreload.set(videoId, { cues, key, at: Date.now() });
 }
 
@@ -159,12 +171,12 @@ export class YoutubeAdapter extends BasePlayerAdapter {
    * Seed instance cache from preloaded main cues (used right after ad ends).
    */
   adoptPreloaded(videoId: string): SubtitleCue[] | null {
-    const hit = mainCuePreload.get(videoId);
-    if (!hit?.cues?.length) return null;
-    this.cachedCues = hit.cues;
-    this.cacheKey = hit.key;
+    const cues = peekPreloadedMainCues(videoId);
+    if (!cues?.length) return null;
+    this.cachedCues = cues;
+    this.cacheKey = `${videoId}:preloaded`;
     this.forceRefresh = false;
-    return hit.cues;
+    return cues;
   }
 
   async getCues(options?: GetCuesOptions): Promise<SubtitleCue[]> {
@@ -194,12 +206,12 @@ export class YoutubeAdapter extends BasePlayerAdapter {
     // Shared preload from ad-time fetch — even after clearCache/forceRefresh,
     // prefer instant apply over re-waiting for pot (unless bypassPreload).
     if (!bypassPreload) {
-      const pre = mainCuePreload.get(videoId);
-      if (pre?.cues?.length) {
-        this.cachedCues = pre.cues;
-        this.cacheKey = pre.key;
+      const pre = peekPreloadedMainCues(videoId);
+      if (pre?.length) {
+        this.cachedCues = pre;
+        this.cacheKey = `${videoId}:preloaded`;
         this.forceRefresh = false;
-        return pre.cues;
+        return pre;
       }
     }
 
@@ -240,7 +252,7 @@ export class YoutubeAdapter extends BasePlayerAdapter {
       if (!playerData?.captionTracks?.length) {
         const tr = await sendRuntime<{ tracks: CaptionTrack[] }>(
           'youtube.captionTracks',
-          {},
+          { videoId },
           'content',
         );
         if (tr.ok && tr.data.tracks?.length) {
@@ -265,7 +277,7 @@ export class YoutubeAdapter extends BasePlayerAdapter {
 
       // Prefer main-video tracks: player response is usually the watch target
       // even while an ad plays. Soft-mismatch with empty tracks already rejected.
-      const track = selectTrack(playerData);
+      const track = selectTrack(playerData, videoId);
       if (!track?.baseUrl) {
         console.warn('[UEH] No usable caption track baseUrl');
         return preload ? [] : this.readTextTracks();
@@ -332,6 +344,17 @@ export class YoutubeAdapter extends BasePlayerAdapter {
       }
 
       const cues = eventsToCues(events, videoId);
+      const currentVid = extractYoutubeVideoId();
+      if (currentVid && currentVid !== videoId) {
+        console.warn(
+          '[UEH] Discarding fetched cues because video changed mid-flight',
+          {
+            fetchedFor: videoId,
+            nowAt: currentVid,
+          },
+        );
+        return [];
+      }
       if (cues.length) {
         this.cachedCues = cues;
         this.cacheKey = key;
@@ -445,8 +468,33 @@ async function fetchCaptionMulti(url: string): Promise<string> {
   );
 }
 
-function selectTrack(playerData: PlayerData): CaptionTrack | null {
-  const tracks = playerData.captionTracks.filter((t) => t.baseUrl);
+export function isTrackMatchingVideo(
+  track: CaptionTrack,
+  videoId: string,
+): boolean {
+  if (!track?.baseUrl) return false;
+  try {
+    const u = new URL(
+      track.baseUrl,
+      typeof location !== 'undefined' ? location.href : 'https://www.youtube.com',
+    );
+    const v = u.searchParams.get('v') || u.searchParams.get('video_id');
+    if (v && v !== videoId) return false;
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+export function selectTrack(
+  playerData: PlayerData,
+  expectedVideoId?: string,
+): CaptionTrack | null {
+  const tracks = playerData.captionTracks.filter((t) => {
+    if (!t.baseUrl) return false;
+    if (expectedVideoId && !isTrackMatchingVideo(t, expectedVideoId)) return false;
+    return true;
+  });
   if (!tracks.length) return null;
 
   if (playerData.selectedTrackVssId) {
@@ -590,6 +638,23 @@ function captionUrlWithParams(
   }
 }
 
+export function isTimedtextUrlForVideo(
+  url: string | null | undefined,
+  videoId: string,
+): boolean {
+  if (!url) return false;
+  try {
+    const u = new URL(
+      url,
+      typeof location !== 'undefined' ? location.href : 'https://www.youtube.com',
+    );
+    const v = u.searchParams.get('v') || u.searchParams.get('video_id');
+    return v === videoId;
+  } catch {
+    return false;
+  }
+}
+
 /** Build candidate URLs: live timedtext first, then pot variants, then plain. */
 function buildFetchUrls(
   track: CaptionTrack,
@@ -599,7 +664,10 @@ function buildFetchUrls(
   const pot = extractPot(track, playerData, liveTimedtext);
   const urls: string[] = [];
 
-  if (liveTimedtext) {
+  if (
+    liveTimedtext &&
+    isTimedtextUrlForVideo(liveTimedtext, playerData.videoId)
+  ) {
     urls.push(liveTimedtext);
     try {
       const u = new URL(liveTimedtext);
@@ -637,7 +705,10 @@ function buildFetchUrlsPreload(
   urls.push(track.baseUrl);
 
   // Enrich with pot/live when already available (no extra wait)
-  if (liveTimedtext) {
+  if (
+    liveTimedtext &&
+    isTimedtextUrlForVideo(liveTimedtext, playerData.videoId)
+  ) {
     urls.push(liveTimedtext);
     try {
       const u = new URL(liveTimedtext);

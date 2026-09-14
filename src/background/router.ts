@@ -124,7 +124,8 @@ async function dispatch(
           'youtube.captionTracks requires a tab sender',
         );
       }
-      const tracks = await extractYoutubeCaptionTracks(tabId);
+      const videoId = p?.videoId ? String(p.videoId) : undefined;
+      const tracks = await extractYoutubeCaptionTracks(tabId, videoId);
       return { tracks };
     }
 
