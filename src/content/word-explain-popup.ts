@@ -1,6 +1,16 @@
 import { sendRuntime } from '../shared/messaging/client';
 import type { WordExplainResult } from '../shared/domain/types';
 import { ICON_BTN_CSS, iconActionButton } from './ui-icons';
+import { marked } from 'marked';
+import {
+  streamWordExplain,
+  type StreamExplainSession,
+} from './stream-client';
+
+marked.setOptions({
+  breaks: true,
+  gfm: true,
+});
 
 const POPUP_HOST_ID = 'ueh-word-explain-host';
 
@@ -217,6 +227,68 @@ export async function showWordExplainPopup(
         font: 12px/1.4 inherit;
         opacity: .9;
       }
+      .md-body {
+        margin: 6px 0 0;
+        font: 12px/1.55 system-ui, -apple-system, sans-serif;
+        color: #e0e0e0;
+        word-break: break-word;
+      }
+      .md-body h1, .md-body h2, .md-body h3, .md-body h4 {
+        margin: 8px 0 4px;
+        font-size: 13px;
+        font-weight: 700;
+        color: oklch(88% 0.08 82);
+        line-height: 1.35;
+      }
+      .md-body p {
+        margin: 4px 0;
+      }
+      .md-body strong {
+        color: #fff;
+        font-weight: 600;
+      }
+      .md-body em {
+        color: oklch(88% 0.08 82);
+      }
+      .md-body ul, .md-body ol {
+        margin: 4px 0;
+        padding-left: 18px;
+      }
+      .md-body li {
+        margin: 2px 0;
+      }
+      .md-body blockquote {
+        margin: 6px 0;
+        padding: 4px 8px;
+        border-left: 3px solid oklch(76% 0.12 82);
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 0 4px 4px 0;
+        color: #ccc;
+      }
+      .md-body code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 11px;
+        padding: 1px 4px;
+        border-radius: 4px;
+        background: rgba(255, 255, 255, 0.12);
+        color: oklch(90% 0.08 82);
+      }
+      .md-body pre {
+        margin: 6px 0;
+        padding: 6px 8px;
+        border-radius: 6px;
+        background: rgba(0, 0, 0, 0.35);
+        overflow-x: auto;
+      }
+      .md-body pre code {
+        padding: 0;
+        background: transparent;
+      }
+      .md-body hr {
+        border: none;
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+        margin: 8px 0;
+      }
     </style>
     <div class="backdrop"></div>
     <div class="card" role="dialog" aria-label="单词释义">
@@ -264,8 +336,12 @@ export async function showWordExplainPopup(
   };
   renderCtxBlock();
 
+  let activeStreamSession: StreamExplainSession | null = null;
+
   const remove = () => {
     window.clearTimeout(timer);
+    activeStreamSession?.abort();
+    activeStreamSession = null;
     host.remove();
   };
 
@@ -416,6 +492,7 @@ export async function showWordExplainPopup(
   applyCardPosition();
 
   const executeExplain = async (forceLlm = false) => {
+    activeStreamSession?.abort();
     const bodyEl = shadow.getElementById('ueh-popup-body');
     const badgeEl = shadow.getElementById('ueh-badge');
     const noteEl = shadow.getElementById('ueh-note');
@@ -433,29 +510,61 @@ export async function showWordExplainPopup(
         noteEl.hidden = true;
         noteEl.textContent = '';
       }
+    } else {
+      bodyEl.className = 'body';
+      bodyEl.textContent = '⏳ 正在查询释义…（AI 超时将自动免费翻译）';
+      if (badgeEl) {
+        badgeEl.hidden = false;
+        badgeEl.className = 'badge llm';
+        badgeEl.textContent = 'AI 分析中…';
+      }
     }
 
-    try {
-      const res = await sendRuntime<WordExplainResult & { text?: string }>(
-        forceLlm ? 'word.retranslate' : 'word.explain',
-        { word: surface, surface, context, forceLlm },
-        'content',
-      );
+    let mdContainer: HTMLElement | null = null;
 
-      if (!hostDoc.documentElement.contains(host)) return;
+    const session = streamWordExplain(
+      {
+        word: surface,
+        surface,
+        context,
+        forceLlm,
+      },
+      (_chunk, accumulated) => {
+        if (!hostDoc.documentElement.contains(host)) return;
+        window.clearTimeout(timer);
+        timer = window.setTimeout(remove, 60_000);
 
-      if (!res.ok) {
-        bodyEl.className = 'body err';
-        bodyEl.textContent = `查询失败: ${res.error.message}`;
+        const clean = accumulated.trim();
+        if (!clean) {
+          bodyEl.innerHTML = '<div style="color:#aaa;font-size:12px;">🧠 AI 正在思考中…</div>';
+          return;
+        }
+
         if (badgeEl) {
           badgeEl.hidden = false;
-          badgeEl.className = 'badge none';
-          badgeEl.textContent = '不可用';
+          badgeEl.className = 'badge llm';
+          badgeEl.textContent = 'AI 实时输出中…';
         }
-        return;
-      }
+        bodyEl.className = 'body';
+        if (!mdContainer || !bodyEl.contains(mdContainer)) {
+          bodyEl.replaceChildren();
+          mdContainer = hostDoc.createElement('div');
+          mdContainer.className = 'md-body';
+          bodyEl.appendChild(mdContainer);
+        }
+        try {
+          mdContainer.innerHTML = marked.parse(accumulated) as string;
+        } catch {
+          mdContainer.textContent = accumulated;
+        }
+      },
+    );
+    activeStreamSession = session;
 
-      const explain = res.data;
+    try {
+      const explain = await session.promise;
+      if (!hostDoc.documentElement.contains(host) || !explain) return;
+
       latestExplain = explain;
       const def = explain.definition || explain.text || '';
 
@@ -496,11 +605,16 @@ export async function showWordExplainPopup(
         d.textContent = def;
         bodyEl.appendChild(d);
       }
-      if (explain.explanation && explain.engine === 'llm') {
-        const pre = hostDoc.createElement('pre');
-        pre.className = 'explain-pre';
-        pre.textContent = explain.explanation;
-        bodyEl.appendChild(pre);
+      const rawMarkdown = explain.explanation || (!def ? explain.text : '');
+      if (rawMarkdown) {
+        const mdEl = hostDoc.createElement('div');
+        mdEl.className = 'md-body';
+        try {
+          mdEl.innerHTML = marked.parse(rawMarkdown) as string;
+        } catch {
+          mdEl.textContent = rawMarkdown;
+        }
+        bodyEl.appendChild(mdEl);
       }
       if (!bodyEl.textContent?.trim()) {
         bodyEl.textContent = surface;
@@ -525,6 +639,11 @@ export async function showWordExplainPopup(
         bodyEl.textContent = `查询异常: ${
           err instanceof Error ? err.message : String(err)
         }`;
+      }
+      if (badgeEl) {
+        badgeEl.hidden = false;
+        badgeEl.className = 'badge none';
+        badgeEl.textContent = '不可用';
       }
     }
   };

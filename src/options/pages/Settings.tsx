@@ -197,6 +197,22 @@ export function SettingsPage(props: {
             }))
           }
         />
+        <label className="checkbox" style={{ marginTop: 10 }}>
+          <input
+            type="checkbox"
+            checked={form.ai.disableThinking !== false}
+            onChange={(e) =>
+              setForm((f) => ({
+                ...f,
+                ai: {
+                  ...f.ai,
+                  disableThinking: e.target.checked,
+                },
+              }))
+            }
+          />
+          关闭 Thinking 深度思考（推荐开启，大幅减少等待时间，避免思考链污染翻译）
+        </label>
       </div>
 
       <AiPromptEditor config={form} onChange={setForm} />

@@ -81,7 +81,7 @@ const BLOCK_SELECTOR = [
 ].join(',');
 
 const SKIP_CLOSEST =
-  'nav, [role="navigation"], [role="menu"], [role="menubar"], [role="tablist"], [role="combobox"]';
+  'nav, [role="navigation"], [role="menu"], [role="menubar"], [role="tablist"], [role="combobox"], button, [role="button"], [role="tab"], [role="dialog"], [role="tooltip"], [aria-haspopup="true"], [contenteditable="true"]';
 
 const HIDDEN_CLOSEST = '[hidden], [aria-hidden="true"]';
 
@@ -103,7 +103,6 @@ function isExplicitlySkipped(el: HTMLElement): boolean {
     el.hasAttribute('data-ueh-trans-id') ||
     el.classList?.contains('ueh-translated-block') ||
     el.classList?.contains('ueh-translated-inline') ||
-    el.classList?.contains('ueh-original-wrap') ||
     el.classList?.contains('ueh-has-translation')
   );
 }
@@ -157,6 +156,11 @@ function readableText(el: HTMLElement): string {
 
 function isLeafDiv(el: HTMLElement): boolean {
   if (el.tagName !== 'DIV') return false;
+  // If div contains interactive elements or too many child elements, it is a container, not a paragraph
+  if (el.childElementCount > 3) return false;
+  if (el.querySelector('button, [role="button"], input, textarea, select, svg, a, form')) {
+    return false;
+  }
   for (const child of el.children) {
     const tag = child.tagName;
     if (
@@ -283,7 +287,7 @@ export function extractTranslatableParagraphs(
 
   for (const el of candidates) {
     if (!acceptElement(el, siteRule)) continue;
-    if (el.querySelector('.ueh-translated-block, .ueh-translated-inline, .ueh-original-wrap')) {
+    if (el.querySelector('.ueh-translated-block, .ueh-translated-inline')) {
       continue;
     }
 
@@ -337,10 +341,9 @@ export function isOwnTranslationNode(el: Element): boolean {
     el.hasAttribute('data-ueh-translated') ||
     el.classList.contains('ueh-translated-block') ||
     el.classList.contains('ueh-translated-inline') ||
-    el.classList.contains('ueh-original-wrap') ||
     Boolean(
       el.closest(
-        '#ueh-web-translate-host, [data-ueh-translated], .ueh-original-wrap, .ueh-translated-block, .ueh-translated-inline',
+        '#ueh-web-translate-host, [data-ueh-translated], .ueh-translated-block, .ueh-translated-inline',
       ),
     )
   );

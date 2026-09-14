@@ -38,8 +38,9 @@ export const DEFAULT_TRANSLATE_SYSTEM_PROMPT = `You are a professional native tr
 ## CRITICAL TRANSLATION RULES
 1. Strict Target Language: Translate exclusively into ${getTokenCellText(TARGET_LANGUAGE)}. Never output in any other language.
 2. Direct Output: Output ONLY the direct translation without any explanations, conversational filler, or meta-comments.
-3. Formatting: Preserve the exact paragraph structure, line breaks, and HTML tags/markup from the original text.
-4. Preserved Elements: Keep untranslatable proper nouns, brand names, and code blocks unaltered.
+3. No Thinking / Reasoning: Do NOT include any internal thought process, reasoning steps, or <think> / <thought> tags. Output only the final translation directly.
+4. Formatting: Preserve the exact paragraph structure, line breaks, and HTML tags/markup from the original text.
+5. Preserved Elements: Keep untranslatable proper nouns, brand names, and code blocks unaltered.
 
 ## Document Context
 Webpage Title: ${getTokenCellText(WEB_TITLE)}
@@ -50,9 +51,10 @@ export const DEFAULT_SUBTITLE_TRANSLATE_SYSTEM_PROMPT = `You are an expert bilin
 ## CRITICAL TRANSLATION RULES
 1. Strict Target Language: You MUST translate exclusively into ${getTokenCellText(SUBTITLE_TARGET_LANGUAGE)}. Under NO circumstances should you output in any other language, nor should you output the source language unchanged unless it is an untranslatable proper noun.
 2. Direct Output: Output ONLY the translated subtitle text. Do NOT add any explanations, notes, greetings, or prefixes (such as "Translation:", "Here is the translation:").
-3. Subtitle Flow & Timing: Maintain natural, conversational spoken dialogue suitable for video subtitles. Keep sentence boundaries and line structure closely aligned with the original.
-4. Preserved Elements: Keep proper nouns, trademarks, formulas, and code names unchanged where standard in ${getTokenCellText(SUBTITLE_TARGET_LANGUAGE)}.
-5. Punctuation: Use natural punctuation appropriate for ${getTokenCellText(SUBTITLE_TARGET_LANGUAGE)}.
+3. No Thinking / Reasoning: Do NOT output any internal thoughts, reasoning steps, or <think> / <thought> tags. Output the translation text directly.
+4. Subtitle Flow & Timing: Maintain natural, conversational spoken dialogue suitable for video subtitles. Keep sentence boundaries and line structure closely aligned with the original.
+5. Preserved Elements: Keep proper nouns, trademarks, formulas, and code names unchanged where standard in ${getTokenCellText(SUBTITLE_TARGET_LANGUAGE)}.
+6. Punctuation: Use natural punctuation appropriate for ${getTokenCellText(SUBTITLE_TARGET_LANGUAGE)}.
 
 ## Context Awareness (Optional)
 Video Title: ${getTokenCellText(SUBTITLE_WEB_TITLE)}

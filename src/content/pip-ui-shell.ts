@@ -412,8 +412,59 @@ export function buildPipStyles(opts: {
       padding: 6px 10px 10px;
       font-size: 12px; line-height: 1.45;
       color: rgba(255,255,255,.92);
-      white-space: pre-wrap;
       word-break: break-word;
+    }
+    #ueh-word-panel-body .md-body {
+      font: 12px/1.55 system-ui, -apple-system, sans-serif;
+      color: #e0e0e0;
+      word-break: break-word;
+    }
+    #ueh-word-panel-body .md-body h1,
+    #ueh-word-panel-body .md-body h2,
+    #ueh-word-panel-body .md-body h3,
+    #ueh-word-panel-body .md-body h4 {
+      margin: 8px 0 4px;
+      font-size: 13px;
+      font-weight: 700;
+      color: oklch(88% 0.08 82);
+      line-height: 1.35;
+    }
+    #ueh-word-panel-body .md-body p { margin: 4px 0; }
+    #ueh-word-panel-body .md-body strong { color: #fff; font-weight: 600; }
+    #ueh-word-panel-body .md-body em { color: oklch(88% 0.08 82); }
+    #ueh-word-panel-body .md-body ul, #ueh-word-panel-body .md-body ol {
+      margin: 4px 0;
+      padding-left: 18px;
+    }
+    #ueh-word-panel-body .md-body li { margin: 2px 0; }
+    #ueh-word-panel-body .md-body blockquote {
+      margin: 6px 0;
+      padding: 4px 8px;
+      border-left: 3px solid oklch(76% 0.12 82);
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 0 4px 4px 0;
+      color: #ccc;
+    }
+    #ueh-word-panel-body .md-body code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 11px;
+      padding: 1px 4px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.12);
+      color: oklch(90% 0.08 82);
+    }
+    #ueh-word-panel-body .def {
+      font-weight: 600;
+      font-size: 13px;
+      color: #fff;
+      margin-bottom: 6px;
+    }
+    #ueh-word-panel-body .loading-hint {
+      color: #aaa;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
     }
     ${ICON_BTN_CSS}
     /* Small PiP window: word panel goes full-screen of the video stage */

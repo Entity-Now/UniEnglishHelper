@@ -1,4 +1,5 @@
 import React from 'react';
+import { marked } from 'marked';
 
 export type WordPopupEngine = 'llm' | 'free_mt' | 'none';
 
@@ -94,8 +95,11 @@ export function WordPopup(props: {
           : null;
 
   const bodyText = props.loading
-    ? '查询中…'
+    ? ''
     : stripEmbeddedSentenceTranslation(props.text);
+
+  const isMarkdown = !props.loading && Boolean(bodyText) && /^[#*-]|```|\*\*|##/.test(bodyText);
+  const parsedHtml = isMarkdown ? (marked.parse(bodyText) as string) : '';
 
   return (
     <div className="ueh-word-popup" role="dialog" aria-label="单词释义">
@@ -156,7 +160,20 @@ export function WordPopup(props: {
           {props.note}
         </div>
       ) : null}
-      <div className="ueh-word-popup-body">{bodyText}</div>
+      <div className="ueh-word-popup-body">
+        {props.loading ? (
+          <div style={{ color: '#aaa', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span>⏳</span> 正在连接 AI 查询释义…
+          </div>
+        ) : isMarkdown ? (
+          <div
+            className="md-body"
+            dangerouslySetInnerHTML={{ __html: parsedHtml }}
+          />
+        ) : (
+          bodyText
+        )}
+      </div>
     </div>
   );
 }

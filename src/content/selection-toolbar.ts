@@ -20,6 +20,11 @@ import {
   stopTtsPlayback,
 } from '../utils/tts-playback/play-chunks';
 import { ICON_BTN_CSS, UI_ICON_SVG } from './ui-icons';
+import { marked } from 'marked';
+import {
+  streamWordExplain,
+  type StreamExplainSession,
+} from './stream-client';
 
 const HOST_ID = 'ueh-selection-host';
 
@@ -51,6 +56,7 @@ export class SelectionToolbar {
   private boundMouseUp: (e: MouseEvent) => void;
   private boundKeyDown: (e: KeyboardEvent) => void;
   private boundScroll: () => void;
+  private activeExplainSession: StreamExplainSession | null = null;
 
   constructor(config: AppConfig) {
     this.config = config;
@@ -359,8 +365,42 @@ export class SelectionToolbar {
           font-weight: 500;
         }
         .panel .body {
-          white-space: pre-wrap;
           word-break: break-word;
+        }
+        .panel .md-body {
+          font: 12px/1.5 system-ui, -apple-system, sans-serif;
+          color: #e0e0e0;
+          word-break: break-word;
+        }
+        .panel .md-body h1,
+        .panel .md-body h2,
+        .panel .md-body h3,
+        .panel .md-body h4 {
+          margin: 6px 0 3px;
+          font-size: 13px;
+          font-weight: 700;
+          color: oklch(88% 0.08 82);
+          line-height: 1.35;
+        }
+        .panel .md-body p { margin: 3px 0; }
+        .panel .md-body strong { color: #fff; font-weight: 600; }
+        .panel .md-body em { color: oklch(88% 0.08 82); }
+        .panel .md-body ul, .panel .md-body ol { margin: 3px 0; padding-left: 16px; }
+        .panel .md-body li { margin: 1px 0; }
+        .panel .md-body code {
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+          font-size: 11px;
+          padding: 1px 4px;
+          border-radius: 4px;
+          background: rgba(255, 255, 255, 0.12);
+          color: oklch(90% 0.08 82);
+        }
+        .panel .loading-hint {
+          color: #aaa;
+          font-size: 11px;
+          display: flex;
+          align-items: center;
+          gap: 5px;
         }
         .panel .muted { opacity: .55; font-size: 11px; }
         .panel .divider {
@@ -674,6 +714,8 @@ export class SelectionToolbar {
   }
 
   private hide(): void {
+    this.activeExplainSession?.abort();
+    this.activeExplainSession = null;
     if (!this.shadow) return;
     this.skillMenuOpen = false;
     const wrap = this.shadow.getElementById('wrap');
@@ -759,48 +801,65 @@ export class SelectionToolbar {
   }
 
   private async runExplain(panel: HTMLElement): Promise<void> {
+    this.activeExplainSession?.abort();
     const orig = this.selectedText;
     panel.classList.add('open');
     panel.innerHTML = `
       <div class="label">原文</div>
       <div class="orig"></div>
       <div class="divider"></div>
-      <div class="body muted">查询中…</div>
+      <div class="body">
+        <div class="loading-hint"><span>⏳</span> 正在连接 AI 生成释义…</div>
+      </div>
     `;
     const origEl = panel.querySelector('.orig') as HTMLElement;
     const body = panel.querySelector('.body') as HTMLElement;
     if (origEl) origEl.textContent = orig;
 
-    const res = await sendRuntime<{
-      text?: string;
-      definition?: string;
-      contextTranslation?: string;
-      note?: string;
-      explanation?: string;
-      engine?: string;
-    }>(
-      'word.explain',
+    const session = streamWordExplain(
       {
         word: orig,
         surface: orig,
         context: orig,
       },
-      'content',
+      (_chunk, accumulated) => {
+        if (!body) return;
+        const clean = accumulated.trim();
+        if (!clean) {
+          body.innerHTML = '<div class="loading-hint"><span>🧠</span> AI 正在思考中…</div>';
+          return;
+        }
+        try {
+          body.innerHTML = `<div class="md-body">${marked.parse(accumulated)}</div>`;
+        } catch {
+          body.textContent = accumulated;
+        }
+      },
     );
-    if (!body) return;
-    body.classList.remove('muted');
-    if (!res.ok) {
-      body.textContent = res.error.message;
-      return;
+    this.activeExplainSession = session;
+
+    try {
+      const d = await session.promise;
+      if (!body) return;
+      const rawMarkdown = d.explanation || (!d.definition ? d.text : '');
+      if (rawMarkdown) {
+        try {
+          body.innerHTML = `<div class="md-body">${marked.parse(rawMarkdown)}</div>`;
+        } catch {
+          body.textContent = rawMarkdown;
+        }
+      } else {
+        const lines = [
+          d.definition,
+          d.contextTranslation ? `句子译文：${d.contextTranslation}` : '',
+          d.note ? `（${d.note}）` : '',
+        ].filter(Boolean);
+        body.textContent = lines.join('\n\n') || d.text || orig;
+      }
+    } catch (err: any) {
+      if (!body) return;
+      body.textContent = `查询异常: ${err?.message || String(err)}`;
     }
-    const d = res.data;
-    const lines = [
-      d.definition,
-      d.contextTranslation ? `句子译文：${d.contextTranslation}` : '',
-      d.engine === 'llm' && d.explanation ? d.explanation : '',
-      d.note ? `（${d.note}）` : '',
-    ].filter(Boolean);
-    body.textContent = lines.join('\n\n') || d.text || orig;
   }
 
   private async runTts(): Promise<void> {

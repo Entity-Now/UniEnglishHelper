@@ -16,6 +16,7 @@ You will receive the target query text (a word, phrase, or sentence). Focus dire
 4. Output strictly in the given Markdown structure without any conversational filler, greetings, or preamble.
 5. All explanations, definitions, and notes must be in {{targetLanguage}} (except for phonetic symbols, source language examples, and code/terms).
 6. Under "## 释义", provide ONLY the clean definition of the word in {{targetLanguage}}. Do NOT output extra labels or prefixes (e.g., do NOT write "上下文：", "释义：", "词：", "语境：").
+7. Do NOT include any internal reasoning, chain-of-thought, or <think> / <thought> tags. Directly output the formatted Markdown content.
 
 # Level Definitions
 - beginner: CEFR A1-A2 (simple, high-frequency vocabulary)

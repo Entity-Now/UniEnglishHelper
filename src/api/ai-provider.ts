@@ -10,6 +10,7 @@ import {
   recordLlmSuccess,
   resetLlmCircuit,
   withAbortTimeout,
+  withStreamingTimeout,
 } from './llm-circuit';
 
 export interface ChatMessage {
@@ -30,7 +31,9 @@ function resolveBaseUrl(config: AppConfig, providerId: string): string {
   } else if (baseUrl.includes('api.anthropic.com') && !baseUrl.endsWith('/v1')) {
     baseUrl += '/v1';
   } else if (
-    baseUrl.includes('localhost:11434') &&
+    (baseUrl.includes('localhost') ||
+      baseUrl.includes('127.0.0.1') ||
+      baseUrl.includes('0.0.0.0')) &&
     !baseUrl.endsWith('/v1') &&
     !baseUrl.endsWith('/api')
   ) {
@@ -39,89 +42,192 @@ function resolveBaseUrl(config: AppConfig, providerId: string): string {
   return baseUrl;
 }
 
-export async function chatCompletion(
+/**
+ * Strip thinking tags (<think>...</think>, <thought>...</thought>) and internal reasoning blocks
+ * from model outputs.
+ */
+export function stripThinkingTags(text: string): string {
+  if (!text) return '';
+  return text
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<thought>[\s\S]*?<\/thought>/gi, '')
+    .replace(/<think>[\s\S]*$/gi, '')
+    .replace(/<thought>[\s\S]*$/gi, '')
+    .trim();
+}
+
+export function buildChatRequestBody(
   config: AppConfig,
   messages: ChatMessage[],
-  opts?: { temperature?: number; signal?: AbortSignal; timeoutMs?: number },
-): Promise<string> {
+  opts?: {
+    temperature?: number;
+    stream?: boolean;
+    disableThinking?: boolean;
+  },
+  omitThinkingParams = false,
+): Record<string, unknown> {
   const providerId = config.ai.providerId;
-  const apiKey = config.ai.apiKeys[providerId];
-  if (!apiKey) {
-    throw new AppError('AI_FAILED', 'API key not configured for provider: ' + providerId);
-  }
+  const baseUrl = resolveBaseUrl(config, providerId).toLowerCase();
+  const model = (config.ai.model || '').toLowerCase();
+  const stream = opts?.stream ?? true;
+  const disableThinking =
+    opts?.disableThinking ?? (config.ai.disableThinking !== false);
 
-  const baseUrl = resolveBaseUrl(config, providerId);
-  const run = async (signal?: AbortSignal) => {
-    const res = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: config.ai.model,
-        messages,
-        temperature: opts?.temperature ?? 0.3,
-        stream: false,
-      }),
-      signal,
-    });
-
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      throw new AppError(
-        'AI_FAILED',
-        `LLM HTTP ${res.status}: ${body.slice(0, 200)}`,
-      );
-    }
-
-    const json = (await res.json()) as {
-      choices?: { message?: { content?: string } }[];
-    };
-    const text = json.choices?.[0]?.message?.content?.trim();
-    if (!text) throw new AppError('AI_FAILED', 'Empty LLM response');
-    return text;
+  const body: Record<string, unknown> = {
+    model: config.ai.model,
+    messages,
+    stream,
   };
 
-  if (opts?.timeoutMs && opts.timeoutMs > 0) {
-    return withAbortTimeout(
-      opts.timeoutMs,
-      (signal) => run(opts.signal ?? signal),
-      'LLM chat',
-    );
+  if (!model.startsWith('o1') && !model.startsWith('o3')) {
+    body.temperature = opts?.temperature ?? 0.3;
   }
-  return run(opts?.signal);
+
+  if (disableThinking && !omitThinkingParams) {
+    // 1. Google Gemini official API endpoint
+    if (
+      baseUrl.includes('generativelanguage.googleapis.com') ||
+      (providerId === 'gemini' && !baseUrl.includes('localhost') && !baseUrl.includes('127.0.0.1'))
+    ) {
+      body.thinking_config = { thinking_budget: 0 };
+    }
+
+    // 2. OpenRouter
+    if (baseUrl.includes('openrouter.ai')) {
+      body.reasoning = { effort: 'none' };
+      body.include_reasoning = false;
+    }
+
+    // 3. Ollama / LiteRT-LM / Local / vLLM / SiliconFlow / DeepSeek / Qwen / Gemma
+    if (
+      baseUrl.includes('localhost') ||
+      baseUrl.includes('127.0.0.1') ||
+      baseUrl.includes('siliconflow') ||
+      baseUrl.includes('deepseek') ||
+      model.includes('r1') ||
+      model.includes('reasoner') ||
+      model.includes('qwen') ||
+      model.includes('gemma')
+    ) {
+      // LiteRT-LM (openai_handler.py) and OpenAI-compatible endpoints recognize reasoning_effort == "none"
+      body.reasoning_effort = 'none';
+      if (baseUrl.includes('deepseek') || baseUrl.includes('siliconflow')) {
+        body.chat_template_kwargs = { thinking: false };
+      }
+    }
+
+    // 4. OpenAI o-series
+    if (model.startsWith('o1') || model.startsWith('o3') || model.startsWith('o4')) {
+      body.reasoning_effort = 'low';
+    }
+  }
+
+  return body;
+}
+
+export function resolveEffectiveTimeoutMs(
+  config: AppConfig,
+  requestedMs?: number,
+): number {
+  const providerId = config.ai.providerId;
+  const baseUrl = resolveBaseUrl(config, providerId).toLowerCase();
+  const isLocal =
+    baseUrl.includes('localhost') ||
+    baseUrl.includes('127.0.0.1') ||
+    baseUrl.includes('0.0.0.0');
+
+  if (isLocal) {
+    // Local endpoints on user computer (CPU/GPU) need more time
+    return Math.max(requestedMs ?? 0, 60_000);
+  }
+  return requestedMs ?? LLM_WORD_EXPLAIN_TIMEOUT_MS;
+}
+
+export interface ChatCompletionOptions {
+  temperature?: number;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  stream?: boolean;
+  onChunk?: (chunk: string, fullText: string) => void;
+  disableThinking?: boolean;
 }
 
 export async function* chatCompletionStream(
   config: AppConfig,
   messages: ChatMessage[],
-  signal?: AbortSignal,
+  opts?: {
+    temperature?: number;
+    signal?: AbortSignal;
+    disableThinking?: boolean;
+  },
 ): AsyncGenerator<string> {
   const providerId = config.ai.providerId;
-  const apiKey = config.ai.apiKeys[providerId];
-  if (!apiKey) {
-    throw new AppError('AI_FAILED', 'API key not configured');
-  }
   const baseUrl = resolveBaseUrl(config, providerId);
+  const isLocal =
+    baseUrl.includes('localhost') ||
+    baseUrl.includes('127.0.0.1') ||
+    baseUrl.includes('0.0.0.0');
+  const apiKey = config.ai.apiKeys[providerId] || (isLocal ? 'local-key' : '');
+  if (!apiKey) {
+    throw new AppError('AI_FAILED', 'API key not configured for provider: ' + providerId);
+  }
+  const signal = opts?.signal;
 
-  const res = await fetch(`${baseUrl}/chat/completions`, {
+  let requestBody = buildChatRequestBody(config, messages, {
+    temperature: opts?.temperature,
+    stream: true,
+    disableThinking: opts?.disableThinking,
+  });
+
+  let res = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({
-      model: config.ai.model,
-      messages,
-      temperature: 0.3,
-      stream: true,
-    }),
+    body: JSON.stringify(requestBody),
     signal,
   });
 
+  // If server rejected thinking parameters (HTTP 400 or 422), retry once cleanly
+  if (!res.ok && (res.status === 400 || res.status === 422)) {
+    const errText = await res.text().catch(() => '');
+    const isParamReject =
+      errText.includes('thinking') ||
+      errText.includes('reasoning') ||
+      errText.includes('chat_template_kwargs') ||
+      errText.includes('unexpected') ||
+      errText.includes('unrecognized') ||
+      errText.includes('extra fields') ||
+      errText.includes('validation');
+    if (isParamReject) {
+      requestBody = buildChatRequestBody(
+        config,
+        messages,
+        {
+          temperature: opts?.temperature,
+          stream: true,
+          disableThinking: false,
+        },
+        true,
+      );
+      res = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(requestBody),
+        signal,
+      });
+    } else {
+      throw new AppError('AI_FAILED', `Stream HTTP ${res.status}: ${errText.slice(0, 200)}`);
+    }
+  }
+
   if (!res.ok || !res.body) {
-    throw new AppError('AI_FAILED', `Stream HTTP ${res.status}`);
+    const errText = await res.text().catch(() => '');
+    throw new AppError('AI_FAILED', `Stream HTTP ${res.status}: ${errText.slice(0, 200)}`);
   }
 
   const reader = res.body.getReader();
@@ -141,15 +247,154 @@ export async function* chatCompletionStream(
       if (data === '[DONE]') return;
       try {
         const json = JSON.parse(data) as {
-          choices?: { delta?: { content?: string } }[];
+          choices?: {
+            delta?: {
+              content?: string;
+              reasoning_content?: string;
+              text?: string;
+            };
+            text?: string;
+          }[];
         };
-        const chunk = json.choices?.[0]?.delta?.content;
-        if (chunk) yield chunk;
+        const delta = json.choices?.[0]?.delta;
+        const chunk = delta?.content ?? delta?.text ?? json.choices?.[0]?.text;
+        if (!chunk) continue;
+
+        yield chunk;
       } catch {
         // ignore partial JSON
       }
     }
   }
+
+  // Process remaining buffer chunk if present
+  if (buffer.trim().startsWith('data:')) {
+    const data = buffer.trim().slice(5).trim();
+    if (data && data !== '[DONE]') {
+      try {
+        const json = JSON.parse(data) as { choices?: { delta?: { content?: string } }[] };
+        const chunk = json.choices?.[0]?.delta?.content;
+        if (chunk) yield chunk;
+      } catch {}
+    }
+  }
+}
+
+export async function chatCompletion(
+  config: AppConfig,
+  messages: ChatMessage[],
+  opts?: ChatCompletionOptions,
+): Promise<string> {
+  const providerId = config.ai.providerId;
+  const baseUrl = resolveBaseUrl(config, providerId);
+  const isLocal =
+    baseUrl.includes('localhost') ||
+    baseUrl.includes('127.0.0.1') ||
+    baseUrl.includes('0.0.0.0');
+  const apiKey = config.ai.apiKeys[providerId] || (isLocal ? 'local-key' : '');
+  if (!apiKey) {
+    throw new AppError('AI_FAILED', 'API key not configured for provider: ' + providerId);
+  }
+
+  const run = async (signal?: AbortSignal, notifyActivity?: () => void) => {
+    // By default, use streaming SSE so response starts immediately (avoiding proxy buffer timeouts)
+    const useStream = opts?.stream !== false;
+    if (useStream) {
+      try {
+        let fullText = '';
+        for await (const chunk of chatCompletionStream(config, messages, {
+          temperature: opts?.temperature,
+          signal,
+          disableThinking: opts?.disableThinking,
+        })) {
+          fullText += chunk;
+          notifyActivity?.();
+          const visibleText = stripThinkingTags(fullText);
+          opts?.onChunk?.(chunk, visibleText);
+        }
+        const cleaned = stripThinkingTags(fullText).trim();
+        if (cleaned) return cleaned;
+      } catch (streamErr) {
+        // If streaming fails or connection interrupted, fall back to non-stream fetch
+        console.warn('[UEH] stream chat failed, falling back to non-stream', streamErr);
+      }
+    }
+
+    // Non-streaming fallback
+    const baseUrl = resolveBaseUrl(config, providerId);
+    let requestBody = buildChatRequestBody(config, messages, {
+      temperature: opts?.temperature,
+      stream: false,
+      disableThinking: opts?.disableThinking,
+    });
+
+    let res = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(requestBody),
+      signal,
+    });
+
+    if (!res.ok && res.status === 400) {
+      const errText = await res.text().catch(() => '');
+      if (
+        errText.includes('thinking') ||
+        errText.includes('reasoning') ||
+        errText.includes('chat_template_kwargs') ||
+        errText.includes('unexpected') ||
+        errText.includes('unrecognized')
+      ) {
+        requestBody = buildChatRequestBody(
+          config,
+          messages,
+          {
+            temperature: opts?.temperature,
+            stream: false,
+            disableThinking: false,
+          },
+          true,
+        );
+        res = await fetch(`${baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify(requestBody),
+          signal,
+        });
+      }
+    }
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new AppError(
+        'AI_FAILED',
+        `LLM HTTP ${res.status}: ${body.slice(0, 200)}`,
+      );
+    }
+
+    const json = (await res.json()) as {
+      choices?: { message?: { content?: string } }[];
+    };
+    const rawText = json.choices?.[0]?.message?.content?.trim();
+    const text = stripThinkingTags(rawText || '');
+    if (!text) throw new AppError('AI_FAILED', 'Empty LLM response');
+    opts?.onChunk?.(text, text);
+    return text;
+  };
+
+  if (opts?.timeoutMs && opts.timeoutMs > 0) {
+    return withStreamingTimeout(
+      opts.timeoutMs,
+      (signal, notifyActivity) => run(opts.signal ?? signal, notifyActivity),
+      Math.max(25_000, Math.floor(opts.timeoutMs / 2)),
+    );
+  }
+  return run(opts?.signal);
 }
 
 function resolveFreeMtPreferred(config: AppConfig) {
@@ -425,13 +670,17 @@ export interface ExplainWordOptions {
   forceLlm?: boolean;
   resetCircuit?: boolean;
   timeoutMs?: number;
+  onChunk?: (chunk: string, fullText: string) => void;
 }
 
 async function explainWithLlm(
   config: AppConfig,
   surface: string,
   context: string,
-  opts?: { timeoutMs?: number },
+  opts?: {
+    timeoutMs?: number;
+    onChunk?: (chunk: string, fullText: string) => void;
+  },
 ): Promise<WordExplainResult> {
   const system = getWordExplainPrompt(
     config.sourceLang,
@@ -442,13 +691,18 @@ async function explainWithLlm(
   // Only provide the word itself so LLM focuses purely on translating the word without context confusion
   const userContent = surface.trim();
 
+  const effectiveTimeout = resolveEffectiveTimeoutMs(config, opts?.timeoutMs);
   const explanation = await chatCompletion(
     config,
     [
       { role: 'system', content: system },
       { role: 'user', content: userContent },
     ],
-    { timeoutMs: opts?.timeoutMs ?? LLM_WORD_EXPLAIN_TIMEOUT_MS },
+    {
+      timeoutMs: effectiveTimeout,
+      onChunk: opts?.onChunk,
+      disableThinking: true,
+    },
   );
   const definition = extractDefinitionFromLlm(
     explanation,
@@ -490,8 +744,14 @@ export async function explainWord(
   // If forceLlm is set and key exists, try LLM with extended timeout
   if (options?.forceLlm && key) {
     try {
-      const timeoutMs = options.timeoutMs ?? LLM_RETRY_TIMEOUT_MS;
-      const res = await explainWithLlm(config, surface, context, { timeoutMs });
+      const timeoutMs = resolveEffectiveTimeoutMs(
+        config,
+        options.timeoutMs ?? LLM_RETRY_TIMEOUT_MS,
+      );
+      const res = await explainWithLlm(config, surface, context, {
+        timeoutMs,
+        onChunk: options.onChunk,
+      });
       recordLlmSuccess();
       return res;
     } catch (err) {
@@ -535,8 +795,13 @@ export async function explainWord(
   }
 
   // Race: free runs in parallel while LLM has a hard deadline
+  const effectiveTimeout = resolveEffectiveTimeoutMs(
+    config,
+    options?.timeoutMs ?? LLM_WORD_EXPLAIN_TIMEOUT_MS,
+  );
   const llmPromise = explainWithLlm(config, surface, context, {
-    timeoutMs: options?.timeoutMs ?? LLM_WORD_EXPLAIN_TIMEOUT_MS,
+    timeoutMs: effectiveTimeout,
+    onChunk: options?.onChunk,
   }).then(
     (r) => ({ ok: true as const, r }),
     (e) => ({

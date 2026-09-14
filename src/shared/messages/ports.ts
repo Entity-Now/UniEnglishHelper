@@ -44,3 +44,35 @@ export type ClipPortServerMessage =
       code: string;
       message: string;
     };
+
+export type StreamPortClientMessage =
+  | {
+      type: 'word.explain';
+      requestId: string;
+      word: string;
+      surface?: string;
+      context?: string;
+      forceLlm?: boolean;
+      timeoutMs?: number;
+      id?: number;
+    };
+
+export type StreamPortServerMessage =
+  | {
+      type: 'chunk';
+      requestId: string;
+      chunk: string;
+      accumulated: string;
+    }
+  | {
+      type: 'done';
+      requestId: string;
+      result: any;
+    }
+  | {
+      type: 'error';
+      requestId: string;
+      code: string;
+      message: string;
+    };
+

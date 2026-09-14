@@ -1,8 +1,9 @@
-import { PORT_CLIP, PERMISSIONS_BOOTSTRAP_KEY } from '../shared/constants';
+import { PORT_CLIP, PORT_STREAM, PERMISSIONS_BOOTSTRAP_KEY } from '../shared/constants';
 import type { ClipPortClientMessage } from '../shared/messages/ports';
 import { createEnvelope } from '../shared/messages/envelope';
 import { routeMessage } from './router';
 import { handleClipPort } from './services/clips';
+import { handleWordStreamPort } from './services/word-stream';
 import { sendTabMessageWithInjection } from './services/inject-content';
 import { ensureDefaultSkills } from '../db';
 import { getOnboardingUrl } from '../shared/permissions';
@@ -154,5 +155,7 @@ chrome.runtime.onConnect.addListener((port) => {
         void handleClipPort(port, msg);
       }
     });
+  } else if (port.name === PORT_STREAM) {
+    handleWordStreamPort(port);
   }
 });

@@ -243,6 +243,8 @@ export interface AppConfig {
     model: string;
     apiKeys: Record<string, string>;
     baseUrls?: Record<string, string>;
+    /** Disable thinking/reasoning mode by default (e.g. Gemma, DeepSeek, Gemini). Defaults to true. */
+    disableThinking?: boolean;
   };
   /**
    * Text-to-speech (read-frog aligned).
@@ -359,6 +361,7 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
     model: 'gpt-4o-mini',
     apiKeys: {},
     baseUrls: {},
+    disableThinking: true,
   },
   tts: {
     ...structuredClone(DEFAULT_TTS_CONFIG),

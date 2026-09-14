@@ -9,9 +9,9 @@ const WINDOW_MS = 60_000;
 /** Skip LLM for this long after the circuit opens. */
 const OPEN_MS = 60_000;
 /** Per-request budget for word explain. */
-export const LLM_WORD_EXPLAIN_TIMEOUT_MS = 8_000;
+export const LLM_WORD_EXPLAIN_TIMEOUT_MS = 20_000;
 /** Timeout budget for explicit manual re-translate. */
-export const LLM_RETRY_TIMEOUT_MS = 15_000;
+export const LLM_RETRY_TIMEOUT_MS = 35_000;
 
 const failureTimestamps: number[] = [];
 let circuitOpenUntil: number | null = null;
@@ -89,3 +89,32 @@ export async function withAbortTimeout<T>(
     clearTimeout(timer);
   }
 }
+
+/**
+ * Run streaming work with AbortController + sliding inactivity timeout.
+ * As long as notifyActivity() is called (e.g. on every token chunk), the timeout is extended.
+ */
+export async function withStreamingTimeout<T>(
+  initialTimeoutMs: number,
+  run: (signal: AbortSignal, notifyActivity: () => void) => Promise<T>,
+  inactivityLimitMs = 25_000,
+): Promise<T> {
+  const ac = new AbortController();
+  let timer = setTimeout(() => {
+    ac.abort();
+  }, initialTimeoutMs);
+
+  const notifyActivity = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      ac.abort();
+    }, inactivityLimitMs);
+  };
+
+  try {
+    return await run(ac.signal, notifyActivity);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+

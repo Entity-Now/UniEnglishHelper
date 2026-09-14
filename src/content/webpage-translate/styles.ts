@@ -7,24 +7,36 @@
  */
 
 export const WEBPAGE_TRANSLATION_INJECTED_CSS = `
-/* Original children stay in the host's layout (no extra box). */
-.ueh-original-wrap {
-  display: contents !important;
-}
-
-/* Hide original only after the translation is ready, so the page swaps in place. */
-body[data-ueh-view-mode="translation_only"] .ueh-has-translation > .ueh-original-wrap {
-  display: none !important;
-}
-
 /* Hide translation when user asks for original. */
 body[data-ueh-view-mode="original"] .ueh-translated-block,
 body[data-ueh-view-mode="original"] .ueh-translated-inline {
   display: none !important;
 }
 
+/* In translation_only mode, hide original text via CSS on translated parent */
+body[data-ueh-view-mode="translation_only"] .ueh-has-translation {
+  font-size: 0 !important;
+  line-height: 0 !important;
+  color: transparent !important;
+}
+body[data-ueh-view-mode="translation_only"] .ueh-has-translation > * {
+  display: none !important;
+}
+body[data-ueh-view-mode="translation_only"] .ueh-has-translation > .ueh-translated-block,
+body[data-ueh-view-mode="translation_only"] .ueh-has-translation > .ueh-translated-inline {
+  display: block !important;
+  font-size: 1rem !important;
+  line-height: normal !important;
+  color: initial !important;
+  -webkit-text-fill-color: currentColor !important;
+}
+
 .ueh-translated-block {
   display: block !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  flex-basis: 100% !important;
+  clear: both !important;
   margin: 0.18em 0 0 !important;
   padding: 0 !important;
   border: none !important;
@@ -32,7 +44,6 @@ body[data-ueh-view-mode="original"] .ueh-translated-inline {
   background: none !important;
   box-shadow: none !important;
   outline: none !important;
-  max-width: 100% !important;
   box-sizing: border-box !important;
   font-family: inherit !important;
   font-size: var(--ueh-trans-font-size, 0.94em) !important;

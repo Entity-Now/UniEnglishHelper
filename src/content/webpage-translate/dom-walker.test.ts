@@ -164,14 +164,12 @@ describe('isOwnTranslationNode', () => {
   it('recognises injected translation chrome', () => {
     mount(`
       <p>
-        <span class="ueh-original-wrap">Hello</span>
+        Hello
         <span class="ueh-translated-block" data-ueh-translated="true">你好</span>
       </p>
     `);
     const trans = document.querySelector('.ueh-translated-block')!;
-    const wrap = document.querySelector('.ueh-original-wrap')!;
     expect(isOwnTranslationNode(trans)).toBe(true);
-    expect(isOwnTranslationNode(wrap)).toBe(true);
     expect(isOwnTranslationNode(document.querySelector('p')!)).toBe(false);
   });
 });

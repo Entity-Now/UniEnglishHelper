@@ -57,6 +57,11 @@ import {
   type VideoVocabRecapResult,
 } from '../utils/video-vocab-recap';
 import type { WordExplainResult } from '../shared/domain/types';
+import { marked } from 'marked';
+import {
+  streamWordExplain,
+  type StreamExplainSession,
+} from './stream-client';
 
 declare global {
   interface Window {
@@ -115,6 +120,7 @@ export class PipSessionController {
   private lastChromeShowMs = 0;
   /** Avoid rewriting play SVG every UI tick */
   private lastPlayIconPaused: boolean | null = null;
+  private activeWordStreamSession: StreamExplainSession | null = null;
 
   constructor(
     private adapter: PlayerAdapter,
@@ -1169,6 +1175,8 @@ export class PipSessionController {
   }
 
   private closeWordPanel(): void {
+    this.activeWordStreamSession?.abort();
+    this.activeWordStreamSession = null;
     const doc = this.pipWindow?.document;
     const root = doc?.getElementById('ueh-pip-root');
     const panel = doc?.getElementById('ueh-word-panel');
@@ -2089,79 +2097,130 @@ export class PipSessionController {
     let explain: WordExplainResult | null = null;
 
     const fetchExplain = async (forceLlm = false) => {
-      if (body) {
-        body.textContent = forceLlm
-          ? '⏳ 正在调用 AI 重新翻译…'
-          : '查询中…（AI 超时将自动免费翻译）';
-      }
+      this.activeWordStreamSession?.abort();
+
+      if (!body) return;
+      body.innerHTML = '';
+
       if (title) {
         title.dataset.engine = '';
       }
-      const res = await sendRuntime<WordExplainResult & { text?: string }>(
-        forceLlm ? 'word.retranslate' : 'word.explain',
-        { word: surface, surface, context, forceLlm },
-        'content',
+
+      const badge = doc.createElement('div');
+      badge.style.cssText =
+        'display:inline-block;font-size:9px;font-weight:700;padding:1px 6px;border-radius:999px;margin-bottom:6px;';
+      badge.textContent = forceLlm ? 'AI 重新翻译中…' : 'AI 正在分析…';
+      badge.style.background = 'color-mix(in srgb, oklch(76% 0.12 82) 25%, transparent)';
+      badge.style.color = 'oklch(92% 0.06 82)';
+      body.appendChild(badge);
+
+      const contentWrap = doc.createElement('div');
+      contentWrap.className = 'md-body';
+      contentWrap.innerHTML = `
+        <div class="loading-hint">
+          <span>⏳</span> ${forceLlm ? '正在调用 AI 重新翻译…' : '正在连接 AI 生成释义…'}
+        </div>
+      `;
+      body.appendChild(contentWrap);
+
+      const session = streamWordExplain(
+        {
+          word: surface,
+          surface,
+          context,
+          forceLlm,
+        },
+        (_chunk, accumulated) => {
+          if (!doc.contains(body)) return;
+          const clean = accumulated.trim();
+          if (!clean) {
+            contentWrap.innerHTML = '<div class="loading-hint"><span>🧠</span> AI 正在思考中…</div>';
+            return;
+          }
+          badge.textContent = 'AI 实时输出中…';
+          badge.style.background = 'color-mix(in srgb, oklch(76% 0.12 82) 35%, transparent)';
+          badge.style.color = 'oklch(92% 0.06 82)';
+          try {
+            contentWrap.innerHTML = marked.parse(accumulated) as string;
+          } catch {
+            contentWrap.textContent = accumulated;
+          }
+        },
       );
-      if (res.ok) {
-        explain = res.data;
-        if (body) {
-          body.innerHTML = '';
-          // Badge for LLM vs free MT fallback
-          const badge = doc.createElement('div');
-          badge.style.cssText =
-            'display:inline-block;font-size:9px;font-weight:700;padding:1px 6px;border-radius:999px;margin-bottom:6px;';
-          if (explain.engine === 'llm') {
-            badge.textContent = 'AI 释义';
-            badge.style.background = 'color-mix(in srgb, oklch(76% 0.12 82) 35%, transparent)';
-            badge.style.color = 'oklch(92% 0.06 82)';
-          } else if (explain.engine === 'free_mt') {
-            badge.textContent = '免费翻译';
-            badge.style.background = 'color-mix(in srgb, oklch(72% 0.14 145) 28%, transparent)';
-            badge.style.color = 'oklch(88% 0.08 145)';
-          } else {
-            badge.textContent = '不可用';
-            badge.style.background = 'rgba(255,80,80,.18)';
-            badge.style.color = '#ffb4a9';
-          }
-          body.appendChild(badge);
+      this.activeWordStreamSession = session;
 
-          if (explain.definition) {
-            const def = doc.createElement('div');
-            def.style.fontWeight = '600';
-            def.style.fontSize = '13px';
-            def.textContent = explain.definition;
-            body.appendChild(def);
-          }
-          // Sentence translation only in the top context block (never again in body)
-          const sentenceTr =
-            explain.contextTranslation?.trim() || cueTranslation;
-          renderCtx(sentenceTr);
+      try {
+        const res = await session.promise;
+        explain = res;
+        if (!doc.contains(body)) return;
 
-          if (explain.explanation && explain.engine === 'llm') {
-            const full = doc.createElement('pre');
-            full.style.marginTop = '6px';
-            full.style.whiteSpace = 'pre-wrap';
-            full.style.fontFamily = 'inherit';
-            full.style.fontSize = '12px';
-            full.textContent = explain.explanation;
-            body.appendChild(full);
-          }
-          if (explain.note) {
-            const note = doc.createElement('div');
-            note.style.cssText =
-              'margin-top:8px;font-size:11px;line-height:1.35;padding:5px 7px;border-radius:6px;background:rgba(255,255,255,.06);color:oklch(88% 0.08 82)';
-            note.textContent = explain.note;
-            body.appendChild(note);
-          }
-          if (!body.textContent?.trim()) {
-            body.textContent = res.data.text || surface;
-          }
-          if (forceLlm) {
-            void this.refreshWordHighlights();
-          }
+        body.innerHTML = '';
+
+        // Badge for LLM vs free MT fallback
+        if (res.engine === 'llm') {
+          badge.textContent = 'AI 释义';
+          badge.style.background = 'color-mix(in srgb, oklch(76% 0.12 82) 35%, transparent)';
+          badge.style.color = 'oklch(92% 0.06 82)';
+        } else if (res.engine === 'free_mt') {
+          badge.textContent = '免费翻译';
+          badge.style.background = 'color-mix(in srgb, oklch(72% 0.14 145) 28%, transparent)';
+          badge.style.color = 'oklch(88% 0.08 145)';
+        } else {
+          badge.textContent = '不可用';
+          badge.style.background = 'rgba(255,80,80,.18)';
+          badge.style.color = '#ffb4a9';
         }
-      } else if (body) {
-        body.textContent = res.error.message;
+        body.appendChild(badge);
+
+        if (res.definition) {
+          const def = doc.createElement('div');
+          def.className = 'def';
+          def.textContent = res.definition;
+          body.appendChild(def);
+        }
+
+        const sentenceTr = res.contextTranslation?.trim() || cueTranslation;
+        renderCtx(sentenceTr);
+
+        const rawMarkdown = res.explanation || (!res.definition ? res.text : '');
+        if (rawMarkdown) {
+          const full = doc.createElement('div');
+          full.className = 'md-body';
+          try {
+            full.innerHTML = marked.parse(rawMarkdown) as string;
+          } catch {
+            full.textContent = rawMarkdown;
+          }
+          body.appendChild(full);
+        }
+
+        if (res.note) {
+          const note = doc.createElement('div');
+          note.style.cssText =
+            'margin-top:8px;font-size:11px;line-height:1.35;padding:5px 7px;border-radius:6px;background:rgba(255,255,255,.06);color:oklch(88% 0.08 82)';
+          note.textContent = res.note;
+          body.appendChild(note);
+        }
+
+        if (!body.textContent?.trim()) {
+          body.textContent = res.text || surface;
+        }
+
+        if (forceLlm) {
+          void this.refreshWordHighlights();
+        }
+      } catch (err: any) {
+        if (!doc.contains(body)) return;
+        body.innerHTML = '';
+        badge.textContent = '查询失败';
+        badge.style.background = 'rgba(255,80,80,.18)';
+        badge.style.color = '#ffb4a9';
+        body.appendChild(badge);
+        const errEl = doc.createElement('div');
+        errEl.style.color = '#ffb4a9';
+        errEl.style.fontSize = '12px';
+        errEl.textContent = `查询异常: ${err?.message || String(err)}`;
+        body.appendChild(errEl);
       }
     };
 

@@ -38,7 +38,6 @@ export type StatusListener = (
 const BATCH_SIZE = 16;
 const MAX_WORKERS = 2;
 const STYLE_TAG_ID = 'ueh-webpage-translate-style';
-const ORIGINAL_WRAP_CLASS = 'ueh-original-wrap';
 
 export class WebpageTranslateController {
   private config: AppConfig;
@@ -56,7 +55,6 @@ export class WebpageTranslateController {
   private queuedIds = new Set<string>();
   private claimedElements = new Set<HTMLElement>();
   private activeWorkers = 0;
-  private idlePrefetchHandle = 0;
   private mutating = false;
   private translationCache = new Map<string, string>();
   private pendingMutationRoots: HTMLElement[] = [];
@@ -148,18 +146,30 @@ export class WebpageTranslateController {
 
     const viewportHeight =
       window.innerHeight || document.documentElement.clientHeight || 800;
-    const immediate: TranslatableParagraph[] = [];
+    const immediateWithRect: { p: TranslatableParagraph; rect: DOMRect }[] = [];
     const lazy: TranslatableParagraph[] = [];
 
     for (const p of fresh) {
       const rect = p.element.getBoundingClientRect();
       const visible =
         rect.width + rect.height > 0 &&
-        rect.top < viewportHeight * 1.6 &&
-        rect.bottom > -viewportHeight * 0.25;
-      if (visible) immediate.push(p);
-      else lazy.push(p);
+        rect.top < viewportHeight * 1.5 &&
+        rect.bottom > -viewportHeight * 0.2;
+      if (visible) {
+        immediateWithRect.push({ p, rect });
+      } else {
+        lazy.push(p);
+      }
     }
+
+    // Sort strictly from top to bottom, and left to right within lines
+    immediateWithRect.sort((a, b) => {
+      const topDiff = a.rect.top - b.rect.top;
+      if (Math.abs(topDiff) > 15) return topDiff;
+      return a.rect.left - b.rect.left;
+    });
+
+    const immediate = immediateWithRect.map((item) => item.p);
 
     this.progress = {
       total: this.progress.total + immediate.length + lazy.length,
@@ -170,7 +180,6 @@ export class WebpageTranslateController {
     this.withDomMutation(() => {
       for (const p of immediate) {
         if (this.viewMode === 'translation_only') {
-          this.ensureOriginalWrap(p.element);
           p.element.setAttribute('data-ueh-trans-id', p.id);
         } else {
           this.renderLoadingPlaceholder(p);
@@ -189,7 +198,6 @@ export class WebpageTranslateController {
     this.notify();
     this.kickWorkers();
     this.ensureMutationObserver();
-    this.scheduleIdlePrefetch();
   }
 
   private enqueue(items: TranslatableParagraph[], priority: 'high' | 'low'): void {
@@ -232,7 +240,6 @@ export class WebpageTranslateController {
       if (this.activeWorkers === 0 && this.highQueue.length === 0 && this.lowQueue.length === 0) {
         if (this.status !== 'error') this.status = 'translated';
         this.notify();
-        this.scheduleIdlePrefetch();
       }
     }
   }
@@ -242,7 +249,7 @@ export class WebpageTranslateController {
 
     this.intersectionObserver = new IntersectionObserver(
       (entries) => {
-        const toProcess: TranslatableParagraph[] = [];
+        const toProcessWithRect: { p: TranslatableParagraph; top: number }[] = [];
         for (const entry of entries) {
           if (!entry.isIntersecting) continue;
           const target = entry.target as HTMLElement;
@@ -250,13 +257,17 @@ export class WebpageTranslateController {
           if (!p) continue;
           this.intersectionObserver?.unobserve(target);
           this.pendingLazyMap.delete(target);
-          toProcess.push(p);
+          toProcessWithRect.push({ p, top: entry.boundingClientRect.top });
         }
-        if (toProcess.length === 0) return;
+        if (toProcessWithRect.length === 0) return;
+
+        // Sort items by vertical position as they scroll into view
+        toProcessWithRect.sort((a, b) => a.top - b.top);
+        const toProcess = toProcessWithRect.map((item) => item.p);
+
         this.withDomMutation(() => {
           for (const p of toProcess) {
             if (this.viewMode === 'translation_only') {
-              this.ensureOriginalWrap(p.element);
               p.element.setAttribute('data-ueh-trans-id', p.id);
             } else {
               this.renderLoadingPlaceholder(p);
@@ -267,55 +278,10 @@ export class WebpageTranslateController {
         this.kickWorkers();
       },
       {
-        rootMargin: '420px 0px 420px 0px',
+        rootMargin: '300px 0px 500px 0px',
         threshold: 0.01,
       },
     );
-  }
-
-  private scheduleIdlePrefetch(): void {
-    this.cancelIdlePrefetch();
-    if (this.pendingLazyMap.size === 0) return;
-
-    const run = (deadline?: IdleDeadline) => {
-      if (this.pendingLazyMap.size === 0) return;
-      if (deadline && deadline.timeRemaining() < 8) {
-        this.scheduleIdlePrefetch();
-        return;
-      }
-      const nextBatch: TranslatableParagraph[] = [];
-      for (const [el, p] of this.pendingLazyMap.entries()) {
-        this.intersectionObserver?.unobserve(el);
-        this.pendingLazyMap.delete(el);
-        nextBatch.push(p);
-        if (nextBatch.length >= BATCH_SIZE) break;
-      }
-      if (nextBatch.length === 0) return;
-      // Below-the-fold: skip skeleton to avoid extra layout shift; paint once.
-      this.enqueue(nextBatch, 'low');
-      this.kickWorkers();
-      if (this.pendingLazyMap.size > 0) this.scheduleIdlePrefetch();
-    };
-
-    if (typeof window.requestIdleCallback === 'function') {
-      this.idlePrefetchHandle = window.requestIdleCallback(run, { timeout: 2500 });
-    } else {
-      this.idlePrefetchHandle = window.setTimeout(() => run(), 1600);
-    }
-  }
-
-  private cancelIdlePrefetch(): void {
-    if (!this.idlePrefetchHandle) return;
-    if (typeof window.cancelIdleCallback === 'function') {
-      try {
-        window.cancelIdleCallback(this.idlePrefetchHandle);
-      } catch {
-        window.clearTimeout(this.idlePrefetchHandle);
-      }
-    } else {
-      window.clearTimeout(this.idlePrefetchHandle);
-    }
-    this.idlePrefetchHandle = 0;
   }
 
   private withDomMutation(fn: () => void): void {
@@ -325,39 +291,6 @@ export class WebpageTranslateController {
     } finally {
       this.mutating = false;
     }
-  }
-
-  private ensureOriginalWrap(element: HTMLElement): void {
-    if (element.querySelector(`:scope > .${ORIGINAL_WRAP_CLASS}`)) return;
-
-    const wrap = document.createElement('span');
-    wrap.className = ORIGINAL_WRAP_CLASS;
-
-    const moving: ChildNode[] = [];
-    for (const child of Array.from(element.childNodes)) {
-      if (
-        child instanceof HTMLElement &&
-        (child.hasAttribute('data-ueh-translated') ||
-          child.classList.contains(ORIGINAL_WRAP_CLASS))
-      ) {
-        continue;
-      }
-      moving.push(child);
-    }
-    for (const node of moving) wrap.appendChild(node);
-    element.insertBefore(wrap, element.firstChild);
-  }
-
-  private unwrapOriginal(element: HTMLElement): void {
-    const wrap = element.querySelector(`:scope > .${ORIGINAL_WRAP_CLASS}`);
-    if (!wrap) return;
-    const parent = wrap.parentNode;
-    if (!parent) {
-      wrap.remove();
-      return;
-    }
-    while (wrap.firstChild) parent.insertBefore(wrap.firstChild, wrap);
-    wrap.remove();
   }
 
   private skeletonWidth(text: string, inline: boolean): string {
@@ -372,7 +305,6 @@ export class WebpageTranslateController {
     if (!element.isConnected) return;
     if (element.hasAttribute('data-ueh-trans-id')) return;
 
-    this.ensureOriginalWrap(element);
     element.setAttribute('data-ueh-trans-id', id);
 
     const block = document.createElement('span');
@@ -396,7 +328,6 @@ export class WebpageTranslateController {
     block?.remove();
     this.translatedParagraphs.delete(id);
     if (!element.querySelector('[data-ueh-translated]')) {
-      this.unwrapOriginal(element);
       element.removeAttribute('data-ueh-trans-id');
       this.claimedElements.delete(element);
     }
@@ -492,7 +423,6 @@ export class WebpageTranslateController {
       return;
     }
 
-    this.ensureOriginalWrap(element);
     element.setAttribute('data-ueh-trans-id', id);
 
     let transBlock =
@@ -536,7 +466,6 @@ export class WebpageTranslateController {
     this.viewMode = 'original';
     this.applyViewModeToBody();
 
-    this.cancelIdlePrefetch();
     if (this.intersectionObserver) {
       this.intersectionObserver.disconnect();
       this.intersectionObserver = null;
@@ -550,18 +479,8 @@ export class WebpageTranslateController {
 
     this.withDomMutation(() => {
       document
-        .querySelectorAll('.ueh-translated-block, .ueh-translated-inline')
+        .querySelectorAll('.ueh-translated-block, .ueh-translated-inline, [data-ueh-translated]')
         .forEach((el) => el.remove());
-
-      document.querySelectorAll(`.${ORIGINAL_WRAP_CLASS}`).forEach((wrap) => {
-        const parent = wrap.parentNode;
-        if (!parent) {
-          wrap.remove();
-          return;
-        }
-        while (wrap.firstChild) parent.insertBefore(wrap.firstChild, wrap);
-        wrap.remove();
-      });
 
       document.querySelectorAll('[data-ueh-trans-id]').forEach((el) => {
         el.removeAttribute('data-ueh-trans-id');
@@ -634,14 +553,11 @@ export class WebpageTranslateController {
         const roots = this.pendingMutationRoots.splice(0);
         const connected = roots.filter((el) => el.isConnected);
         if (connected.length === 0) return;
-        if (connected.length > 12) {
-          void this.translate({ root: document.body });
-          return;
-        }
-        for (const root of connected) {
+        // Limit maximum simultaneous incremental roots to prevent recursion storms
+        for (const root of connected.slice(0, 8)) {
           void this.translate({ root });
         }
-      }, 420);
+      }, 500);
     });
 
     this.mutationObserver.observe(document.body, {
