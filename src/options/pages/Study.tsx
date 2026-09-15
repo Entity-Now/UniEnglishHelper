@@ -17,6 +17,7 @@ interface StudyPageProps {
   loading?: boolean;
   syncedAt?: number | null;
   onRefresh: (opts?: { silent?: boolean; toast?: boolean }) => Promise<void>;
+  onToast?: (msg: string, kind?: 'info' | 'success' | 'error') => void;
 }
 
 function formatSyncedAt(ts: number | null | undefined): string {
@@ -75,6 +76,7 @@ export function StudyPage({
   loading,
   syncedAt,
   onRefresh,
+  onToast,
 }: StudyPageProps) {
   const [filter, setFilter] = useState<TimeFilter>('all');
   const [customFrom, setCustomFrom] = useState(() =>
@@ -93,6 +95,7 @@ export function StudyPage({
   const [sessionWords, setSessionWords] = useState<WordRecord[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
+  const [retranslatingId, setRetranslatingId] = useState<number | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
@@ -103,6 +106,40 @@ export function StudyPage({
   const providerId = config.ai.providerId;
   const apiKey = config.ai.apiKeys[providerId];
   const isAiConfigured = !!apiKey;
+
+  const handleRetranslate = async (w: WordRecord) => {
+    if (w.id == null) return;
+    setRetranslatingId(w.id);
+    try {
+      const res = await sendRuntime<{
+        surface: string;
+        definition?: string;
+        explanation?: string;
+      }>(
+        'word.retranslate',
+        {
+          id: w.id,
+          surface: w.surface,
+          context: w.context,
+          forceLlm: true,
+        },
+        'options',
+      );
+      if (!res.ok) {
+        onToast?.(`重译失败: ${res.error.message}`, 'error');
+        return;
+      }
+      onToast?.(`已更新「${w.surface}」的 AI 释义与缓存`, 'success');
+      await onRefresh({ silent: true });
+    } catch (e) {
+      onToast?.(
+        `重译异常: ${e instanceof Error ? e.message : String(e)}`,
+        'error',
+      );
+    } finally {
+      setRetranslatingId(null);
+    }
+  };
 
   useEffect(() => {
     void sendRuntime<SkillRecord[]>('skill.list', {}, 'options').then((res) => {
@@ -819,6 +856,7 @@ export function StudyPage({
                     <th style={{ padding: '8px 10px', width: 88 }}>状态</th>
                     <th style={{ padding: '8px 10px', width: 100 }}>添加日</th>
                     <th style={{ padding: '8px 10px', width: 56 }}>AI</th>
+                    <th style={{ padding: '8px 10px', width: 74 }}>操作</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -894,6 +932,27 @@ export function StudyPage({
                               —
                             </span>
                           )}
+                        </td>
+                        <td style={{ padding: '8px 10px' }}>
+                          <button
+                            type="button"
+                            className="ghost"
+                            title="重新生成 AI 释义 (刷新缓存)"
+                            aria-label={`重新生成 ${w.surface} 释义`}
+                            disabled={retranslatingId === w.id || !isAiConfigured}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleRetranslate(w);
+                            }}
+                            style={{
+                              padding: '2px 8px',
+                              fontSize: 11,
+                              minHeight: 24,
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {retranslatingId === w.id ? '…' : '↻ 重译'}
+                          </button>
                         </td>
                       </tr>
                     );

@@ -33,49 +33,15 @@ export const VIDEO_SUMMARY = SUBTITLE_PROMPT_TOKENS[4];
 
 export const getTokenCellText = (token: string) => `{{${token}}}`;
 
-export const DEFAULT_TRANSLATE_SYSTEM_PROMPT = `You are a professional native translator who specializes in fluent and accurate translation into ${getTokenCellText(TARGET_LANGUAGE)}.
+export const DEFAULT_TRANSLATE_SYSTEM_PROMPT = `Translate the text into ${getTokenCellText(TARGET_LANGUAGE)}. Output ONLY the direct translation without explanations, conversational filler, or thinking tags. Preserve line breaks.`;
 
-## CRITICAL TRANSLATION RULES
-1. Strict Target Language: Translate exclusively into ${getTokenCellText(TARGET_LANGUAGE)}. Never output in any other language.
-2. Direct Output: Output ONLY the direct translation without any explanations, conversational filler, or meta-comments.
-3. No Thinking / Reasoning: Do NOT include any internal thought process, reasoning steps, or <think> / <thought> tags. Output only the final translation directly.
-4. Formatting: Preserve the exact paragraph structure, line breaks, and HTML tags/markup from the original text.
-5. Preserved Elements: Keep untranslatable proper nouns, brand names, and code blocks unaltered.
+export const DEFAULT_SUBTITLE_TRANSLATE_SYSTEM_PROMPT = `Translate video subtitles into ${getTokenCellText(SUBTITLE_TARGET_LANGUAGE)}. Output ONLY the translation directly without any explanations, notes, or thinking tags. Keep it concise for spoken subtitles.`;
 
-## Document Context
-Webpage Title: ${getTokenCellText(WEB_TITLE)}
-Webpage Summary: ${getTokenCellText(WEB_SUMMARY)}`;
+export const DEFAULT_TRANSLATE_PROMPT = `${getTokenCellText(INPUT)}`;
 
-export const DEFAULT_SUBTITLE_TRANSLATE_SYSTEM_PROMPT = `You are an expert bilingual subtitle translator. Your task is to accurately and fluently translate video subtitles into ${getTokenCellText(SUBTITLE_TARGET_LANGUAGE)}.
+export const DEFAULT_SUBTITLE_TRANSLATE_PROMPT = `${getTokenCellText(SUBTITLE_INPUT)}`;
 
-## CRITICAL TRANSLATION RULES
-1. Strict Target Language: You MUST translate exclusively into ${getTokenCellText(SUBTITLE_TARGET_LANGUAGE)}. Under NO circumstances should you output in any other language, nor should you output the source language unchanged unless it is an untranslatable proper noun.
-2. Direct Output: Output ONLY the translated subtitle text. Do NOT add any explanations, notes, greetings, or prefixes (such as "Translation:", "Here is the translation:").
-3. No Thinking / Reasoning: Do NOT output any internal thoughts, reasoning steps, or <think> / <thought> tags. Output the translation text directly.
-4. Subtitle Flow & Timing: Maintain natural, conversational spoken dialogue suitable for video subtitles. Keep sentence boundaries and line structure closely aligned with the original.
-5. Preserved Elements: Keep proper nouns, trademarks, formulas, and code names unchanged where standard in ${getTokenCellText(SUBTITLE_TARGET_LANGUAGE)}.
-6. Punctuation: Use natural punctuation appropriate for ${getTokenCellText(SUBTITLE_TARGET_LANGUAGE)}.
-
-## Context Awareness (Optional)
-Video Title: ${getTokenCellText(SUBTITLE_WEB_TITLE)}
-Video Summary: ${getTokenCellText(VIDEO_SUMMARY)}`;
-
-export const DEFAULT_TRANSLATE_PROMPT = `Translate the following text into ${getTokenCellText(TARGET_LANGUAGE)}:
-
-${getTokenCellText(INPUT)}`;
-
-export const DEFAULT_SUBTITLE_TRANSLATE_PROMPT = `Translate the following subtitle text into ${getTokenCellText(SUBTITLE_TARGET_LANGUAGE)}:
-
-${getTokenCellText(SUBTITLE_INPUT)}`;
-
-export const DEFAULT_BATCH_TRANSLATE_PROMPT = `## Multi-paragraph Translation Rules
-1. If input contains a standalone line containing only ${BATCH_SEPARATOR}, use a standalone ${BATCH_SEPARATOR} line in your output. If input has no standalone ${BATCH_SEPARATOR} line, don't use ${BATCH_SEPARATOR} in your output.
-2. **CRITICAL**: Treat ${BATCH_SEPARATOR} as a separator only when it appears on its own line.
-
-## OUTPUT FORMAT:
-- **Single paragraph input** → Output translation directly
-- **Multi-paragraph input** → Put ${BATCH_SEPARATOR} on its own line between translations
-`;
+export const DEFAULT_BATCH_TRANSLATE_PROMPT = `Separate each translated item with a single line containing only '${BATCH_SEPARATOR}'.`;
 
 export const DEFAULT_TRANSLATE_PROMPT_ID = '__default__';
 

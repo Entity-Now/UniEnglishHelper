@@ -279,21 +279,73 @@ export class PageSubtitlesOverlay {
     this.shadow.innerHTML = `
       <style id="base">
         #layer {
-          position: absolute; left: 0; right: 0; bottom: 12%;
+          position: absolute; left: 0; right: 0; bottom: 10%;
           display: flex; flex-direction: column; align-items: center;
-          gap: 4px; padding: 0 12px; pointer-events: none;
+          padding: 0 2%; pointer-events: none;
+          box-sizing: border-box;
+          width: 100%;
         }
-        #en, #tr {
-          max-width: min(900px, 94%);
-          text-align: center;
-          line-height: 1.35;
-          padding: 4px 10px;
-          border-radius: 6px;
+        #ueh-sub-card {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 2px;
+          width: fit-content;
+          max-width: 96%;
+          box-sizing: border-box;
+          padding: 5px 14px 6px;
+          border-radius: 12px;
+          background: rgba(18, 18, 22, 0.76);
+          border: 1px solid rgba(255, 255, 255, 0.14);
+          box-shadow: 0 6px 24px -2px rgba(0, 0, 0, 0.45), 0 0 0 0.5px rgba(255, 255, 255, 0.08) inset;
+          backdrop-filter: blur(24px) saturate(180%);
+          -webkit-backdrop-filter: blur(24px) saturate(180%);
           pointer-events: auto;
           cursor: pointer;
-          text-shadow: 0 1px 2px rgba(0,0,0,.85);
         }
-        #en:empty, #tr:empty { display: none; padding: 0; background: transparent; }
+        #ueh-sub-card:has(#en:empty):has(#tr:empty) {
+          display: none !important;
+          padding: 0;
+          background: transparent;
+          border: none;
+          box-shadow: none;
+        }
+        #layer.ueh-sub-split #ueh-sub-card {
+          display: contents;
+          padding: 0;
+          background: none;
+          border: none;
+          box-shadow: none;
+          backdrop-filter: none;
+        }
+        #en, #tr {
+          width: fit-content;
+          max-width: 100%;
+          text-align: center;
+          font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", Roboto, system-ui, sans-serif;
+          letter-spacing: -0.012em;
+          line-height: 1.25;
+          text-wrap: normal;
+          white-space: normal;
+          word-break: normal;
+          overflow-wrap: break-word;
+          pointer-events: auto;
+          cursor: pointer;
+          text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+        }
+        #layer.ueh-sub-split #en,
+        #layer.ueh-sub-split #tr {
+          max-width: 96%;
+          padding: 4px 12px;
+          border-radius: 10px;
+          background: rgba(18, 18, 22, 0.76);
+          border: 1px solid rgba(255, 255, 255, 0.14);
+          box-shadow: 0 6px 24px -2px rgba(0, 0, 0, 0.45), 0 0 0 0.5px rgba(255, 255, 255, 0.08) inset;
+          backdrop-filter: blur(24px) saturate(180%);
+          -webkit-backdrop-filter: blur(24px) saturate(180%);
+        }
+        #en:empty, #tr:empty { display: none !important; padding: 0; background: transparent; border: none; }
         .ueh-word {
           position: relative;
           cursor: pointer;
@@ -333,8 +385,10 @@ export class PageSubtitlesOverlay {
       </style>
       <style id="hl"></style>
       <div id="layer">
-        <div id="en"></div>
-        <div id="tr"></div>
+        <div id="ueh-sub-card">
+          <div id="en"></div>
+          <div id="tr"></div>
+        </div>
       </div>
       <div id="tools">
         <button type="button" data-act="recap" id="ueh-page-recap-btn">
@@ -378,19 +432,22 @@ export class PageSubtitlesOverlay {
     const en = this.shadow.getElementById('en');
     const tr = this.shadow.getElementById('tr');
     const layer = this.shadow.getElementById('layer');
+    const card = this.shadow.getElementById('ueh-sub-card');
     const baseStyle = this.shadow.getElementById('base');
     if (en) {
       en.style.fontSize = `${fontSize}px`;
       en.style.fontWeight = String(vs?.main.fontWeight ?? 600);
       en.style.color = vs?.main.color ?? '#fff';
-      en.style.background = `rgba(0,0,0,${bg})`;
     }
     if (tr) {
       const trScale = vs?.translation.fontScale ?? Math.round((vs?.main.fontScale ?? 110) * 0.88);
       tr.style.fontSize = `${Math.round(18 * (trScale / 100))}px`;
       tr.style.fontWeight = String(vs?.translation.fontWeight ?? 500);
       tr.style.color = vs?.translation.color ?? '#E8D5A3';
-      tr.style.background = `rgba(0,0,0,${bg})`;
+    }
+    if (card) {
+      const opacity = Math.max(0.4, bg);
+      card.style.background = `rgba(18, 18, 22, ${opacity})`;
     }
     if (layer && en && tr) {
       const placement = resolveSubtitlePlacement({

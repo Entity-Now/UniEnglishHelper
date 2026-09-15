@@ -157,8 +157,8 @@ function readableText(el: HTMLElement): string {
 function isLeafDiv(el: HTMLElement): boolean {
   if (el.tagName !== 'DIV') return false;
   // If div contains interactive elements or too many child elements, it is a container, not a paragraph
-  if (el.childElementCount > 3) return false;
-  if (el.querySelector('button, [role="button"], input, textarea, select, svg, a, form')) {
+  if (el.childElementCount > 6) return false;
+  if (el.querySelector('button, [role="button"], input, textarea, select, svg, form')) {
     return false;
   }
   for (const child of el.children) {
@@ -249,16 +249,14 @@ function collectCandidates(
     }
   }
 
-  // Semantic-tag sparse pages (div soup): pick leaf divs inside main/article.
-  if (out.length < 4) {
-    const article =
-      (root.matches?.('article, main, [role="main"]') ? root : null) ??
-      (root.querySelector('article, main, [role="main"]') as HTMLElement | null) ??
-      root;
-    article.querySelectorAll('div').forEach((n) => {
-      if (n instanceof HTMLElement && isLeafDiv(n)) push(n);
-    });
-  }
+  // Also collect leaf divs from main/article/root for modern SPA/div soup pages
+  const article =
+    (root.matches?.('article, main, [role="main"]') ? root : null) ??
+    (root.querySelector('article, main, [role="main"]') as HTMLElement | null) ??
+    root;
+  article.querySelectorAll('div').forEach((n) => {
+    if (n instanceof HTMLElement && isLeafDiv(n)) push(n);
+  });
 
   return out;
 }
@@ -291,6 +289,10 @@ export function extractTranslatableParagraphs(
       continue;
     }
 
+    const isIncludedByRule = Boolean(
+      siteRule.includeSelector &&
+        (el.matches(siteRule.includeSelector) || el.closest(siteRule.includeSelector)),
+    );
     const forcedInline = Boolean(
       siteRule.forceInlineSelector && el.matches(siteRule.forceInlineSelector),
     );
@@ -299,10 +301,11 @@ export function extractTranslatableParagraphs(
     );
     const isBlock = forcedBlock || BLOCK_TAGS.has(el.tagName) || isLeafDiv(el);
 
-    if (!forcedInline && !isBlock) continue;
+    if (!isIncludedByRule && !forcedInline && !isBlock) continue;
 
     // Prefer leaf blocks: skip containers that wrap other paragraphs/headings/items.
     if (
+      !isIncludedByRule &&
       !forcedInline &&
       !forcedBlock &&
       el.querySelector('p, h1, h2, h3, h4, h5, h6, li, blockquote')
@@ -326,7 +329,7 @@ export function extractTranslatableParagraphs(
       id,
       element: el,
       text: rawText,
-      inline: forcedInline && !forcedBlock,
+      inline: (forcedInline && !forcedBlock) || (isIncludedByRule && !isBlock),
     });
   }
 

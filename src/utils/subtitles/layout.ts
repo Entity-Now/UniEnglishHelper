@@ -180,7 +180,7 @@ export function applySubtitleLayerLayout(
       card.style.justifyContent = 'center';
       card.style.gap = '';
       card.style.width = 'fit-content';
-      card.style.maxWidth = 'min(920px, 94%)';
+      card.style.maxWidth = '96%';
       card.style.boxSizing = 'border-box';
     }
   }
@@ -213,10 +213,10 @@ export function applySubtitleLayerLayout(
     );
     originalEl.style.pointerEvents = 'auto';
     translationEl.style.pointerEvents = 'auto';
-    originalEl.style.maxWidth = 'min(920px, 94%)';
-    translationEl.style.maxWidth = 'min(920px, 94%)';
-    originalEl.style.width = 'max-content';
-    translationEl.style.width = 'max-content';
+    originalEl.style.maxWidth = '96%';
+    translationEl.style.maxWidth = '96%';
+    originalEl.style.width = 'fit-content';
+    translationEl.style.width = 'fit-content';
     originalEl.style.boxSizing = 'border-box';
     translationEl.style.boxSizing = 'border-box';
     return;
@@ -230,8 +230,8 @@ export function applySubtitleLayerLayout(
   // Inner card owns bilingual order so the glass capsule stays one unit.
   layer.style.flexDirection = card ? 'column' : placement.flexDirection;
   layer.style.alignItems = 'center';
-  layer.style.gap = card ? '0' : '4px';
-  layer.style.padding = '0 12px';
+  layer.style.gap = card ? '0' : '2px';
+  layer.style.padding = '0 2%';
   layer.style.pointerEvents = 'none';
   layer.style.transform = '';
 
@@ -257,8 +257,8 @@ export function applySubtitleLayerLayout(
   translationEl.style.transform = '';
   originalEl.style.width = '';
   translationEl.style.width = '';
-  originalEl.style.maxWidth = 'min(920px, 94%)';
-  translationEl.style.maxWidth = 'min(920px, 94%)';
+  originalEl.style.maxWidth = '100%';
+  translationEl.style.maxWidth = '100%';
   originalEl.style.pointerEvents = 'auto';
   translationEl.style.pointerEvents = 'auto';
 }

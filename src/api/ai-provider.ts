@@ -515,6 +515,25 @@ export function extractDefinitionFromLlm(
   const isSurface = (text: string) =>
     Boolean(surface && text.toLowerCase() === surface.toLowerCase().trim());
 
+  // 0. Try to extract from first line header: "# [word] [IPA] [词性. 中文翻译]"
+  for (const line of lines.slice(0, 3)) {
+    if (/^#+\s+/i.test(line)) {
+      const titleContent = line.replace(/^#+\s*/, '').trim();
+      let rest = titleContent;
+      if (surface && rest.toLowerCase().startsWith(surface.toLowerCase())) {
+        rest = rest.slice(surface.length).trim();
+      } else {
+        rest = rest.replace(/^(?:\[[^\]]+\]|[a-zA-Z\s'-]+)\s*/, '').trim();
+      }
+      // Remove IPA phonetics: [/][^/]+[/] or [[][^\]]+[\]]
+      rest = rest.replace(/^(?:\[[^\]]+\]|\/[^\/]+\/)\s*/, '').trim();
+      const cleaned = cleanLine(rest, surface);
+      if (cleaned && !isSurface(cleaned) && /[\u4e00-\u9fa5]/.test(cleaned)) {
+        return cleaned;
+      }
+    }
+  }
+
   // 1. Try to extract from "## 释义" / "### 释义" / "## Definition" / "1. 核心单词卡片" section
   let inSection = false;
   const sectionLines: string[] = [];

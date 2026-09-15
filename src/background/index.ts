@@ -5,8 +5,12 @@ import { routeMessage } from './router';
 import { handleClipPort } from './services/clips';
 import { handleWordStreamPort } from './services/word-stream';
 import { sendTabMessageWithInjection } from './services/inject-content';
-import { ensureDefaultSkills } from '../db';
+import { ensureDefaultSkills, autoHealHistoricalWords } from '../db';
 import { getOnboardingUrl } from '../shared/permissions';
+
+// Background init: ensure default skills & auto-heal historical dirty vocab records
+void ensureDefaultSkills();
+void autoHealHistoricalWords().catch(() => 0);
 
 function setupContextMenus(): void {
   chrome.contextMenus.removeAll(() => {
@@ -29,16 +33,10 @@ function setupContextMenus(): void {
       contexts: ['selection'],
     });
 
-    // 2. Page context menus
+    // 2. Page context menu (single item -> Chrome renders directly as top-level menu item)
     chrome.contextMenus.create({
       id: 'ueh-translate-page',
       title: '🌐 翻译当前网页 (双语对照)',
-      contexts: ['page'],
-    });
-
-    chrome.contextMenus.create({
-      id: 'ueh-open-pip',
-      title: '🎬 打开学习画中画 (PiP)',
       contexts: ['page'],
     });
   });
@@ -78,7 +76,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   const tabId = tab.id;
 
   if (info.menuItemId === 'ueh-translate-page') {
-    void sendTabMessageWithInjection(
+    sendTabMessageWithInjection(
       tabId,
       createEnvelope({
         channel: 'runtime',
@@ -86,17 +84,9 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
         source: 'background',
         payload: {},
       }),
-    );
-  } else if (info.menuItemId === 'ueh-open-pip') {
-    void sendTabMessageWithInjection(
-      tabId,
-      createEnvelope({
-        channel: 'runtime',
-        type: 'content.openPip',
-        source: 'background',
-        payload: {},
-      }),
-    );
+    ).catch((err) => {
+      console.warn('[UEH] page.translate message failed:', err);
+    });
   } else if (info.menuItemId === 'ueh-translate-selection') {
     void sendTabMessageWithInjection(
       tabId,

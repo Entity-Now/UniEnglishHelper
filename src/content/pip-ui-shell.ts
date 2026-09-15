@@ -141,12 +141,31 @@ export function buildPipStyles(opts: {
       /* Avoid layout thrash while the OS resizes the PiP window */
       pointer-events: none;
     }
-    /* Current cue — stacked bilingual reads as one glass card */
+    /* Controls backdrop scrim */
+    #ueh-backdrop {
+      position: absolute; inset: 0;
+      z-index: 3;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity .18s ease;
+      background: linear-gradient(
+        180deg,
+        rgba(0,0,0,0.55) 0%,
+        rgba(0,0,0,0.15) 24%,
+        transparent 50%,
+        rgba(0,0,0,0.2) 72%,
+        rgba(0,0,0,0.72) 100%
+      );
+    }
+    #ueh-pip-root.ueh-chrome-visible #ueh-backdrop { opacity: 1; }
+
+    /* Bilingual subtitle layer */
     #ueh-sub-layer {
       position: absolute; left: 0; right: 0; bottom: 72px;
       z-index: 6; display: flex; flex-direction: column;
       align-items: center; gap: 0;
-      padding: 0 16px; pointer-events: none;
+      padding: 0 2%; pointer-events: none;
+      box-sizing: border-box;
       transition: padding-right .2s ease, padding-left .2s ease;
     }
     #ueh-pip-root.ueh-word-open #ueh-sub-layer {
@@ -162,12 +181,12 @@ export function buildPipStyles(opts: {
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 0.28em;
+      gap: 2px;
       width: fit-content;
-      max-width: min(920px, 94%);
+      max-width: 96%;
       box-sizing: border-box;
-      padding: 8px 18px 9px;
-      border-radius: 16px;
+      padding: 5px 14px 6px;
+      border-radius: 12px;
       background: ${glassBg};
       border: ${glassBorder};
       box-shadow: ${glassShadow};
@@ -196,14 +215,16 @@ export function buildPipStyles(opts: {
       text-align: center;
       font-family: ${fontFamily};
       font-optical-sizing: auto;
-      text-wrap: pretty;
-      word-break: break-word;
-      overflow-wrap: anywhere;
+      text-wrap: normal;
+      white-space: normal;
+      word-break: normal;
+      overflow-wrap: break-word;
+      letter-spacing: -0.012em;
+      line-height: 1.25;
       pointer-events: auto;
       cursor: pointer;
       text-shadow:
-        0 1px 1px rgba(0,0,0,.55),
-        0 0 14px rgba(0,0,0,.28);
+        0 1px 2px rgba(0,0,0,.65);
     }
     #ueh-sub-layer.ueh-sub-stacked #ueh-sub-en,
     #ueh-sub-layer.ueh-sub-stacked #ueh-sub-tr {
@@ -216,8 +237,9 @@ export function buildPipStyles(opts: {
     }
     #ueh-sub-layer.ueh-sub-split #ueh-sub-en,
     #ueh-sub-layer.ueh-sub-split #ueh-sub-tr {
-      padding: 7px 16px;
-      border-radius: 14px;
+      padding: 4px 12px;
+      border-radius: 10px;
+      max-width: 96%;
       background: ${glassBg};
       border: ${glassBorder};
       box-shadow: ${glassShadow};
@@ -227,15 +249,15 @@ export function buildPipStyles(opts: {
     #ueh-sub-en {
       font-size: ${fontSize}px;
       font-weight: ${mainWeight};
-      letter-spacing: 0.008em;
-      line-height: 1.42;
+      letter-spacing: -0.012em;
+      line-height: 1.25;
       color: ${mainColor};
     }
     #ueh-sub-tr {
       font-size: ${trSize}px;
       font-weight: ${translationWeight};
-      letter-spacing: 0.03em;
-      line-height: 1.5;
+      letter-spacing: -0.01em;
+      line-height: 1.25;
       color: ${translationColor};
     }
     #ueh-sub-layer.ueh-sub-stacked #ueh-sub-tr:not(:empty) {

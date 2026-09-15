@@ -102,19 +102,19 @@ export function getTranslatePromptFromConfig(
 
   const title = resolvePromptReplacementValue(
     options?.context?.webTitle,
-    'No title available',
+    '',
   );
   const description = resolvePromptReplacementValue(
     options?.context?.webDescription,
-    'No description available',
+    '',
   );
   const contentText = resolvePromptReplacementValue(
     options?.context?.webContent,
-    'No content available',
+    '',
   );
   const summary = resolvePromptReplacementValue(
     options?.context?.webSummary,
-    'No summary available',
+    '',
   );
   const targetLanguageFormatted = formatLanguageForPrompt(targetLang);
 

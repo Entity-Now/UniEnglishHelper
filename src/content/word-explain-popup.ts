@@ -366,13 +366,48 @@ export async function showWordExplainPopup(
 
   let timer = window.setTimeout(remove, 25_000);
   let latestExplain: WordExplainResult | null = null;
+  let isAlreadyInVocab = false;
+
+  // Detect if word is already in vocabulary to update button label
+  void sendRuntime<Record<string, { status: string; translation?: string }>>(
+    'word.highlightMap',
+    {},
+    'content',
+  ).then((res) => {
+    if (res.ok && res.data) {
+      const key = surface.trim().toLowerCase();
+      if (res.data[key]) {
+        isAlreadyInVocab = true;
+        const addBtn = shadow.getElementById('ueh-add') as HTMLButtonElement | null;
+        if (addBtn) {
+          addBtn.title = '更新生词本 (刷新释义与缓存)';
+          addBtn.setAttribute('aria-label', '更新生词本 (刷新释义与缓存)');
+        }
+      }
+    }
+  });
 
   const bindAdd = () => {
     const addBtn = shadow.getElementById('ueh-add') as HTMLButtonElement | null;
     if (!addBtn) return;
     addBtn.disabled = false;
+    if (isAlreadyInVocab) {
+      addBtn.title = '更新生词本 (刷新释义与缓存)';
+      addBtn.setAttribute('aria-label', '更新生词本 (刷新释义与缓存)');
+    }
     addBtn.onclick = () => {
       void (async () => {
+        addBtn.disabled = true;
+        // If stream session is still running, await it so we don't save undefined/empty translation!
+        if (activeStreamSession && !latestExplain) {
+          addBtn.title = '正在等待 AI 释义完成…';
+          try {
+            const explain = await activeStreamSession.promise;
+            if (explain) latestExplain = explain;
+          } catch {
+            // stream error handled elsewhere
+          }
+        }
         await sendRuntime(
           'word.add',
           {
@@ -390,6 +425,7 @@ export async function showWordExplainPopup(
           },
           'content',
         );
+        addBtn.title = isAlreadyInVocab ? '已更新生词' : '已添加生词';
         // Await refresh so the current cue paints highlight+gloss before popup closes
         try {
           await onAddSuccess?.();
@@ -400,7 +436,7 @@ export async function showWordExplainPopup(
       })();
     };
   };
-  // Allow add before explain finishes (context-only entry)
+  // Allow add before explain finishes (will await stream completion)
   bindAdd();
 
   const resolveAnchorRect = (
@@ -599,13 +635,13 @@ export async function showWordExplainPopup(
       bodyEl.className = 'body';
       bodyEl.replaceChildren();
 
-      if (def) {
+      const rawMarkdown = explain.explanation || (!def ? explain.text : '');
+      if (def && (!rawMarkdown || explain.engine !== 'llm')) {
         const d = hostDoc.createElement('div');
         d.className = 'def';
         d.textContent = def;
         bodyEl.appendChild(d);
       }
-      const rawMarkdown = explain.explanation || (!def ? explain.text : '');
       if (rawMarkdown) {
         const mdEl = hostDoc.createElement('div');
         mdEl.className = 'md-body';
@@ -623,10 +659,32 @@ export async function showWordExplainPopup(
       bindAdd();
 
       if (forceLlm) {
-        try {
-          await onAddSuccess?.();
-        } catch {
-          // ignore refresh error
+        if (isAlreadyInVocab) {
+          void sendRuntime(
+            'word.add',
+            {
+              surface,
+              context,
+              translation: latestExplain?.definition || undefined,
+              contextTranslation:
+                latestExplain?.contextTranslation || contextTranslation,
+              explanation: latestExplain?.explanation,
+              explainEngine: latestExplain?.engine ?? 'none',
+              explainProvider: latestExplain?.provider,
+              kind: 'word',
+              sourceUrl: hostDoc.defaultView?.location.href ?? location.href,
+              sourceTitle: hostDoc.title || document.title,
+            },
+            'content',
+          ).then(() => {
+            void onAddSuccess?.();
+          });
+        } else {
+          try {
+            await onAddSuccess?.();
+          } catch {
+            // ignore refresh error
+          }
         }
       }
 

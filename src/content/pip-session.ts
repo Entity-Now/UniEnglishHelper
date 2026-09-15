@@ -2172,7 +2172,8 @@ export class PipSessionController {
         }
         body.appendChild(badge);
 
-        if (res.definition) {
+        const rawMarkdown = res.explanation || (!res.definition ? res.text : '');
+        if (res.definition && (!rawMarkdown || res.engine !== 'llm')) {
           const def = doc.createElement('div');
           def.className = 'def';
           def.textContent = res.definition;
@@ -2182,7 +2183,6 @@ export class PipSessionController {
         const sentenceTr = res.contextTranslation?.trim() || cueTranslation;
         renderCtx(sentenceTr);
 
-        const rawMarkdown = res.explanation || (!res.definition ? res.text : '');
         if (rawMarkdown) {
           const full = doc.createElement('div');
           full.className = 'md-body';
@@ -2207,6 +2207,29 @@ export class PipSessionController {
         }
 
         if (forceLlm) {
+          const key = surface.trim().toLowerCase();
+          if (this.highlightMap[key]) {
+            await sendRuntime(
+              'word.add',
+              {
+                surface,
+                context,
+                translation: res.definition || undefined,
+                contextTranslation:
+                  res.contextTranslation || this.currentCue?.translation,
+                explanation: res.explanation,
+                explainEngine: res.engine ?? 'none',
+                explainProvider: res.provider,
+                kind: 'word',
+                cueStartMs: this.currentCue?.startMs,
+                cueEndMs: this.currentCue?.endMs,
+                audioClipId: this.lastClipId ?? undefined,
+                sourceUrl: location.href,
+                sourceTitle: document.title,
+              },
+              'content',
+            );
+          }
           void this.refreshWordHighlights();
         }
       } catch (err: any) {
@@ -2251,6 +2274,16 @@ export class PipSessionController {
       if (addBtn) {
         addBtn.onclick = async (e) => {
           e.stopPropagation();
+          addBtn.disabled = true;
+          if (this.activeWordStreamSession && !explain) {
+            addBtn.title = '正在等待 AI 释义完成…';
+            try {
+              const res = await this.activeWordStreamSession.promise;
+              if (res) explain = res;
+            } catch {
+              // ignore stream abort/error
+            }
+          }
           await sendRuntime(
             'word.add',
             {
@@ -2271,10 +2304,11 @@ export class PipSessionController {
             },
             'content',
           );
-          addBtn.title = '已添加';
-          addBtn.setAttribute('aria-label', '已添加');
+          addBtn.disabled = false;
+          addBtn.title = '已保存';
+          addBtn.setAttribute('aria-label', '已保存');
           addBtn.style.opacity = '0.55';
-          this.toast('info', `已加入生词本：${surface}`);
+          this.toast('info', `已保存至生词本：${surface}`);
           await this.refreshWordHighlights();
         };
       }

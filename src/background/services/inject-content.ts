@@ -164,7 +164,9 @@ export async function sendTabMessageWithInjection(
       firstErr instanceof Error ? firstErr.message : String(firstErr);
     const shouldInject =
       firstMsg.includes('Receiving end does not exist') ||
-      firstMsg.includes('Could not establish connection');
+      firstMsg.includes('Could not establish connection') ||
+      firstMsg.includes('Extension context invalidated') ||
+      firstMsg.includes('context invalidated');
 
     if (!shouldInject) {
       throw firstErr;

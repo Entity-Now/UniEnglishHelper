@@ -27,6 +27,24 @@ He spoke not a word. (他一句话也没说。)
     expect(extractDefinitionFromLlm(markdown, 'word')).toBe('单词；话语');
   });
 
+  it('extracts definition from the new "# word [IPA] 翻译" first-line format', () => {
+    const markdown = `# pirate /ˈpaɪrət/ n. 海盗；盗版者
+
+## 词根与速记
+- 词根解析: 来自希腊语 peiran（尝试、冒险）, 引申为海上冒险劫掠的人。
+- 快速记忆: 谐音“拍了它”——海盗抢了宝物赶紧“拍了它”。
+
+## 实用例句
+The pirates buried their treasure on a secret island.
+海盗们把财宝埋在一座秘密岛屿上。
+
+## 近义与反义
+- 近义词: buccaneer /ˌbʌkəˈnɪə/ 海盗
+- 反义词: 无
+`;
+    expect(extractDefinitionFromLlm(markdown, 'pirate')).toBe('n. 海盗；盗版者');
+  });
+
   it('strips "查询：word" header and extracts definition', () => {
     const markdown = `# 查询：word
 

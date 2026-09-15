@@ -12,10 +12,15 @@ You will receive the target query text (a word, phrase, or sentence). Focus dire
 # Processing Rules
 1. If the input is a word or short phrase, strictly follow [word-template].
 2. If the input is a full sentence, strictly follow [sentence-template].
-3. The title line MUST be directly \`# [the word/phrase]\` with NO prefix like "Query:", "Word:", or "查询：".
+3. For words: The VERY FIRST line MUST be: \`# [word] [IPA] [part of speech. translation in {{targetLanguage}}]\` (e.g. \`# pirate /ˈpaɪrət/ n. 海盗；盗版者\`). Do NOT output any prefix like "Query:", "Word:", or "单词：".
 4. Output strictly in the given Markdown structure without any conversational filler, greetings, or preamble.
-5. All explanations, definitions, and notes must be in {{targetLanguage}} (except for phonetic symbols, source language examples, and code/terms).
-6. Under "## 释义", provide ONLY the clean definition of the word in {{targetLanguage}}. Do NOT output extra labels or prefixes (e.g., do NOT write "上下文：", "释义：", "词：", "语境：").
+5. In "## 常用搭配与短语", dynamically adapt based on the word's part of speech:
+   - If verb: provide 2-3 high-frequency verb phrases or collocations (e.g. "take off", "turn down").
+   - If preposition: provide 2-3 common prepositional phrases (e.g. "in terms of", "at ease").
+   - If noun: provide 2-3 frequent noun collocations or compound phrases (e.g. "heavy rain", "pay attention").
+   - If adjective: provide 2-3 natural collocations or prep-combos (e.g. "be fond of", "vital role").
+   - Other parts of speech: provide 2-3 of the most common authentic everyday phrases.
+6. All explanations, definitions, memory hooks, and sentence translations must be in {{targetLanguage}} (except for {{sourceLanguage}} words, IPA, and example sentences).
 7. Do NOT include any internal reasoning, chain-of-thought, or <think> / <thought> tags. Directly output the formatted Markdown content.
 
 # Level Definitions
@@ -27,38 +32,36 @@ You will receive the target query text (a word, phrase, or sentence). Focus dire
 
 word-template:
 
-# [word]
+# [word] [IPA] [词性. 核心中文翻译]
 
-**[IPA pronunciation]**
+## 词根与速记
+- 词根解析: [词根词缀拆解说明，若无明显词根可写“无明显词根”]
+- 快速记忆: [谐音/联想/场景记忆钩子，帮助快速记忆；如无合适联想可写“语境记忆”]
 
-[part of speech, e.g. n. / v. / adj.]
+## 常用搭配与短语
+- [短语/搭配1]: [中文释义]
+- [短语/搭配2]: [中文释义]
+- [短语/搭配3]: [中文释义]
 
-## 释义
-**[concise definition in {{sourceLanguage}}, optional]**
+## 实用例句
+[日常简单实用的英文句子]
+[例句中文翻译]
 
-[accurate concise definition in {{targetLanguage}}]
-
-[example sentence in {{sourceLanguage}}] ([example translation in {{targetLanguage}}])
-
-## 词根词缀
-[etymology / prefix / suffix breakdown and memory hook, or write "无明显词根拆解"]
-
-## 扩展词汇
-- 同义词: [2-3 synonyms with brief distinction]
-- 反义词: [1-2 antonyms]
-- 搭配: [1-2 common collocations]
+## 近义与反义
+- 近义词: [word] [IPA] [中文翻译]（1-2个）
+- 反义词: [word] [IPA] [中文翻译]（如有列1-2个，无则写“无”）
 
 ---
 
 sentence-template:
 
-**[full sentence translation in {{targetLanguage}}]**
+# [句子核心中文翻译]
 
-## 语法点
-[1-3 key grammar points, sentence structures, or tense explanations]
+## 语法与重点
+[1-2个关键句型、固定搭配或语法点说明]
 
-## 讲解
-[contextual usage, tone, and practical learning tips]
+## 实用场景
+[该句子在日常生活或口语交流中的常用场景]
 `.trim();
 
 /**

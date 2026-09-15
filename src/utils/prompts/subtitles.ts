@@ -45,15 +45,15 @@ export function getSubtitlesTranslatePromptFromConfig(
 
   const title = resolvePromptReplacementValue(
     options?.context?.webTitle,
-    'No title available',
+    '',
   );
   const description = resolvePromptReplacementValue(
     options?.context?.webDescription,
-    'No description available',
+    '',
   );
   const summary = resolvePromptReplacementValue(
     options?.context?.videoSummary,
-    'No summary available',
+    '',
   );
   const targetLanguageFormatted = formatLanguageForPrompt(targetLang);
 

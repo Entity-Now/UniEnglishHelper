@@ -276,6 +276,7 @@ export function OptionsApp() {
                 toast: opts?.toast ?? true,
               });
             }}
+            onToast={(msg, kind) => flash(msg, kind)}
           />
         )}
         {route === 'config' && (

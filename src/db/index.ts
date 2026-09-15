@@ -265,7 +265,7 @@ export function cleanStoredTranslation(
   if (!raw) return undefined;
 
   let t = raw;
-  if (raw.includes('\n')) {
+  if (raw.includes('\n') || raw.startsWith('#')) {
     const extracted = extractDefinitionFromLlm(raw, surface);
     if (extracted) t = extracted;
   }
@@ -301,8 +301,21 @@ export async function addWord(input: WordCreate): Promise<WordRecord> {
     const extracted = extractDefinitionFromLlm(input.explanation, input.surface);
     translation = cleanStoredTranslation(extracted, input.surface);
   }
+  // Clear any existing machine translation cache for this word
+  await deleteTranslationCacheForWord(input.surface).catch(() => 0);
+
   const existing = await db.words.where('wordKey').equals(wordKey).first();
   if (existing) {
+    if (!translation) {
+      translation = cleanStoredTranslation(existing.translation, existing.surface);
+    }
+    if (!translation) {
+      const exp = input.explanation || existing.explanation;
+      if (exp && existing.kind !== 'sentence') {
+        const extracted = extractDefinitionFromLlm(exp, existing.surface);
+        translation = cleanStoredTranslation(extracted, existing.surface);
+      }
+    }
     const updated: WordRecord = {
       ...existing,
       translation: translation ?? existing.translation,
@@ -375,6 +388,16 @@ export async function updateWordTranslation(
     const extracted = extractDefinitionFromLlm(data.explanation, existing.surface);
     translation = cleanStoredTranslation(extracted, existing.surface);
   }
+  if (!translation) {
+    translation = cleanStoredTranslation(existing.translation, existing.surface);
+  }
+  if (!translation && existing.explanation && existing.kind !== 'sentence') {
+    const extracted = extractDefinitionFromLlm(existing.explanation, existing.surface);
+    translation = cleanStoredTranslation(extracted, existing.surface);
+  }
+
+  await deleteTranslationCacheForWord(existing.surface).catch(() => 0);
+
   const updated: WordRecord = {
     ...existing,
     translation: translation ?? existing.translation,
@@ -600,6 +623,67 @@ export async function getVideoVocabRecap(
   return classifyVideoVocab(rows, videoKey, cueWordKeys);
 }
 
+/** Delete machine translation cache for a given word/surface. */
+export async function deleteTranslationCacheForWord(surface: string): Promise<number> {
+  const norm = surface.trim().toLowerCase();
+  if (!norm) return 0;
+  const toDelete: number[] = [];
+  await db.translation_cache.each((record) => {
+    if (
+      record.id != null &&
+      (record.key.toLowerCase().includes(norm) ||
+        record.text.toLowerCase().includes(norm))
+    ) {
+      toDelete.push(record.id);
+    }
+  });
+  if (toDelete.length > 0) {
+    await db.translation_cache.bulkDelete(toDelete);
+  }
+  return toDelete.length;
+}
+
+/**
+ * Scans existing words in db.words to sanitize dirty translations
+ * (e.g. historical "上下文：xxx", "French: 法语", unstripped prompts, or empty translations with available explanations).
+ * Runs silently in background on startup to self-heal existing user dictionaries.
+ */
+export async function autoHealHistoricalWords(): Promise<number> {
+  let healedCount = 0;
+  const words = await db.words.toArray();
+  const updates: WordRecord[] = [];
+
+  for (const w of words) {
+    if (w.kind === 'sentence' || !w.id) continue;
+    const surface = typeof w.surface === 'string' ? w.surface : undefined;
+    const currentTranslation = typeof w.translation === 'string' ? w.translation : '';
+    const explanation = typeof w.explanation === 'string' ? w.explanation : '';
+
+    const cleaned = cleanStoredTranslation(currentTranslation, surface);
+    let target = cleaned;
+    if (!target && explanation) {
+      const extracted = extractDefinitionFromLlm(explanation, surface);
+      target = cleanStoredTranslation(extracted, surface);
+    }
+
+    if (target !== undefined && target !== currentTranslation) {
+      updates.push({
+        ...w,
+        translation: target,
+        updatedAt: Date.now(),
+      });
+      healedCount++;
+    }
+  }
+
+  if (updates.length > 0) {
+    await db.words.bulkPut(updates);
+    console.info(`[UEH] autoHealHistoricalWords repaired ${healedCount} vocabulary records`);
+    await bumpWordsRevision();
+  }
+  return healedCount;
+}
+
 /** Lightweight map for subtitle highlight (wordKey → status + saved gloss). */
 export async function getHighlightMap(): Promise<
   import('../utils/vocab-highlight').HighlightMap
@@ -612,11 +696,15 @@ export async function getHighlightMap(): Promise<
     const status = w.learningStatus ?? 'new';
     const key = normalizeWordKey(w.wordKey) || normalizeWordKey(w.surface);
     if (!key) continue;
-    const translation = w.translation?.trim() || undefined;
+    let translation = cleanStoredTranslation(w.translation, w.surface);
+    if (!translation && w.explanation) {
+      const extracted = extractDefinitionFromLlm(w.explanation, w.surface);
+      translation = cleanStoredTranslation(extracted, w.surface);
+    }
     const existing = map[key];
     // Prefer entry that already has a gloss; keep status from latest write
     if (!existing) {
-      map[key] = { status, translation };
+      map[key] = { status, translation: translation || undefined };
     } else {
       map[key] = {
         status,

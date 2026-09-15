@@ -520,7 +520,7 @@ input[type='number'] {
   flex-direction: column;
   align-items: center;
   gap: 0;
-  padding: 0 16px;
+  padding: 0 2%;
   pointer-events: none;
   box-sizing: border-box;
 }
@@ -530,17 +530,18 @@ input[type='number'] {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.28em;
+  gap: 2px;
   width: fit-content;
-  max-width: min(920px, 94%);
+  max-width: 96%;
   box-sizing: border-box;
-  padding: 8px 18px 9px;
-  border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.13);
+  padding: 5px 14px 6px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
   box-shadow:
-    0 10px 36px rgba(0, 0, 0, 0.45),
-    inset 0 1px 0 rgba(255, 255, 255, 0.12);
-  backdrop-filter: blur(14px) saturate(1.25);
+    0 6px 24px -2px rgba(0, 0, 0, 0.45),
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
   pointer-events: auto;
 }
 
@@ -562,26 +563,26 @@ input[type='number'] {
   max-width: 100%;
   width: fit-content;
   text-align: center;
-  line-height: 1.42;
-  letter-spacing: 0.01em;
+  line-height: 1.25;
+  letter-spacing: -0.012em;
   padding: 0;
   border-radius: 0;
-  text-shadow:
-    0 1px 1px rgba(0, 0, 0, 0.55),
-    0 0 14px rgba(0, 0, 0, 0.28);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+  text-wrap: normal;
   white-space: normal;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  overflow-wrap: break-word;
+  word-break: normal;
   pointer-events: auto;
 }
 
 .ueh-sub-preview-layer.ueh-sub-split .ueh-sub-preview-line {
-  padding: 7px 16px;
-  border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.13);
+  padding: 4px 12px;
+  border-radius: 10px;
+  max-width: 96%;
+  border: 1px solid rgba(255, 255, 255, 0.14);
   box-shadow:
-    0 10px 36px rgba(0, 0, 0, 0.45),
-    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    0 6px 24px -2px rgba(0, 0, 0, 0.45),
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.1);
 }
 
 .ueh-sub-preview-en {

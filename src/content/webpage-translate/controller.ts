@@ -171,6 +171,12 @@ export class WebpageTranslateController {
 
     const immediate = immediateWithRect.map((item) => item.p);
 
+    // Safeguard: If immediate is empty but lazy has items, promote first 12 to immediate so translation begins without delay
+    if (immediate.length === 0 && lazy.length > 0) {
+      const fallback = lazy.splice(0, 12);
+      immediate.push(...fallback);
+    }
+
     this.progress = {
       total: this.progress.total + immediate.length + lazy.length,
       completed: this.progress.completed,
@@ -398,12 +404,14 @@ export class WebpageTranslateController {
           }
         });
       } else {
+        console.warn('[UEH WebTranslate] translate.cues returned unsuccessful response:', res);
         this.withDomMutation(() => {
           for (const p of need) this.removeLoadingPlaceholder(p.element, p.id);
         });
         this.progress.failed += need.length;
       }
-    } catch {
+    } catch (err) {
+      console.warn('[UEH WebTranslate] translate.cues request failed:', err);
       this.withDomMutation(() => {
         for (const p of need) this.removeLoadingPlaceholder(p.element, p.id);
       });

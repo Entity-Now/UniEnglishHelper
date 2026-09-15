@@ -43,7 +43,8 @@ declare global {
 }
 
 if (window.__UEH_CONTENT_LOADED__) {
-  // re-inject no-op
+  // Re-injected: attach fresh runtime listeners for the updated extension context
+  void main();
 } else {
   window.__UEH_CONTENT_LOADED__ = true;
   void main();
@@ -239,9 +240,9 @@ async function boot(): Promise<void> {
   ensureHotkeys();
 }
 
-function ensureWebpageTranslate(): void {
+function ensureWebpageTranslate(forceEnable = false): void {
   if (siteDisabled) return;
-  if (config.webPageTranslate?.enabled === false) {
+  if (!forceEnable && config.webPageTranslate?.enabled === false) {
     webTranslateFab?.destroy();
     webTranslateFab = null;
     webTranslateCtrl?.destroy();
@@ -264,6 +265,33 @@ function ensureWebpageTranslate(): void {
 
   if (config.webPageTranslate?.autoTranslate) {
     void webTranslateCtrl.translate();
+  }
+}
+
+export function toggleWebpageTranslate(): void {
+  if (siteDisabled) {
+    console.warn('[UEH] Translation ignored: site is disabled in settings.');
+    return;
+  }
+  ensureWebpageTranslate(true);
+  if (!webTranslateCtrl) return;
+
+  const status = webTranslateCtrl.getStatus();
+  if (status.status === 'translated') {
+    if (status.viewMode === 'bilingual') {
+      // Toggle back to original text
+      webTranslateCtrl.restore();
+    } else {
+      // Switch back to bilingual
+      webTranslateCtrl.setViewMode('bilingual');
+    }
+  } else if (status.status === 'idle' || status.status === 'restored') {
+    void webTranslateCtrl.translate();
+  } else if (status.status === 'error') {
+    void webTranslateCtrl.translate({ force: true });
+  } else if (status.status === 'translating') {
+    // If currently translating, clicking again acts as cancel/restore
+    webTranslateCtrl.restore();
   }
 }
 
@@ -1081,20 +1109,7 @@ function ensureHotkeys(): void {
     }
     if (e.altKey && e.shiftKey && (e.key === 'T' || e.key === 't')) {
       e.preventDefault();
-      ensureWebpageTranslate();
-      const ctrl = webTranslateCtrl;
-      if (ctrl) {
-        const status = ctrl.getStatus();
-        if (status.status === 'idle' || status.status === 'restored') {
-          void ctrl.translate();
-        } else if (status.viewMode === 'bilingual') {
-          ctrl.setViewMode('translation_only');
-        } else if (status.viewMode === 'translation_only') {
-          ctrl.restore();
-        } else {
-          void ctrl.translate();
-        }
-      }
+      toggleWebpageTranslate();
     }
   });
   window.addEventListener('ueh:open-pip', () => {
@@ -1110,9 +1125,7 @@ function ensureHotkeys(): void {
     togglePageVocabRecap();
   });
   window.addEventListener('ueh:page-translate', () => {
-    if (siteDisabled) return;
-    ensureWebpageTranslate();
-    void webTranslateCtrl?.translate();
+    toggleWebpageTranslate();
   });
 }
 
@@ -1124,7 +1137,7 @@ function main(): void {
       : (rawMessage as { type?: string; payload?: unknown });
     if (!message.type || typeof message.type !== 'string') return false;
 
-    if (message.type === 'page.translate') {
+    if (message.type === 'page.translate' || message.type === 'page.translate.toggle') {
       if (siteDisabled) {
         sendResponse({
           ok: false,
@@ -1135,8 +1148,7 @@ function main(): void {
         });
         return true;
       }
-      ensureWebpageTranslate();
-      void webTranslateCtrl?.translate();
+      toggleWebpageTranslate();
       sendResponse(ok({}));
       return true;
     }
