@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   clearPreloadedMainCues,
+  createAutoTranslatedTrack,
   extractYoutubeVideoId,
   filterTimedtextForVideo,
+  isLanguageMatching,
+  isTimedtextMatchingTrack,
   isTimedtextUrlForVideo,
   isTrackMatchingVideo,
   isYoutubeHost,
@@ -155,5 +158,208 @@ describe('youtube helpers', () => {
 
     clearPreloadedMainCues(vidA);
     expect(peekPreloadedMainCues(vidA)).toBeNull();
+  });
+
+  describe('language matching and track selection', () => {
+    it('isLanguageMatching correctly matches tags and base subtags', () => {
+      expect(isLanguageMatching('en', 'en')).toBe(true);
+      expect(isLanguageMatching('en-US', 'en')).toBe(true);
+      expect(isLanguageMatching('en_US', 'en')).toBe(true);
+      expect(isLanguageMatching('en', 'en-GB')).toBe(true);
+      expect(isLanguageMatching('zh-Hans', 'zh-CN')).toBe(true);
+      expect(isLanguageMatching('zh-TW', 'zh-HK')).toBe(true);
+      expect(isLanguageMatching('fr', 'en')).toBe(false);
+      expect(isLanguageMatching('ja', 'en')).toBe(false);
+      expect(isLanguageMatching(null, 'en')).toBe(false);
+      expect(isLanguageMatching('en', undefined)).toBe(false);
+    });
+
+    it('selectTrack prioritizes English even if YouTube player has selected French or Chinese', () => {
+      const vid = 'vid-yt-1';
+      const playerData = {
+        videoId: vid,
+        captionTracks: [
+          {
+            baseUrl: `https://www.youtube.com/api/timedtext?v=${vid}&lang=fr`,
+            languageCode: 'fr',
+            vssId: '.fr',
+          },
+          {
+            baseUrl: `https://www.youtube.com/api/timedtext?v=${vid}&lang=en`,
+            languageCode: 'en',
+            kind: 'asr',
+            vssId: 'a.en',
+          },
+        ],
+        audioCaptionTracks: [],
+        device: null,
+        cver: null,
+        playerState: 1,
+        selectedTrackLanguageCode: 'fr',
+        selectedTrackVssId: '.fr',
+        cachedTimedtextUrl: null,
+      };
+
+      // Even though selectedTrack is French, it must choose English ASR
+      const selected = selectTrack(playerData, vid, 'en');
+      expect(selected).not.toBeNull();
+      expect(selected?.languageCode).toBe('en');
+      expect(selected?.vssId).toBe('a.en');
+    });
+
+    it('selectTrack prioritizes English ASR over human French or Chinese subtitles on English video', () => {
+      const vid = 'vid-yt-2';
+      const playerData = {
+        videoId: vid,
+        captionTracks: [
+          {
+            baseUrl: `https://www.youtube.com/api/timedtext?v=${vid}&lang=zh-Hans`,
+            languageCode: 'zh-Hans',
+            vssId: '.zh-Hans',
+          },
+          {
+            baseUrl: `https://www.youtube.com/api/timedtext?v=${vid}&lang=en`,
+            languageCode: 'en',
+            kind: 'asr',
+            vssId: 'a.en',
+          },
+        ],
+        audioCaptionTracks: [],
+        device: null,
+        cver: null,
+        playerState: 1,
+        selectedTrackLanguageCode: null,
+        selectedTrackVssId: null,
+        cachedTimedtextUrl: null,
+      };
+
+      const selected = selectTrack(playerData, vid, 'en');
+      expect(selected?.languageCode).toBe('en');
+      expect(selected?.vssId).toBe('a.en');
+    });
+
+    it('selectTrack prefers human English over ASR English when available', () => {
+      const vid = 'vid-yt-3';
+      const playerData = {
+        videoId: vid,
+        captionTracks: [
+          {
+            baseUrl: `https://www.youtube.com/api/timedtext?v=${vid}&lang=en`,
+            languageCode: 'en',
+            kind: 'asr',
+            vssId: 'a.en',
+          },
+          {
+            baseUrl: `https://www.youtube.com/api/timedtext?v=${vid}&lang=en`,
+            languageCode: 'en',
+            vssId: '.en',
+          },
+        ],
+        audioCaptionTracks: [],
+        device: null,
+        cver: null,
+        playerState: 1,
+        selectedTrackLanguageCode: null,
+        selectedTrackVssId: null,
+        cachedTimedtextUrl: null,
+      };
+
+      const selected = selectTrack(playerData, vid, 'en');
+      expect(selected?.vssId).toBe('.en');
+    });
+
+    it('selectTrack honors user-selected English variant if player selected an English track', () => {
+      const vid = 'vid-yt-4';
+      const playerData = {
+        videoId: vid,
+        captionTracks: [
+          {
+            baseUrl: `https://www.youtube.com/api/timedtext?v=${vid}&lang=en-US`,
+            languageCode: 'en-US',
+            vssId: '.en-US',
+          },
+          {
+            baseUrl: `https://www.youtube.com/api/timedtext?v=${vid}&lang=en-GB`,
+            languageCode: 'en-GB',
+            vssId: '.en-GB',
+          },
+        ],
+        audioCaptionTracks: [],
+        device: null,
+        cver: null,
+        playerState: 1,
+        selectedTrackLanguageCode: 'en-GB',
+        selectedTrackVssId: '.en-GB',
+        cachedTimedtextUrl: null,
+      };
+
+      const selected = selectTrack(playerData, vid, 'en');
+      expect(selected?.vssId).toBe('.en-GB');
+    });
+
+    it('selectTrack auto-translates to English via tlang when video has no English caption track', () => {
+      const vid = 'vid-yt-5';
+      const playerData = {
+        videoId: vid,
+        captionTracks: [
+          {
+            baseUrl: `https://www.youtube.com/api/timedtext?v=${vid}&lang=ja`,
+            languageCode: 'ja',
+            vssId: '.ja',
+          },
+        ],
+        audioCaptionTracks: [],
+        device: null,
+        cver: null,
+        playerState: 1,
+        selectedTrackLanguageCode: null,
+        selectedTrackVssId: null,
+        cachedTimedtextUrl: null,
+      };
+
+      const selected = selectTrack(playerData, vid, 'en');
+      expect(selected).not.toBeNull();
+      expect(selected?.languageCode).toBe('en');
+      expect(selected?.baseUrl).toContain('tlang=en');
+      expect(selected?.vssId).toBe('.ja.en');
+    });
+
+    it('isTimedtextMatchingTrack rejects timedtext URLs with mismatched languages', () => {
+      const track = {
+        baseUrl: 'https://www.youtube.com/api/timedtext?v=abc&lang=en',
+        languageCode: 'en',
+        vssId: '.en',
+      };
+
+      // Same language
+      expect(
+        isTimedtextMatchingTrack(
+          'https://www.youtube.com/api/timedtext?v=abc&lang=en&pot=123',
+          track,
+        ),
+      ).toBe(true);
+
+      // Different language (e.g. French / Chinese player request)
+      expect(
+        isTimedtextMatchingTrack(
+          'https://www.youtube.com/api/timedtext?v=abc&lang=fr&pot=123',
+          track,
+        ),
+      ).toBe(false);
+      expect(
+        isTimedtextMatchingTrack(
+          'https://www.youtube.com/api/timedtext?v=abc&lang=zh-Hans&pot=123',
+          track,
+        ),
+      ).toBe(false);
+
+      // Mismatched tlang
+      expect(
+        isTimedtextMatchingTrack(
+          'https://www.youtube.com/api/timedtext?v=abc&lang=en&tlang=zh-Hans&pot=123',
+          track,
+        ),
+      ).toBe(false);
+    });
   });
 });

@@ -57,7 +57,13 @@ export class PageSubtitlesOverlay {
   }
 
   updateConfig(config: AppConfig): void {
+    const langChanged =
+      config.sourceLang !== this.config.sourceLang ||
+      config.targetLang !== this.config.targetLang;
     this.config = config;
+    if (this.adapter.setPreferredLang) {
+      this.adapter.setPreferredLang(config.sourceLang || 'en');
+    }
     if (!config.pageSubtitles?.enabled) {
       this.stop();
       return;
@@ -70,6 +76,10 @@ export class PageSubtitlesOverlay {
     this.applyStyles();
     this.enabled = this.computeVisible(config);
     this.setEnabled(this.enabled);
+    if (langChanged) {
+      void this.reloadCues(true);
+      return;
+    }
     // Force re-render (word underlines, colors) even if cue id unchanged
     this.currentId = '';
     const active = findActiveCue(this.cues, this.mediaTimeMs());

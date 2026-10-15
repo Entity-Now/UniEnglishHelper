@@ -1,10 +1,21 @@
 import type { SubtitleCue } from '../../shared/domain/types';
 import { parseSubtitleFile } from '../../utils/subtitles/parser';
 import { BasePlayerAdapter, type GetCuesOptions } from './base';
+import { isLanguageMatching } from './youtube';
 
 export class GenericHtml5Adapter extends BasePlayerAdapter {
   readonly id = 'generic';
   readonly supportsMove = true;
+  private preferredLang: string;
+
+  constructor(options?: { preferredLang?: string }) {
+    super();
+    this.preferredLang = options?.preferredLang || 'en';
+  }
+
+  setPreferredLang(lang: string): void {
+    this.preferredLang = lang?.trim() || 'en';
+  }
 
   findVideo(): HTMLVideoElement | null {
     const videos = Array.from(document.querySelectorAll('video'));
@@ -15,12 +26,19 @@ export class GenericHtml5Adapter extends BasePlayerAdapter {
     )[0];
   }
 
-  async getCues(_options?: GetCuesOptions): Promise<SubtitleCue[]> {
+  async getCues(options?: GetCuesOptions): Promise<SubtitleCue[]> {
     const video = this.findVideo();
     if (!video) return [];
+    const preferredLang = options?.preferredLang || this.preferredLang || 'en';
 
-    // 1) <track> elements
+    // 1) <track> elements (sort preferred language first)
     const tracks = Array.from(video.querySelectorAll('track'));
+    tracks.sort((a, b) => {
+      const aMatch = isLanguageMatching(a.srclang, preferredLang) ? 1 : 0;
+      const bMatch = isLanguageMatching(b.srclang, preferredLang) ? 1 : 0;
+      return bMatch - aMatch;
+    });
+
     for (const track of tracks) {
       const src = track.src;
       if (!src) continue;
@@ -35,10 +53,17 @@ export class GenericHtml5Adapter extends BasePlayerAdapter {
       }
     }
 
-    // 2) textTracks already loaded
+    // 2) textTracks already loaded (sort preferred language first)
     if (video.textTracks?.length) {
-      for (let i = 0; i < video.textTracks.length; i++) {
-        const tt = video.textTracks[i];
+      const textTracks = Array.from(video.textTracks);
+      textTracks.sort((a, b) => {
+        const aMatch = isLanguageMatching(a.language, preferredLang) ? 1 : 0;
+        const bMatch = isLanguageMatching(b.language, preferredLang) ? 1 : 0;
+        return bMatch - aMatch;
+      });
+
+      for (let i = 0; i < textTracks.length; i++) {
+        const tt = textTracks[i];
         const cues: SubtitleCue[] = [];
         const list = tt.cues;
         if (!list) continue;

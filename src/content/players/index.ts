@@ -3,12 +3,13 @@ import type { PlayerAdapter } from './base';
 import { GenericHtml5Adapter } from './generic';
 import { isYoutubeHost, YoutubeAdapter } from './youtube';
 
-export function createPlayerAdapter(_config: AppConfig): PlayerAdapter {
+export function createPlayerAdapter(config?: AppConfig): PlayerAdapter {
+  const preferredLang = config?.sourceLang || 'en';
   // Always use YouTube adapter on YT (mirror + MAIN-world caption intercept).
   if (isYoutubeHost()) {
-    return new YoutubeAdapter();
+    return new YoutubeAdapter({ preferredLang });
   }
-  return new GenericHtml5Adapter();
+  return new GenericHtml5Adapter({ preferredLang });
 }
 
 export type { PlayerAdapter };

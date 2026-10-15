@@ -66,7 +66,9 @@ function resolveFreeProvider(config: AppConfig): FreeMtProviderId {
 
 function engineCacheTag(config: AppConfig): string {
   if (config.translateEngine === 'official_llm' && !freeMtEnabled(config)) {
-    return `llm:${config.ai.providerId}`;
+    const effectiveModel = config.ai.translationModel?.trim() || config.ai.model;
+    const effectiveProviderId = config.ai.translationProviderId?.trim() || config.ai.providerId;
+    return `llm:${effectiveProviderId}:${effectiveModel}`;
   }
   return `free:${resolveFreeProvider(config)}`;
 }
@@ -160,7 +162,9 @@ async function translateWithLlm(
   dst: string,
   config: AppConfig,
 ): Promise<string> {
-  const key = config.ai.apiKeys[config.ai.providerId];
+  const effectiveModel = config.ai.translationModel?.trim() || config.ai.model;
+  const effectiveProviderId = config.ai.translationProviderId?.trim() || config.ai.providerId;
+  const key = config.ai.apiKeys[effectiveProviderId] || config.ai.apiKeys[config.ai.providerId];
   if (!key) {
     if (freeMtEnabled(config) || config.features.enableUnofficialFreeMt) {
       const r = await translateFree(
@@ -178,10 +182,18 @@ async function translateWithLlm(
     dst,
     text,
   );
-  return chatCompletion(config, [
-    { role: 'system', content: promptObj.systemPrompt },
-    { role: 'user', content: promptObj.prompt },
-  ]);
+  return chatCompletion(
+    config,
+    [
+      { role: 'system', content: promptObj.systemPrompt },
+      { role: 'user', content: promptObj.prompt },
+    ],
+    {
+      model: effectiveModel,
+      providerId: effectiveProviderId,
+      disableThinking: true,
+    },
+  );
 }
 
 /**
@@ -210,7 +222,7 @@ export async function translateTexts(
     config.translateEngine === 'microsoft_free' ||
     config.translateEngine === 'mymemory_free' ||
     (config.features.enableUnofficialFreeMt &&
-      !config.ai.apiKeys[config.ai.providerId] &&
+      !(config.ai.apiKeys[config.ai.translationProviderId?.trim() || config.ai.providerId] || config.ai.apiKeys[config.ai.providerId]) &&
       !useLlm);
 
   const preferFree =
@@ -238,6 +250,12 @@ export async function translateTexts(
 
   if (miss.length === 0) return orderLike(texts, results);
 
+  const effectiveProviderId = config.ai.translationProviderId?.trim() || config.ai.providerId;
+  const effectiveModel = config.ai.translationModel?.trim() || config.ai.model;
+  const hasLlmKey = Boolean(
+    config.ai.apiKeys[effectiveProviderId] || config.ai.apiKeys[config.ai.providerId],
+  );
+
   if (preferFree || forceFree) {
     const preferred = resolveFreeProvider(config);
     try {
@@ -250,7 +268,7 @@ export async function translateTexts(
       return orderLike(texts, results);
     } catch (err) {
       // If free failed and LLM is available, fall through
-      if (!useLlm || !config.ai.apiKeys[config.ai.providerId]) {
+      if (!useLlm || !hasLlmKey) {
         throw err;
       }
     }
@@ -260,8 +278,8 @@ export async function translateTexts(
   for (const item of miss) {
     const translated = await translateWithLlm(item.text, src, dst, config);
     const key = simpleKey(src, dst, tag, item.text);
-    const engine = config.ai.apiKeys[config.ai.providerId]
-      ? `llm:${config.ai.providerId}`
+    const engine = hasLlmKey
+      ? `llm:${effectiveProviderId}:${effectiveModel}`
       : 'passthrough';
     await putTranslationCache(key, src, dst, engine, translated);
     results.push({ id: item.id, text: translated, provider: engine });

@@ -1625,14 +1625,15 @@ export class PipSessionController {
       translationPosition: surface.style?.translationPosition,
       position: surface.position,
     });
-    // PiP bottom chrome ~56px; stacked bottom uses px like before
+    // PiP bottom chrome is ~64px; use safe base offset 78px to avoid tools bar covering subtitles
+    const baseBottomPx = 78;
     const stackedBottomPx =
       placement.layout === 'stacked' && placement.stackAnchor === 'bottom'
-        ? Math.max(56, 48 + placement.percent)
+        ? Math.max(baseBottomPx, baseBottomPx + placement.percent * 1.2)
         : null;
     applySubtitleLayerLayout(layer, en, tr, {
       placement,
-      bottomExtraPx: 56,
+      bottomExtraPx: baseBottomPx,
       stackedBottomPx,
     });
   }

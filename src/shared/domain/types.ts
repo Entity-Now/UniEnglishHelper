@@ -240,7 +240,17 @@ export interface AppConfig {
   hostAccessMode: 'per_site' | 'global';
   ai: {
     providerId: string;
+    /** Default / Complex tasks model (Word explain, Grammar breakdown, Rewrite, Skills, e.g. 27b) */
     model: string;
+    /**
+     * Fast model for bulk translation tasks (Video subtitles, full webpage translation, e.g. 1b/2b).
+     * Defaults to `model` if empty or undefined.
+     */
+    translationModel?: string;
+    /**
+     * Optional provider for bulk translation tasks. Defaults to `providerId` if empty or undefined.
+     */
+    translationProviderId?: string;
     apiKeys: Record<string, string>;
     baseUrls?: Record<string, string>;
     /** Disable thinking/reasoning mode by default (e.g. Gemma, DeepSeek, Gemini). Defaults to true. */
@@ -359,6 +369,8 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   ai: {
     providerId: 'openai-compatible',
     model: 'gpt-4o-mini',
+    translationModel: '',
+    translationProviderId: '',
     apiKeys: {},
     baseUrls: {},
     disableThinking: true,

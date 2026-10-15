@@ -63,18 +63,21 @@ export function buildChatRequestBody(
     temperature?: number;
     stream?: boolean;
     disableThinking?: boolean;
+    model?: string;
+    providerId?: string;
   },
   omitThinkingParams = false,
 ): Record<string, unknown> {
-  const providerId = config.ai.providerId;
+  const providerId = opts?.providerId || config.ai.providerId;
   const baseUrl = resolveBaseUrl(config, providerId).toLowerCase();
-  const model = (config.ai.model || '').toLowerCase();
+  const effectiveModel = opts?.model || config.ai.model || '';
+  const model = effectiveModel.toLowerCase();
   const stream = opts?.stream ?? true;
   const disableThinking =
     opts?.disableThinking ?? (config.ai.disableThinking !== false);
 
   const body: Record<string, unknown> = {
-    model: config.ai.model,
+    model: effectiveModel,
     messages,
     stream,
   };
@@ -128,8 +131,9 @@ export function buildChatRequestBody(
 export function resolveEffectiveTimeoutMs(
   config: AppConfig,
   requestedMs?: number,
+  providerIdOverride?: string,
 ): number {
-  const providerId = config.ai.providerId;
+  const providerId = providerIdOverride || config.ai.providerId;
   const baseUrl = resolveBaseUrl(config, providerId).toLowerCase();
   const isLocal =
     baseUrl.includes('localhost') ||
@@ -150,6 +154,8 @@ export interface ChatCompletionOptions {
   stream?: boolean;
   onChunk?: (chunk: string, fullText: string) => void;
   disableThinking?: boolean;
+  model?: string;
+  providerId?: string;
 }
 
 export async function* chatCompletionStream(
@@ -159,9 +165,11 @@ export async function* chatCompletionStream(
     temperature?: number;
     signal?: AbortSignal;
     disableThinking?: boolean;
+    model?: string;
+    providerId?: string;
   },
 ): AsyncGenerator<string> {
-  const providerId = config.ai.providerId;
+  const providerId = opts?.providerId || config.ai.providerId;
   const baseUrl = resolveBaseUrl(config, providerId);
   const isLocal =
     baseUrl.includes('localhost') ||
@@ -177,6 +185,8 @@ export async function* chatCompletionStream(
     temperature: opts?.temperature,
     stream: true,
     disableThinking: opts?.disableThinking,
+    model: opts?.model,
+    providerId,
   });
 
   let res = await fetch(`${baseUrl}/chat/completions`, {
@@ -208,6 +218,8 @@ export async function* chatCompletionStream(
           temperature: opts?.temperature,
           stream: true,
           disableThinking: false,
+          model: opts?.model,
+          providerId,
         },
         true,
       );
@@ -285,7 +297,7 @@ export async function chatCompletion(
   messages: ChatMessage[],
   opts?: ChatCompletionOptions,
 ): Promise<string> {
-  const providerId = config.ai.providerId;
+  const providerId = opts?.providerId || config.ai.providerId;
   const baseUrl = resolveBaseUrl(config, providerId);
   const isLocal =
     baseUrl.includes('localhost') ||
@@ -306,6 +318,8 @@ export async function chatCompletion(
           temperature: opts?.temperature,
           signal,
           disableThinking: opts?.disableThinking,
+          model: opts?.model,
+          providerId,
         })) {
           fullText += chunk;
           notifyActivity?.();
@@ -321,11 +335,12 @@ export async function chatCompletion(
     }
 
     // Non-streaming fallback
-    const baseUrl = resolveBaseUrl(config, providerId);
     let requestBody = buildChatRequestBody(config, messages, {
       temperature: opts?.temperature,
       stream: false,
       disableThinking: opts?.disableThinking,
+      model: opts?.model,
+      providerId,
     });
 
     let res = await fetch(`${baseUrl}/chat/completions`, {
@@ -354,6 +369,8 @@ export async function chatCompletion(
             temperature: opts?.temperature,
             stream: false,
             disableThinking: false,
+            model: opts?.model,
+            providerId,
           },
           true,
         );

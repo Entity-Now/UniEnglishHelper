@@ -140,6 +140,20 @@ export class YoutubeAdapter extends BasePlayerAdapter {
   private cacheKey: string | null = null;
   /** When true, next getCues ignores in-memory cache (e.g. after ad ends). */
   private forceRefresh = false;
+  private preferredLang: string;
+
+  constructor(options?: { preferredLang?: string }) {
+    super();
+    this.preferredLang = options?.preferredLang || 'en';
+  }
+
+  setPreferredLang(lang: string): void {
+    const next = lang?.trim() || 'en';
+    if (this.preferredLang !== next) {
+      this.preferredLang = next;
+      this.clearCache({ clearPreload: true });
+    }
+  }
 
   findVideo(): HTMLVideoElement | null {
     const main = document.querySelector<HTMLVideoElement>(
@@ -183,8 +197,9 @@ export class YoutubeAdapter extends BasePlayerAdapter {
     const purpose = options?.purpose ?? 'display';
     const preload = purpose === 'preload';
     const bypassPreload = options?.bypassPreload === true;
+    const preferredLang = options?.preferredLang || this.preferredLang || 'en';
     const videoId = extractYoutubeVideoId();
-    if (!videoId) return this.readTextTracks();
+    if (!videoId) return this.readTextTracks(preferredLang);
 
     // Invalidate if video changed
     if (this.cacheKey && !this.cacheKey.startsWith(`${videoId}:`)) {
@@ -272,15 +287,15 @@ export class YoutubeAdapter extends BasePlayerAdapter {
 
       if (!playerData?.captionTracks?.length) {
         console.warn('[UEH] No caption tracks on player response');
-        return preload ? [] : this.readTextTracks();
+        return preload ? [] : this.readTextTracks(preferredLang);
       }
 
       // Prefer main-video tracks: player response is usually the watch target
       // even while an ad plays. Soft-mismatch with empty tracks already rejected.
-      const track = selectTrack(playerData, videoId);
+      const track = selectTrack(playerData, videoId, preferredLang);
       if (!track?.baseUrl) {
         console.warn('[UEH] No usable caption track baseUrl');
-        return preload ? [] : this.readTextTracks();
+        return preload ? [] : this.readTextTracks(preferredLang);
       }
 
       const key = `${videoId}:${track.languageCode}:${track.kind ?? ''}:${track.vssId}`;
@@ -340,7 +355,7 @@ export class YoutubeAdapter extends BasePlayerAdapter {
           hasPotUrl: Boolean(liveTimedtext?.includes('pot=')),
           purpose,
         });
-        return preload ? [] : this.readTextTracks();
+        return preload ? [] : this.readTextTracks(preferredLang);
       }
 
       const cues = eventsToCues(events, videoId);
@@ -367,10 +382,10 @@ export class YoutubeAdapter extends BasePlayerAdapter {
           purpose,
         );
       }
-      return cues.length ? cues : preload ? [] : this.readTextTracks();
+      return cues.length ? cues : preload ? [] : this.readTextTracks(preferredLang);
     } catch (err) {
       console.warn('[UEH] YouTube getCues failed', err);
-      return preload ? [] : this.readTextTracks();
+      return preload ? [] : this.readTextTracks(preferredLang);
     }
   }
 
@@ -397,12 +412,18 @@ export class YoutubeAdapter extends BasePlayerAdapter {
     return res.data.data;
   }
 
-  private readTextTracks(): SubtitleCue[] {
+  private readTextTracks(preferredLang = this.preferredLang || 'en'): SubtitleCue[] {
     const video = this.findVideo();
     if (!video?.textTracks) return [];
+    const tracks = Array.from(video.textTracks);
+    tracks.sort((a, b) => {
+      const aMatch = isLanguageMatching(a.language, preferredLang) ? 1 : 0;
+      const bMatch = isLanguageMatching(b.language, preferredLang) ? 1 : 0;
+      return bMatch - aMatch;
+    });
     const cues: SubtitleCue[] = [];
-    for (let i = 0; i < video.textTracks.length; i++) {
-      const tt = video.textTracks[i];
+    for (let i = 0; i < tracks.length; i++) {
+      const tt = tracks[i];
       try {
         tt.mode = 'hidden';
       } catch {
@@ -486,9 +507,79 @@ export function isTrackMatchingVideo(
   }
 }
 
+export function isLanguageMatching(
+  langA?: string | null,
+  langB?: string | null,
+): boolean {
+  if (!langA || !langB) return false;
+  const a = langA.trim().toLowerCase().replace('_', '-');
+  const b = langB.trim().toLowerCase().replace('_', '-');
+  if (a === b) return true;
+  const aBase = a.split('-')[0];
+  const bBase = b.split('-')[0];
+  return aBase === bBase;
+}
+
+export function createAutoTranslatedTrack(
+  baseTrack: CaptionTrack,
+  targetLang: string,
+): CaptionTrack {
+  try {
+    const u = new URL(baseTrack.baseUrl);
+    const shortTarget = targetLang.split('-')[0].toLowerCase();
+    u.searchParams.set('tlang', shortTarget);
+    return {
+      baseUrl: u.toString(),
+      languageCode: shortTarget,
+      kind: baseTrack.kind,
+      vssId: `${baseTrack.vssId}.${shortTarget}`,
+      name: `${baseTrack.name || ''} (${shortTarget})`,
+    };
+  } catch {
+    return baseTrack;
+  }
+}
+
+export function isTimedtextMatchingTrack(
+  liveTimedtextUrl: string | null | undefined,
+  track: CaptionTrack,
+): boolean {
+  if (!liveTimedtextUrl || !track?.baseUrl) return false;
+  try {
+    const live = new URL(liveTimedtextUrl, 'https://www.youtube.com');
+    const trackUrl = new URL(track.baseUrl, 'https://www.youtube.com');
+
+    // 1. If live has tlang, it MUST match track's tlang
+    const liveTlang = (live.searchParams.get('tlang') || '').toLowerCase();
+    const trackTlang = (trackUrl.searchParams.get('tlang') || '').toLowerCase();
+    if (liveTlang !== trackTlang) {
+      return false;
+    }
+
+    // 2. Lang parameter matching
+    const liveLang = live.searchParams.get('lang');
+    const trackLang = trackUrl.searchParams.get('lang') || track.languageCode;
+    if (liveLang && trackLang && !isLanguageMatching(liveLang, trackLang)) {
+      return false;
+    }
+
+    // 3. VssId matching if both present
+    const liveVss = live.searchParams.get('vss_id') || live.searchParams.get('vssId');
+    const trackVss = trackUrl.searchParams.get('vss_id') || trackUrl.searchParams.get('vssId') || track.vssId;
+    if (liveVss && trackVss && liveVss !== trackVss) {
+      return false;
+    }
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function selectTrack(
   playerData: PlayerData,
   expectedVideoId?: string,
+  preferredLang = 'en',
 ): CaptionTrack | null {
   const tracks = playerData.captionTracks.filter((t) => {
     if (!t.baseUrl) return false;
@@ -497,36 +588,48 @@ export function selectTrack(
   });
   if (!tracks.length) return null;
 
+  const isAsr = (t: CaptionTrack) =>
+    t.kind === 'asr' || (t.vssId || '').includes('.asr') || (t.vssId || '').startsWith('a.');
+
+  const matchesPreferred = (t: CaptionTrack) =>
+    isLanguageMatching(t.languageCode, preferredLang);
+
+  // 1. If YouTube player currently has a selected track AND it matches the preferred language,
+  // honor it (e.g. user specifically picked en-GB or en-US)
   if (playerData.selectedTrackVssId) {
     const t = tracks.find((x) => x.vssId === playerData.selectedTrackVssId);
-    if (t) return t;
+    if (t && matchesPreferred(t)) return t;
   }
   if (playerData.selectedTrackLanguageCode) {
     const t = tracks.find(
       (x) => x.languageCode === playerData.selectedTrackLanguageCode,
     );
-    if (t) return t;
+    if (t && matchesPreferred(t)) return t;
   }
 
-  // Prefer human English, then any human, then English ASR, then any ASR
-  const isAsr = (t: CaptionTrack) =>
-    t.kind === 'asr' || (t.vssId || '').includes('.asr') || (t.vssId || '').startsWith('a.');
+  // 2. Prefer human-authored track matching preferred language (e.g. en, en-US)
+  const humanPref = tracks.find((t) => !isAsr(t) && matchesPreferred(t));
+  if (humanPref) return humanPref;
 
-  const humanEn = tracks.find(
-    (t) =>
-      !isAsr(t) &&
-      (t.languageCode || '').toLowerCase().startsWith('en'),
-  );
-  if (humanEn) return humanEn;
+  // 3. Prefer auto-generated (ASR) track matching preferred language
+  const asrPref = tracks.find((t) => isAsr(t) && matchesPreferred(t));
+  if (asrPref) return asrPref;
 
-  const human = tracks.find((t) => !isAsr(t));
-  if (human) return human;
+  // 4. No direct track in preferred language. Pick best base track and use YouTube auto-translate (&tlang=...)
+  let baseTrack: CaptionTrack | null = null;
+  if (playerData.selectedTrackVssId) {
+    baseTrack = tracks.find((x) => x.vssId === playerData.selectedTrackVssId) ?? null;
+  }
+  if (!baseTrack && playerData.selectedTrackLanguageCode) {
+    baseTrack = tracks.find((x) => x.languageCode === playerData.selectedTrackLanguageCode) ?? null;
+  }
+  if (!baseTrack) {
+    baseTrack = tracks.find((t) => !isAsr(t)) ?? tracks[0] ?? null;
+  }
 
-  const asrEn = tracks.find(
-    (t) =>
-      isAsr(t) && (t.languageCode || '').toLowerCase().startsWith('en'),
-  );
-  if (asrEn) return asrEn;
+  if (baseTrack) {
+    return createAutoTranslatedTrack(baseTrack, preferredLang);
+  }
 
   return tracks[0] ?? null;
 }
@@ -655,7 +758,7 @@ export function isTimedtextUrlForVideo(
   }
 }
 
-/** Build candidate URLs: live timedtext first, then pot variants, then plain. */
+/** Build candidate URLs: live timedtext first (if matching), then pot variants, then plain. */
 function buildFetchUrls(
   track: CaptionTrack,
   playerData: PlayerData,
@@ -664,9 +767,11 @@ function buildFetchUrls(
   const pot = extractPot(track, playerData, liveTimedtext);
   const urls: string[] = [];
 
+  // Only use live timedtext if it actually matches the chosen track
   if (
     liveTimedtext &&
-    isTimedtextUrlForVideo(liveTimedtext, playerData.videoId)
+    isTimedtextUrlForVideo(liveTimedtext, playerData.videoId) &&
+    isTimedtextMatchingTrack(liveTimedtext, track)
   ) {
     urls.push(liveTimedtext);
     try {
@@ -683,12 +788,24 @@ function buildFetchUrls(
     urls.push(captionUrlWithParams(track, playerData, fmt, pot, false));
   }
   urls.push(track.baseUrl);
+
+  // If track is auto-translated (has tlang), also include raw base URL as fallback
+  try {
+    const u = new URL(track.baseUrl);
+    if (u.searchParams.has('tlang')) {
+      u.searchParams.delete('tlang');
+      urls.push(u.toString());
+    }
+  } catch {
+    // ignore
+  }
+
   return [...new Set(urls)];
 }
 
 /**
  * Ad-time preload: try plain baseUrl/json3 first (fast, cookies-only),
- * then pot/live if already captured for the main video.
+ * then pot/live if already captured for the main video and matching track.
  */
 function buildFetchUrlsPreload(
   track: CaptionTrack,
@@ -704,10 +821,11 @@ function buildFetchUrlsPreload(
   }
   urls.push(track.baseUrl);
 
-  // Enrich with pot/live when already available (no extra wait)
+  // Enrich with pot/live when already available and matching track
   if (
     liveTimedtext &&
-    isTimedtextUrlForVideo(liveTimedtext, playerData.videoId)
+    isTimedtextUrlForVideo(liveTimedtext, playerData.videoId) &&
+    isTimedtextMatchingTrack(liveTimedtext, track)
   ) {
     urls.push(liveTimedtext);
     try {
@@ -723,6 +841,17 @@ function buildFetchUrlsPreload(
       urls.push(captionUrlWithParams(track, playerData, fmt, pot, true));
     }
   }
+
+  try {
+    const u = new URL(track.baseUrl);
+    if (u.searchParams.has('tlang')) {
+      u.searchParams.delete('tlang');
+      urls.push(u.toString());
+    }
+  } catch {
+    // ignore
+  }
+
   return [...new Set(urls)];
 }
 

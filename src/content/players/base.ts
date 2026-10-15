@@ -13,6 +13,8 @@ export interface GetCuesOptions {
    * (background revalidate after instant apply).
    */
   bypassPreload?: boolean;
+  /** Preferred subtitle source language (e.g. 'en'). Defaults to adapter configured language. */
+  preferredLang?: string;
 }
 
 export interface PlayerAdapter {
@@ -21,7 +23,8 @@ export interface PlayerAdapter {
   findVideo(): HTMLVideoElement | null;
   getCues(options?: GetCuesOptions): Promise<SubtitleCue[]>;
   /** Drop in-memory caption cache (e.g. after YouTube ad ends). */
-  clearCache?(): void;
+  clearCache?(opts?: { clearPreload?: boolean }): void;
+  setPreferredLang?(lang: string): void;
   onCuesChanged?(cb: (cues: SubtitleCue[]) => void): () => void;
 }
 

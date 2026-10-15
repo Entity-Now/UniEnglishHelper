@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import type { AppConfig } from '../../shared/domain/types';
 import { AiPromptEditor } from '../components/AiPromptEditor';
+import { LlmConfigCard } from '../components/LlmConfigCard';
 
 export function TranslationPage(props: {
   config: AppConfig;
@@ -64,84 +65,8 @@ export function TranslationPage(props: {
         </button>
       </div>
 
-      <div className="card">
-        <h2>LLM 提供商</h2>
-        <p className="hint">OpenAI 兼容接口（DeepSeek / Gemini 代理 / 本地网关均可）。</p>
-        <div className="row">
-          <div>
-            <label>Provider ID</label>
-            <input
-              value={form.ai.providerId}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  ai: { ...form.ai, providerId: e.target.value },
-                })
-              }
-            />
-          </div>
-          <div>
-            <label>Model</label>
-            <input
-              value={form.ai.model}
-              onChange={(e) =>
-                setForm({ ...form, ai: { ...form.ai, model: e.target.value } })
-              }
-            />
-          </div>
-        </div>
-        <label>API Key</label>
-        <input
-          type="password"
-          placeholder="sk-…"
-          value={form.ai.apiKeys[form.ai.providerId] ?? ''}
-          onChange={(e) =>
-            setForm({
-              ...form,
-              ai: {
-                ...form.ai,
-                apiKeys: {
-                  ...form.ai.apiKeys,
-                  [form.ai.providerId]: e.target.value,
-                },
-              },
-            })
-          }
-        />
-        <label>Base URL</label>
-        <input
-          placeholder="https://api.openai.com/v1"
-          value={form.ai.baseUrls?.[form.ai.providerId] ?? ''}
-          onChange={(e) =>
-            setForm({
-              ...form,
-              ai: {
-                ...form.ai,
-                baseUrls: {
-                  ...(form.ai.baseUrls ?? {}),
-                  [form.ai.providerId]: e.target.value,
-                },
-              },
-            })
-          }
-        />
-        <label className="checkbox" style={{ marginTop: 10 }}>
-          <input
-            type="checkbox"
-            checked={form.ai.disableThinking !== false}
-            onChange={(e) =>
-              setForm({
-                ...form,
-                ai: {
-                  ...form.ai,
-                  disableThinking: e.target.checked,
-                },
-              })
-            }
-          />
-          关闭 Thinking 深度思考（推荐开启，大幅减少等待时间，避免思考链污染翻译）
-        </label>
-      </div>
+      <LlmConfigCard config={form} onChange={setForm} />
+
 
       <AiPromptEditor config={form} onChange={setForm} />
 

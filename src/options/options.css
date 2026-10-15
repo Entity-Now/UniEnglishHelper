@@ -812,3 +812,118 @@ input[type='number'] {
 .import-preview-item:last-child {
   border-bottom: 0;
 }
+
+/* LLM Dual-Model & Provider Layout */
+.llm-config-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 4px;
+}
+
+.llm-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--rf-foreground);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.llm-models-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.llm-model-card {
+  background: color-mix(in srgb, var(--rf-card) 60%, var(--rf-background));
+  border: 1px solid var(--rf-border);
+  border-radius: var(--rf-radius);
+  padding: 14px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.llm-model-card:focus-within {
+  border-color: color-mix(in srgb, var(--rf-brand) 60%, var(--rf-border));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--rf-brand) 25%, transparent);
+}
+
+.llm-model-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.llm-model-name {
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.llm-model-badge {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.llm-model-badge.primary {
+  background: color-mix(in srgb, var(--rf-brand) 18%, transparent);
+  color: var(--rf-foreground);
+  border: 1px solid color-mix(in srgb, var(--rf-brand) 38%, transparent);
+}
+
+.llm-model-badge.secondary {
+  background: color-mix(in srgb, #3ddc97 18%, transparent);
+  color: var(--rf-foreground);
+  border: 1px solid color-mix(in srgb, #3ddc97 38%, transparent);
+}
+
+.llm-model-card input {
+  margin-bottom: 0;
+}
+
+.llm-model-desc {
+  font-size: 12px;
+  color: var(--rf-muted-foreground);
+  line-height: 1.45;
+  margin: 0;
+}
+
+.llm-connection-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 600px) {
+  .llm-connection-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.llm-connection-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.llm-connection-field label {
+  margin-bottom: 0;
+  font-size: 12px;
+}
+
+.llm-connection-field input {
+  margin-bottom: 0;
+}
+

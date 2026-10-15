@@ -161,8 +161,8 @@ export function buildPipStyles(opts: {
 
     /* Bilingual subtitle layer */
     #ueh-sub-layer {
-      position: absolute; left: 0; right: 0; bottom: 72px;
-      z-index: 6; display: flex; flex-direction: column;
+      position: absolute; left: 0; right: 0; bottom: 78px;
+      z-index: 10; display: flex; flex-direction: column;
       align-items: center; gap: 0;
       padding: 0 2%; pointer-events: none;
       box-sizing: border-box;
@@ -171,7 +171,7 @@ export function buildPipStyles(opts: {
     #ueh-pip-root.ueh-word-open #ueh-sub-layer {
       padding-right: min(300px, 42%);
       padding-left: 12px;
-      z-index: 6;
+      z-index: 10;
     }
     #ueh-pip-root.ueh-word-open #ueh-chrome {
       z-index: 8;
@@ -302,12 +302,14 @@ export function buildPipStyles(opts: {
       padding: 8px 10px 10px;
       background: linear-gradient(180deg, transparent, rgba(0,0,0,.82) 40%);
       opacity: 0;
+      pointer-events: none;
       transition: opacity .18s ease;
     }
     #ueh-pip-root:hover #ueh-chrome,
     #ueh-pip-root.ueh-show-chrome #ueh-chrome,
     #ueh-chrome:focus-within {
       opacity: 1;
+      pointer-events: auto;
     }
     #ueh-progress {
       -webkit-appearance: none; appearance: none;

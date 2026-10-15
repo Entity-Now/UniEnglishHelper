@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { extractDefinitionFromLlm } from './ai-provider';
+import {
+  buildChatRequestBody,
+  extractDefinitionFromLlm,
+  resolveEffectiveTimeoutMs,
+} from './ai-provider';
+import { DEFAULT_APP_CONFIG } from '../shared/domain/types';
 
 describe('extractDefinitionFromLlm', () => {
   it('extracts Chinese definition from standard word template output', () => {
@@ -136,3 +141,60 @@ describe('getWordExplainPrompt', () => {
     expect(prompt).not.toContain('{{ definition in');
   });
 });
+
+describe('buildChatRequestBody model overrides', () => {
+  it('uses default config model when not overridden', () => {
+    const config = {
+      ...DEFAULT_APP_CONFIG,
+      ai: { ...DEFAULT_APP_CONFIG.ai, model: 'qwen2.5:32b' },
+    };
+    const body = buildChatRequestBody(config, [{ role: 'user', content: 'hello' }]);
+    expect(body.model).toBe('qwen2.5:32b');
+  });
+
+  it('honors model override for fast translation', () => {
+    const config = {
+      ...DEFAULT_APP_CONFIG,
+      ai: { ...DEFAULT_APP_CONFIG.ai, model: 'qwen2.5:32b' },
+    };
+    const body = buildChatRequestBody(
+      config,
+      [{ role: 'user', content: 'hello' }],
+      { model: 'qwen2.5:1.5b' },
+    );
+    expect(body.model).toBe('qwen2.5:1.5b');
+  });
+
+  it('honors providerId override when specified', () => {
+    const config = {
+      ...DEFAULT_APP_CONFIG,
+      ai: {
+        ...DEFAULT_APP_CONFIG.ai,
+        providerId: 'deepseek',
+        model: 'deepseek-chat',
+        baseUrls: { local: 'http://localhost:11434/v1' },
+      },
+    };
+    const body = buildChatRequestBody(
+      config,
+      [{ role: 'user', content: 'hello' }],
+      { providerId: 'local', model: 'gemma2:2b' },
+    );
+    expect(body.model).toBe('gemma2:2b');
+    expect(body.reasoning_effort).toBe('none');
+  });
+
+  it('adjusts timeout for local provider override', () => {
+    const config = {
+      ...DEFAULT_APP_CONFIG,
+      ai: {
+        ...DEFAULT_APP_CONFIG.ai,
+        providerId: 'deepseek',
+        baseUrls: { local: 'http://localhost:11434/v1' },
+      },
+    };
+    expect(resolveEffectiveTimeoutMs(config, 10_000, 'local')).toBe(60_000);
+    expect(resolveEffectiveTimeoutMs(config, 10_000, 'deepseek')).toBe(10_000);
+  });
+});
+
