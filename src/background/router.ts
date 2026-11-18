@@ -242,7 +242,7 @@ async function dispatch(
 
     case 'capture.arm':
       return armCapture(
-        Number(p.tabId),
+        Number(p.tabId ?? sender.tab?.id),
         p.streamId ? String(p.streamId) : undefined,
       );
 
@@ -252,7 +252,7 @@ async function dispatch(
 
     case 'capture.status':
       return getCaptureStatus(
-        p.tabId !== undefined ? Number(p.tabId) : undefined,
+        p.tabId !== undefined ? Number(p.tabId) : sender.tab?.id,
       );
 
     case 'capture.anchors':

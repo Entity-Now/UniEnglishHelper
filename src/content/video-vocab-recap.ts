@@ -34,6 +34,7 @@ export type VideoVocabRecapHandlers = {
   onTts: (surface: string) => void;
   onMarkLearned: (wordId: number) => Promise<void>;
   onStatsChange?: (stats: VideoVocabRecapStats) => void;
+  onOpenChange?: (open: boolean) => void;
 };
 
 const PAGE_ROOT_ID = 'ueh-vocab-recap-root';
@@ -93,15 +94,18 @@ export class VideoVocabRecap {
     this.open = true;
     this.mount();
     this.setRootClass(true);
+    this.handlers.onOpenChange?.(true);
     await this.refresh();
   }
 
   close(): void {
+    const wasOpen = this.open;
     this.open = false;
     this.root?.remove();
     this.root = null;
     this.shadow = null;
     this.setRootClass(false);
+    if (wasOpen) this.handlers.onOpenChange?.(false);
   }
 
   destroy(): void {

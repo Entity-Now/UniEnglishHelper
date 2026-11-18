@@ -21,6 +21,10 @@ function newRequestId(): string {
   return crypto.randomUUID();
 }
 
+export function isTtsPlaying(): boolean {
+  return activeRequestId !== null || controller.isPlaying();
+}
+
 export function stopTtsPlayback(): void {
   const id = activeRequestId;
   activeRequestId = null;
@@ -33,30 +37,36 @@ export function stopTtsPlayback(): void {
  */
 export async function playTtsAudioChunks(
   chunks: PlayableAudioChunk[],
+  hostWin?: Window,
 ): Promise<boolean> {
   stopTtsPlayback();
   const requestId = newRequestId();
   activeRequestId = requestId;
 
-  for (const chunk of chunks) {
-    if (activeRequestId !== requestId) return false;
-    if (!chunk.audioBase64) continue;
+  try {
+    for (const chunk of chunks) {
+      if (activeRequestId !== requestId) return false;
+      if (!chunk.audioBase64) continue;
 
-    const result = await controller.play({
-      requestId,
-      audioBase64: chunk.audioBase64,
-      contentType: chunk.contentType || 'audio/mpeg',
-    });
+      const result = await controller.play(
+        {
+          requestId,
+          audioBase64: chunk.audioBase64,
+          contentType: chunk.contentType || 'audio/mpeg',
+        },
+        hostWin,
+      );
 
-    if (!result.ok) {
-      return false;
+      if (!result.ok) {
+        return false;
+      }
+    }
+    return true;
+  } finally {
+    if (activeRequestId === requestId) {
+      activeRequestId = null;
     }
   }
-
-  if (activeRequestId === requestId) {
-    activeRequestId = null;
-  }
-  return true;
 }
 
 export async function playTtsAudioBase64(

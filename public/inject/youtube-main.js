@@ -24,6 +24,8 @@
   var WAIT_RES = "UEH_TIMEDTEXT_READY";
   var FETCH_REQ = "UEH_FETCH_CAPTION";
   var FETCH_RES = "UEH_FETCH_CAPTION_DONE";
+  var CMD_REQ = "UEH_PLAYER_COMMAND";
+  var CMD_RES = "UEH_PLAYER_COMMAND_DONE";
 
   var timedtextCache = new Map();
   var timedtextWaiters = new Map();
@@ -423,6 +425,70 @@
           window.location.origin,
         );
       });
+    }
+
+    if (data.type === CMD_REQ) {
+      var okCmd = false;
+      try {
+        var cmdPlayer = findPlayer();
+        if (cmdPlayer) {
+          var act = data.action;
+          if (act === "play" && typeof cmdPlayer.playVideo === "function") {
+            cmdPlayer.playVideo();
+            okCmd = true;
+          } else if (act === "pause" && typeof cmdPlayer.pauseVideo === "function") {
+            cmdPlayer.pauseVideo();
+            okCmd = true;
+          } else if (act === "setVolume") {
+            var vol = Math.max(0, Math.min(100, Math.round(Number(data.volume) || 0)));
+            if (typeof cmdPlayer.setVolume === "function") {
+              cmdPlayer.setVolume(vol);
+              okCmd = true;
+            }
+            if (data.muted === true && typeof cmdPlayer.mute === "function") {
+              cmdPlayer.mute();
+            } else if (
+              data.muted === false &&
+              typeof cmdPlayer.unMute === "function"
+            ) {
+              cmdPlayer.unMute();
+            }
+          } else if (act === "setMuted") {
+            if (data.muted) {
+              if (typeof cmdPlayer.mute === "function") {
+                cmdPlayer.mute();
+                okCmd = true;
+              }
+            } else if (typeof cmdPlayer.unMute === "function") {
+              cmdPlayer.unMute();
+              okCmd = true;
+            }
+          } else if (
+            act === "setPlaybackRate" &&
+            typeof cmdPlayer.setPlaybackRate === "function"
+          ) {
+            var rate = Number(data.rate);
+            if (isFinite(rate) && rate > 0) {
+              cmdPlayer.setPlaybackRate(rate);
+              okCmd = true;
+            }
+          } else if (
+            act === "seekTo" &&
+            typeof cmdPlayer.seekTo === "function"
+          ) {
+            var sec = Number(data.seconds);
+            if (isFinite(sec) && sec >= 0) {
+              cmdPlayer.seekTo(sec, true);
+              okCmd = true;
+            }
+          }
+        }
+      } catch (eCmd) {}
+      window.postMessage(
+        { type: CMD_RES, requestId: data.requestId, ok: okCmd },
+        window.location.origin,
+      );
+      return;
     }
 
     if (data.type === FETCH_REQ) {

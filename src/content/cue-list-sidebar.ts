@@ -46,6 +46,7 @@ export class CueListSidebar {
   private mode: 'page' | 'pip';
   private hostDoc: Document;
   private onWordClick?: CueListWordClickHandler;
+  private onOpenChange?: (open: boolean) => void;
   private highlightMap: HighlightMap = {};
   private vocabHighlight: VocabHighlightConfig = DEFAULT_VOCAB_HIGHLIGHT;
   /** Page mode: true when fixed overlay (not docked to #secondary). */
@@ -71,11 +72,13 @@ export class CueListSidebar {
     onSeek: CueListSeekHandler,
     hostDoc: Document = document,
     onWordClick?: CueListWordClickHandler,
+    onOpenChange?: (open: boolean) => void,
   ) {
     this.mode = mode;
     this.onSeek = onSeek;
     this.hostDoc = hostDoc;
     this.onWordClick = onWordClick;
+    this.onOpenChange = onOpenChange;
 
     const win = this.hostDoc.defaultView || window;
     win.addEventListener('ueh:cue-translated', this.translationListener);
@@ -127,9 +130,11 @@ export class CueListSidebar {
     this.mount();
     this.renderList(true);
     this.highlightActive();
+    this.onOpenChange?.(true);
   }
 
   close(): void {
+    const wasOpen = this.open;
     this.open = false;
     this.unbindListScroll();
     this.root?.remove();
@@ -146,6 +151,7 @@ export class CueListSidebar {
         .getElementById('ueh-pip-root')
         ?.classList.remove('ueh-cue-list-open');
     }
+    if (wasOpen) this.onOpenChange?.(false);
   }
 
   destroy(): void {

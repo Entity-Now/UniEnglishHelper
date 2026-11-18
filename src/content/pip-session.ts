@@ -5,11 +5,13 @@ import type {
   PipSessionState,
   SubtitleCue,
 } from '../shared/domain/types';
+import type { SubtitlesDisplayMode } from '../types/config/subtitles';
 import { findActiveCue } from '../utils/subtitles/parser';
 import { sendRuntime } from '../shared/messaging/client';
 import { fail, ok, type Result } from '../shared/messages';
 import { AppError } from '../shared/messages/errors';
 import type { PlayerAdapter } from './players';
+import { isYoutubeHost } from './players/youtube';
 import { PipBridge } from './bridge';
 import { MediaTimelineSampler } from './media-timeline';
 import { ClipPlayer } from './clip-player';
@@ -20,6 +22,7 @@ import {
   type MirrorHandle,
 } from './video-mirror';
 import {
+  bindToolbarFocusgroupFallback,
   buildPipMarkup,
   buildPipStyles,
   clampPipOuterSize,
@@ -27,6 +30,11 @@ import {
   ICONS,
   pipSidePanelExtraPx,
 } from './pip-ui-shell';
+import {
+  isTtsPlaying,
+  speakTextSmart,
+  stopAllSpeech,
+} from '../utils/tts-playback/speak';
 import {
   detectYoutubeAdStatus,
   trySkipYoutubeAd,
@@ -85,6 +93,8 @@ export class PipSessionController {
   private originalParent: Node | null = null;
   private cues: SubtitleCue[] = [];
   private currentCue: SubtitleCue | null = null;
+  /** Most recent non-null cue so pause-after-line actions (translate/TTS/export/toggle) always work. */
+  private lastActiveCue: SubtitleCue | null = null;
   private captureState: CaptureState = 'CaptureIdle';
   private captureSessionId: string | null = null;
   private sampler = new MediaTimelineSampler();
@@ -120,6 +130,17 @@ export class PipSessionController {
   private lastChromeShowMs = 0;
   /** Avoid rewriting play SVG every UI tick */
   private lastPlayIconPaused: boolean | null = null;
+  /** Measured height of #ueh-chrome + gap so subtitles never sit behind wrapped toolbar rows */
+  private chromeClearancePx = 78;
+  private chromeResizeObserver: ResizeObserver | null = null;
+  private unbindToolbarFallback: (() => void) | null = null;
+  private unbindVideoEvents: (() => void) | null = null;
+  private toastHideTimer = 0;
+  private togglePersistTimer = 0;
+  private lastVolumeBeforeMute = 1;
+  private lastVolumeIconKey = '';
+  private ttsBusy = false;
+  private translatingBusy = false;
   private activeWordStreamSession: StreamExplainSession | null = null;
 
   constructor(
@@ -134,7 +155,13 @@ export class PipSessionController {
       onTranslated: (cueId, translation) => {
         if (this.currentCue?.id === cueId) {
           this.currentCue.translation = translation;
-          this.renderCue(this.currentCue);
+        }
+        if (this.lastActiveCue?.id === cueId) {
+          this.lastActiveCue.translation = translation;
+        }
+        const displayed = this.getRenderedCue();
+        if (displayed?.id === cueId) {
+          this.renderCue(displayed);
         }
       },
     });
@@ -145,9 +172,17 @@ export class PipSessionController {
   }
 
   updateConfig(config: AppConfig): void {
+    const prevMode = this.config.pipSubtitles?.style?.displayMode;
+    const prevEnabled = this.config.pipSubtitles?.enabled;
     this.config = config;
-    this.showOriginalOverride = null;
-    this.showTranslationOverride = null;
+    // Only reset runtime overrides when pipSubtitles display settings actually changed externally
+    if (
+      config.pipSubtitles?.style?.displayMode !== prevMode ||
+      config.pipSubtitles?.enabled !== prevEnabled
+    ) {
+      this.showOriginalOverride = null;
+      this.showTranslationOverride = null;
+    }
     void this.refreshHighlightMap().then(() => {
       this.reapplyPipStyles();
       this.syncSubVisibilityChrome();
@@ -253,7 +288,7 @@ export class PipSessionController {
   private async refreshWordHighlights(): Promise<void> {
     await this.refreshHighlightMap();
     this.injectHighlightCss();
-    this.renderCue(this.currentCue);
+    this.renderCue(this.getRenderedCue());
     this.cueList?.setHighlightMap(this.highlightMap);
     void this.refreshRecapBadge();
     if (this.vocabRecap?.isOpen()) void this.vocabRecap.refresh();
@@ -292,8 +327,13 @@ export class PipSessionController {
         getVideoKey: () => normalizeVideoKey(location.href),
         onSeek: (ms) => {
           if (this.video) {
-            this.video.currentTime = ms / 1000 + 0.01;
-            void this.video.play().catch(() => undefined);
+            const targetSec = ms / 1000 + 0.01;
+            this.video.currentTime = targetSec;
+            if (isYoutubeHost()) {
+              this.postYoutubePlayerCommand({ action: 'seekTo', seconds: targetSec });
+            }
+            this.mirrorHandle?.requestFrame?.();
+            this.resumePlayback();
           }
         },
         onExplain: (surface, context) => {
@@ -317,6 +357,10 @@ export class PipSessionController {
           badge.textContent = text;
           badge.classList.toggle('on', text.length > 0);
         },
+        onOpenChange: () => {
+          this.syncPipSidePanelWindow();
+          this.syncPanelToggleButtons();
+        },
       });
       this.vocabRecap.setVocabHighlight(
         this.config.vocabHighlight ?? {
@@ -333,6 +377,7 @@ export class PipSessionController {
 
     this.vocabRecap.toggle();
     this.syncPipSidePanelWindow();
+    this.syncPanelToggleButtons();
   }
 
   private syncPipSidePanelTimer = 0;
@@ -393,20 +438,255 @@ export class PipSessionController {
     );
   }
 
-  setCaptureLive(sessionId: string): void {
+  setCaptureLive(sessionId: string, silent = false): void {
     this.captureSessionId = sessionId;
     this.captureState = 'CaptureLive';
     if (this.video) this.sampler.attach(this.video);
     this.sampler.start(sessionId);
+    this.syncCaptureChrome();
     this.pushPlaybackState();
-    this.toast('info', 'Capture live — you can save sentence audio');
+    if (!silent) {
+      this.toast('info', '原声采集已就绪，可点击保存按钮截取当前句原声');
+    }
   }
 
   setCaptureIdle(): void {
     this.captureSessionId = null;
     this.captureState = 'CaptureIdle';
     this.sampler.stop();
+    this.syncCaptureChrome();
     this.pushPlaybackState();
+  }
+
+  private syncCaptureChrome(): void {
+    const doc = this.pipWindow?.document;
+    if (!doc) return;
+    const dot = doc.getElementById('ueh-rec-dot');
+    const live = Boolean(this.captureSessionId && this.captureState === 'CaptureLive');
+    dot?.classList.toggle('on', live);
+  }
+
+  private async syncCaptureStatusFromBackground(): Promise<boolean> {
+    try {
+      const res = await sendRuntime<{
+        state: CaptureState;
+        sessionId?: string;
+      }>('capture.status', {}, 'content');
+      if (res.ok && res.data.state === 'CaptureLive' && res.data.sessionId) {
+        if (this.captureSessionId !== res.data.sessionId || this.captureState !== 'CaptureLive') {
+          this.setCaptureLive(res.data.sessionId, true);
+        } else {
+          this.syncCaptureChrome();
+        }
+        return true;
+      }
+    } catch {
+      // ignore
+    }
+    return false;
+  }
+
+  private bindVideoMediaListeners(video: HTMLVideoElement): void {
+    this.unbindVideoEvents?.();
+    const onVolume = () => this.syncVolumeChrome();
+    const onRate = () => this.syncRateChrome();
+    const onPlayPause = () => {
+      this.updatePlayIcon();
+      this.renderCue(this.getRenderedCue());
+    };
+    video.addEventListener('volumechange', onVolume);
+    video.addEventListener('ratechange', onRate);
+    video.addEventListener('play', onPlayPause);
+    video.addEventListener('pause', onPlayPause);
+    this.unbindVideoEvents = () => {
+      video.removeEventListener('volumechange', onVolume);
+      video.removeEventListener('ratechange', onRate);
+      video.removeEventListener('play', onPlayPause);
+      video.removeEventListener('pause', onPlayPause);
+    };
+  }
+
+  private postYoutubePlayerCommand(payload: Record<string, unknown>): void {
+    if (!isYoutubeHost()) return;
+    try {
+      window.postMessage(
+        {
+          type: 'UEH_PLAYER_COMMAND',
+          requestId: `pip-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          ...payload,
+        },
+        window.location.origin,
+      );
+    } catch {
+      // ignore
+    }
+  }
+
+  private getEffectiveAudioState(): { volume: number; muted: boolean } {
+    if (this.mirrorHandle?.getAudioState) {
+      return this.mirrorHandle.getAudioState();
+    }
+    const v = this.video;
+    if (!v) return { volume: 1, muted: false };
+    return {
+      volume: Number.isFinite(v.volume) ? Math.max(0, Math.min(1, v.volume)) : 1,
+      muted: Boolean(v.muted),
+    };
+  }
+
+  private applyAudioState(
+    opts: { volume?: number; muted?: boolean },
+    announce = true,
+  ): void {
+    const cur = this.getEffectiveAudioState();
+    const nextVol =
+      typeof opts.volume === 'number' && Number.isFinite(opts.volume)
+        ? Math.max(0, Math.min(1, opts.volume))
+        : cur.volume;
+    const nextMuted =
+      typeof opts.muted === 'boolean' ? opts.muted : cur.muted;
+
+    if (nextVol > 0.02) {
+      this.lastVolumeBeforeMute = nextVol;
+    }
+
+    if (this.mirrorHandle?.setAudioState) {
+      this.mirrorHandle.setAudioState({ volume: nextVol, muted: nextMuted });
+    } else if (this.video) {
+      try {
+        this.video.volume = nextVol;
+        this.video.muted = nextMuted;
+      } catch {
+        // ignore
+      }
+    }
+
+    if (isYoutubeHost()) {
+      this.postYoutubePlayerCommand({
+        action: 'setVolume',
+        volume: Math.round(nextVol * 100),
+        muted: nextMuted,
+      });
+    }
+
+    this.syncVolumeChrome();
+    if (announce) {
+      const pct = Math.round(nextVol * 100);
+      this.toast('info', nextMuted || pct === 0 ? '已静音' : `音量 ${pct}%`);
+    }
+  }
+
+  private toggleMute(): void {
+    const { volume, muted } = this.getEffectiveAudioState();
+    if (muted || volume <= 0.01) {
+      const restore =
+        this.lastVolumeBeforeMute > 0.02 ? this.lastVolumeBeforeMute : 0.8;
+      this.applyAudioState({ volume: restore, muted: false }, true);
+    } else {
+      this.lastVolumeBeforeMute = volume;
+      this.applyAudioState({ volume, muted: true }, true);
+    }
+  }
+
+  private adjustVolumeBy(delta: number): void {
+    const { volume, muted } = this.getEffectiveAudioState();
+    const base = muted ? 0 : volume;
+    const next = Math.round(Math.max(0, Math.min(1, base + delta)) * 100) / 100;
+    this.applyAudioState({ volume: next, muted: next <= 0 }, true);
+  }
+
+  private syncVolumeChrome(): void {
+    const doc = this.pipWindow?.document;
+    if (!doc) return;
+    const { volume, muted } = this.getEffectiveAudioState();
+    const effectivePct = muted ? 0 : Math.round(volume * 100);
+
+    const muteBtn = doc.querySelector(
+      'button[data-act="mute"]',
+    ) as HTMLButtonElement | null;
+    if (muteBtn) {
+      const isMutedState = muted || effectivePct === 0;
+      muteBtn.setAttribute('aria-pressed', isMutedState ? 'true' : 'false');
+      const iconKey = isMutedState
+        ? 'mute'
+        : effectivePct <= 50
+          ? 'low'
+          : 'high';
+      if (iconKey !== this.lastVolumeIconKey) {
+        this.lastVolumeIconKey = iconKey;
+        const svg = muteBtn.querySelector('svg');
+        if (svg) {
+          svg.innerHTML =
+            iconKey === 'mute'
+              ? ICONS.volumeMute
+              : iconKey === 'low'
+                ? ICONS.volumeLow
+                : ICONS.volume;
+        }
+      }
+    }
+
+    const slider = doc.getElementById('ueh-volume') as HTMLInputElement | null;
+    if (slider && doc.activeElement !== slider) {
+      const nextStr = String(effectivePct);
+      if (slider.value !== nextStr) slider.value = nextStr;
+    }
+  }
+
+  private cyclePlaybackRate(): void {
+    if (!this.video) return;
+    const rates = [0.75, 1, 1.25, 1.5, 2];
+    const cur = this.video.playbackRate || 1;
+    let idx = rates.findIndex((r) => Math.abs(r - cur) < 0.04);
+    if (idx < 0) idx = 1;
+    const next = rates[(idx + 1) % rates.length]!;
+    try {
+      this.video.playbackRate = next;
+    } catch {
+      // ignore
+    }
+    if (isYoutubeHost()) {
+      this.postYoutubePlayerCommand({ action: 'setPlaybackRate', rate: next });
+    }
+    this.syncRateChrome();
+    this.toast('info', `播放倍速：${next}x`);
+  }
+
+  private syncRateChrome(): void {
+    const doc = this.pipWindow?.document;
+    if (!doc) return;
+    const btn = doc.querySelector(
+      'button[data-act="rate"]',
+    ) as HTMLButtonElement | null;
+    if (!btn) return;
+    const rate = this.video?.playbackRate || 1;
+    const label = `${Number(rate.toFixed(2))}x`;
+    if (btn.textContent !== label) btn.textContent = label;
+  }
+
+  private syncPanelToggleButtons(): void {
+    const doc = this.pipWindow?.document;
+    if (!doc) return;
+    const root = doc.getElementById('ueh-pip-root');
+    const settingsOpen = Boolean(
+      doc.getElementById('ueh-pip-settings')?.classList.contains('ueh-open'),
+    );
+    const listOpen = Boolean(
+      this.cueList?.isOpen() || root?.classList.contains('ueh-cue-list-open'),
+    );
+    const recapOpen = Boolean(
+      this.vocabRecap?.isOpen() || root?.classList.contains('ueh-recap-open'),
+    );
+
+    doc
+      .querySelector('button[data-act="settings"]')
+      ?.setAttribute('aria-pressed', settingsOpen ? 'true' : 'false');
+    doc
+      .querySelector('button[data-act="list"]')
+      ?.setAttribute('aria-pressed', listOpen ? 'true' : 'false');
+    doc
+      .querySelector('button[data-act="recap"]')
+      ?.setAttribute('aria-pressed', recapOpen ? 'true' : 'false');
   }
 
   /**
@@ -473,6 +753,15 @@ export class PipSessionController {
       this.injectPipShell(this.pipWindow);
       this.mode = this.setupVideoInPip(this.pipWindow, this.video);
       this.state = this.mode === 'move' ? 'ActiveMove' : 'ActiveMirror';
+      this.bindVideoMediaListeners(this.video);
+      this.syncVolumeChrome();
+      this.syncRateChrome();
+      this.syncCaptureChrome();
+
+      if (isYoutubeHost()) {
+        void sendRuntime('youtube.injectMain', {}, 'content');
+      }
+      void this.syncCaptureStatusFromBackground();
 
       this.bridge = new PipBridge();
       this.bridge.onMessage((msg) => void this.onBridgeMessage(msg));
@@ -507,7 +796,7 @@ export class PipSessionController {
         let cues = getPageCues();
         if (cues.length > 0) {
           this.translateScheduler.reset();
-    this.cues = cues;
+          this.cues = cues;
           this.cueList?.setCues(cues);
           this.vocabRecap?.setCues(cues);
           void this.refreshRecapBadge();
@@ -521,7 +810,7 @@ export class PipSessionController {
           cues = await this.adapter.getCues({ video: this.video });
           if (cues.length > 0) {
             this.translateScheduler.reset();
-    this.cues = cues;
+            this.cues = cues;
             this.cueList?.setCues(cues);
             this.vocabRecap?.setCues(cues);
             void this.refreshRecapBadge();
@@ -532,8 +821,7 @@ export class PipSessionController {
           await new Promise((r) => setTimeout(r, 1000));
         }
 
-        const st = this.pipWindow?.document.getElementById('ueh-status');
-        if (st) st.textContent = '无字幕轨';
+        this.toast('warn', '当前视频暂无可用字幕轨');
       };
       void loadCuesForPip();
 
@@ -831,7 +1119,21 @@ export class PipSessionController {
     this.vocabRecap?.destroy();
     this.vocabRecap = null;
     this.clipPlayer.stop();
+    stopAllSpeech(this.pipWindow ?? window);
+    this.ttsBusy = false;
+    this.translatingBusy = false;
     this.unbindHotkeys();
+    this.unbindToolbarFallback?.();
+    this.unbindToolbarFallback = null;
+    this.unbindVideoEvents?.();
+    this.unbindVideoEvents = null;
+    this.chromeResizeObserver?.disconnect();
+    this.chromeResizeObserver = null;
+    this.chromeClearancePx = 78;
+    window.clearTimeout(this.toastHideTimer);
+    this.toastHideTimer = 0;
+    window.clearTimeout(this.togglePersistTimer);
+    this.togglePersistTimer = 0;
     this.bridge?.close();
     this.bridge = null;
     this.teardownVideoMirror();
@@ -840,6 +1142,7 @@ export class PipSessionController {
     this.hideClickToOpenBanner();
     this.lastUiPushMs = 0;
     this.lastPipCueId = '';
+    this.lastActiveCue = null;
     this.pipBaseOuterWidth = 0;
     this.pipPanelExtraPx = 0;
     this.syncingPipSize = false;
@@ -848,6 +1151,7 @@ export class PipSessionController {
     this.lastUiKey = '';
     this.lastPrefetchCueId = '';
     this.lastPlayIconPaused = null;
+    this.lastVolumeIconKey = '';
     this.lastChromeShowMs = 0;
     try {
       this.pipWindow?.close();
@@ -904,42 +1208,120 @@ export class PipSessionController {
   }
 
   private bindPipChrome(doc: Document): void {
+    const win = doc.defaultView ?? this.pipWindow ?? window;
     const root = doc.getElementById('ueh-pip-root');
+    const stage = doc.getElementById('ueh-pip-stage');
+    const chromeEl = doc.getElementById('ueh-chrome');
+    const bar = doc.getElementById('ueh-bar');
     const progress = doc.getElementById('ueh-progress') as HTMLInputElement | null;
+    const volumeSlider = doc.getElementById('ueh-volume') as HTMLInputElement | null;
+    const volWrap = doc.querySelector('.ueh-vol-wrap') as HTMLElement | null;
 
-    // Show chrome while interacting (throttle mousemove — fires dozens/sec while dragging/resizing)
+    if (bar) {
+      this.unbindToolbarFallback?.();
+      this.unbindToolbarFallback = bindToolbarFocusgroupFallback(bar, win);
+    }
+
+    // Dynamically track #ueh-chrome height so wrapped toolbar rows never cover subtitles or popovers
+    const updateChromeClearance = () => {
+      if (!chromeEl || !stage) return;
+      const h = Math.round(chromeEl.getBoundingClientRect().height || chromeEl.offsetHeight || 0);
+      const nextClearance = Math.max(78, h + 10);
+      if (nextClearance !== this.chromeClearancePx) {
+        this.chromeClearancePx = nextClearance;
+        stage.style.setProperty('--ueh-chrome-h', `${nextClearance}px`);
+        const layer = doc.getElementById('ueh-sub-layer');
+        const en = doc.getElementById('ueh-sub-en');
+        const tr = doc.getElementById('ueh-sub-tr');
+        if (layer && en && tr && this.getRenderedCue()) {
+          this.applyPipSubtitleLayout(layer, en, tr);
+        }
+      }
+    };
+    this.chromeResizeObserver?.disconnect();
+    const ResizeObs =
+      (win as unknown as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver ??
+      (typeof ResizeObserver !== 'undefined' ? ResizeObserver : undefined);
+    if (ResizeObs && chromeEl) {
+      this.chromeResizeObserver = new ResizeObs(() => updateChromeClearance());
+      this.chromeResizeObserver.observe(chromeEl);
+    }
+    updateChromeClearance();
+
+    // Show chrome while interacting (use PiP window timers so backgrounded opener tab never stalls it)
     let hideTimer = 0;
+    let pointerInsideChrome = false;
+    chromeEl?.addEventListener('pointerenter', () => {
+      pointerInsideChrome = true;
+      win.clearTimeout(hideTimer);
+      root?.classList.add('ueh-show-chrome');
+    });
+    chromeEl?.addEventListener('pointerleave', () => {
+      pointerInsideChrome = false;
+      scheduleHideChrome();
+    });
+
+    const scheduleHideChrome = () => {
+      win.clearTimeout(hideTimer);
+      hideTimer = win.setTimeout(() => {
+        const settingsOpen = doc
+          .getElementById('ueh-pip-settings')
+          ?.classList.contains('ueh-open');
+        if (pointerInsideChrome || settingsOpen || this.video?.paused) return;
+        root?.classList.remove('ueh-show-chrome');
+      }, 2800);
+    };
+
     const showChrome = () => {
       const now = performance.now();
-      if (now - this.lastChromeShowMs < 120) {
-        // Still refresh hide timer lightly without class thrash
-        window.clearTimeout(hideTimer);
-        hideTimer = window.setTimeout(() => {
-          root?.classList.remove('ueh-show-chrome');
-        }, 2500);
-        return;
+      if (now - this.lastChromeShowMs >= 100) {
+        this.lastChromeShowMs = now;
+        root?.classList.add('ueh-show-chrome');
       }
-      this.lastChromeShowMs = now;
-      root?.classList.add('ueh-show-chrome');
-      window.clearTimeout(hideTimer);
-      hideTimer = window.setTimeout(() => {
-        root?.classList.remove('ueh-show-chrome');
-      }, 2500);
+      scheduleHideChrome();
     };
-    root?.addEventListener('mousemove', showChrome, { passive: true });
-    root?.addEventListener('click', showChrome);
+    root?.addEventListener('pointermove', showChrome, { passive: true });
+    root?.addEventListener('pointerdown', showChrome, { passive: true });
+    root?.addEventListener('focusin', showChrome);
     showChrome();
 
-    // Click video area → play/pause (ignore side panel / buttons)
+    // Light-dismiss settings panel when clicking outside #ueh-pip-settings and settings button
+    doc.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      const settingsPanel = doc.getElementById('ueh-pip-settings');
+      if (
+        settingsPanel?.classList.contains('ueh-open') &&
+        !settingsPanel.contains(target) &&
+        !target.closest('button[data-act="settings"]')
+      ) {
+        settingsPanel.classList.remove('ueh-open');
+        this.syncPanelToggleButtons();
+      }
+    });
+
+    // Click video area → play/pause (ignore chrome / panels / buttons)
     doc.getElementById('ueh-video-slot')?.addEventListener('click', (e) => {
-      if ((e.target as HTMLElement).closest('button,input,a,#ueh-word-panel')) return;
+      if (
+        (e.target as HTMLElement).closest(
+          'button,input,select,a,#ueh-chrome,#ueh-word-panel,#ueh-pip-settings',
+        )
+      ) {
+        return;
+      }
       this.handleCommandPlayPause();
       this.updatePlayIcon();
     });
 
     // Click subtitle area (outside of word chip) → play/pause
     doc.getElementById('ueh-sub-layer')?.addEventListener('click', (e) => {
-      if ((e.target as HTMLElement).closest('button,input,a,#ueh-word-panel,.ueh-word')) return;
+      if (
+        (e.target as HTMLElement).closest(
+          'button,input,select,a,#ueh-chrome,#ueh-word-panel,#ueh-pip-settings,.ueh-word',
+        )
+      ) {
+        return;
+      }
       this.handleCommandPlayPause();
       this.updatePlayIcon();
     });
@@ -947,21 +1329,29 @@ export class PipSessionController {
     doc.querySelectorAll('button[data-act]').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
+        showChrome();
         const act = (btn as HTMLElement).dataset.act;
         if (act === 'play') {
           this.handleCommandPlayPause();
           this.updatePlayIcon();
-        } else if (act === 'export') void this.handleExportClip();
-        else if (act === 'tts') void this.handleTts();
-        else if (act === 'translate') void this.handleTranslateCurrent();
-        else if (act === 'prev') this.seekCue(-1);
-        else if (act === 'next') this.seekCue(1);
-        else if (act === 'toggle-en') {
-          this.showOriginalOverride = !this.resolveShowOriginal();
-          this.cycleDisplayFromToggles();
+        } else if (act === 'mute') {
+          this.toggleMute();
+        } else if (act === 'rate') {
+          this.cyclePlaybackRate();
+        } else if (act === 'export') {
+          void this.handleExportClip();
+        } else if (act === 'tts') {
+          void this.handleTts();
+        } else if (act === 'translate') {
+          void this.handleTranslateCurrent();
+        } else if (act === 'prev') {
+          this.seekCue(-1);
+        } else if (act === 'next') {
+          this.seekCue(1);
+        } else if (act === 'toggle-en') {
+          this.toggleSubtitleLine('en');
         } else if (act === 'toggle-tr') {
-          this.showTranslationOverride = !this.resolveShowTranslation();
-          this.cycleDisplayFromToggles();
+          this.toggleSubtitleLine('tr');
         } else if (act === 'settings') {
           this.togglePipSettingsPanel(doc);
         } else if (act === 'list') {
@@ -971,6 +1361,54 @@ export class PipSessionController {
         }
       });
     });
+
+    // Volume slider drag + wheel adjust on speaker/slider group
+    const onVolumeInput = () => {
+      if (!volumeSlider) return;
+      const pct = Math.max(0, Math.min(100, Number(volumeSlider.value) || 0));
+      const nextVol = pct / 100;
+      this.applyAudioState({ volume: nextVol, muted: pct === 0 }, false);
+    };
+    volumeSlider?.addEventListener('input', (e) => {
+      e.stopPropagation();
+      onVolumeInput();
+    });
+    volumeSlider?.addEventListener('change', (e) => {
+      e.stopPropagation();
+      if (!volumeSlider) return;
+      const pct = Math.max(0, Math.min(100, Number(volumeSlider.value) || 0));
+      this.toast('info', pct === 0 ? '已静音' : `音量 ${pct}%`);
+    });
+    volumeSlider?.addEventListener('click', (e) => e.stopPropagation());
+
+    let volWheelTimer = 0;
+    volWrap?.addEventListener(
+      'wheel',
+      (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const delta = e.deltaY < 0 ? 0.05 : -0.05;
+        this.adjustVolumeBy(delta);
+        volWrap.classList.add('ueh-vol-active');
+        win.clearTimeout(volWheelTimer);
+        volWheelTimer = win.setTimeout(() => {
+          volWrap.classList.remove('ueh-vol-active');
+        }, 1200);
+      },
+      { passive: false },
+    );
+
+    // Allow ArrowUp / ArrowDown on mute button to adjust volume cleanly for keyboard users
+    doc
+      .querySelector('button[data-act="mute"]')
+      ?.addEventListener('keydown', (e) => {
+        const ke = e as KeyboardEvent;
+        if (ke.key === 'ArrowUp' || ke.key === 'ArrowDown') {
+          ke.preventDefault();
+          ke.stopPropagation();
+          this.adjustVolumeBy(ke.key === 'ArrowUp' ? 0.05 : -0.05);
+        }
+      });
 
     void this.refreshRecapBadge();
 
@@ -987,16 +1425,32 @@ export class PipSessionController {
     });
 
     this.syncSubVisibilityChrome();
+    this.syncVolumeChrome();
+    this.syncRateChrome();
+    this.syncPanelToggleButtons();
+    this.syncCaptureChrome();
 
-    // Scrub → seek original video
-    progress?.addEventListener('input', () => {
+    // Scrub → seek original video (update time readout + paused mirror frame immediately)
+    const onScrub = (commitYoutube: boolean) => {
       if (!this.video || !progress) return;
       const dur = this.video.duration;
       if (!Number.isFinite(dur) || dur <= 0) return;
       const ratio = Number(progress.value) / 1000;
-      this.video.currentTime = ratio * dur;
+      const targetSec = ratio * dur;
+      this.video.currentTime = targetSec;
+      if (commitYoutube && isYoutubeHost()) {
+        this.postYoutubePlayerCommand({ action: 'seekTo', seconds: targetSec });
+      }
+      const timeEl = doc.getElementById('ueh-time');
+      if (timeEl) {
+        timeEl.textContent = `${formatTime(targetSec)} / ${formatTime(dur)}`;
+      }
+      this.mirrorHandle?.requestFrame?.();
       this.syncCue(true);
-    });
+    };
+    progress?.addEventListener('input', () => onScrub(false));
+    progress?.addEventListener('change', () => onScrub(true));
+    progress?.addEventListener('click', (e) => e.stopPropagation());
 
     this.updatePlayIcon();
   }
@@ -1009,6 +1463,7 @@ export class PipSessionController {
       this.closeWordPanel();
       this.syncPipSettingsFields(doc);
     }
+    this.syncPanelToggleButtons();
   }
 
   private bindPipSettingsPanel(doc: Document): void {
@@ -1056,6 +1511,7 @@ export class PipSessionController {
       ?.addEventListener('click', (e) => {
         e.stopPropagation();
         doc.getElementById('ueh-pip-settings')?.classList.remove('ueh-open');
+        this.syncPanelToggleButtons();
       });
   }
 
@@ -1115,17 +1571,26 @@ export class PipSessionController {
     doc: Document,
     persist: boolean,
   ): Promise<boolean> {
-    const en = doc.getElementById('ueh-pip-en') as HTMLInputElement;
+    const en = doc.getElementById('ueh-pip-en') as HTMLInputElement | null;
     const autoTr = doc.getElementById(
       'ueh-pip-auto-tr',
-    ) as HTMLInputElement;
-    const mode = doc.getElementById('ueh-pip-mode') as HTMLSelectElement;
-    const layout = doc.getElementById('ueh-pip-layout') as HTMLSelectElement;
-    const pos = doc.getElementById('ueh-pip-pos') as HTMLSelectElement;
-    const anchor = doc.getElementById('ueh-pip-anchor') as HTMLSelectElement;
-    const offset = doc.getElementById('ueh-pip-offset') as HTMLInputElement;
-    const scale = doc.getElementById('ueh-pip-scale') as HTMLInputElement;
-    const bg = doc.getElementById('ueh-pip-bg') as HTMLInputElement;
+    ) as HTMLInputElement | null;
+    const mode = doc.getElementById('ueh-pip-mode') as HTMLSelectElement | null;
+    const layout = doc.getElementById(
+      'ueh-pip-layout',
+    ) as HTMLSelectElement | null;
+    const pos = doc.getElementById('ueh-pip-pos') as HTMLSelectElement | null;
+    const anchor = doc.getElementById(
+      'ueh-pip-anchor',
+    ) as HTMLSelectElement | null;
+    const offset = doc.getElementById(
+      'ueh-pip-offset',
+    ) as HTMLInputElement | null;
+    const scale = doc.getElementById(
+      'ueh-pip-scale',
+    ) as HTMLInputElement | null;
+    const bg = doc.getElementById('ueh-pip-bg') as HTMLInputElement | null;
+    if (!en || !autoTr || !mode || !pos || !scale || !bg) return false;
 
     const fontScale = Number(scale.value) || 85;
     let displayMode = mode.value as
@@ -1167,7 +1632,9 @@ export class PipSessionController {
     this.showOriginalOverride = null;
     this.showTranslationOverride = null;
     this.reapplyPipStyles();
-    this.renderCue(this.currentCue);
+    this.syncSubVisibilityChrome();
+    this.renderCue(this.getRenderedCue());
+    if (nextPip.autoTranslate) this.applyAutoTranslateNow();
 
     if (!persist) return true;
 
@@ -1179,7 +1646,8 @@ export class PipSessionController {
     if (res.ok) {
       this.config = res.data;
       this.reapplyPipStyles();
-      this.renderCue(this.currentCue);
+      this.syncSubVisibilityChrome();
+      this.renderCue(this.getRenderedCue());
       return true;
     }
     return false;
@@ -1188,6 +1656,7 @@ export class PipSessionController {
   private openWordPanel(): void {
     const doc = this.pipWindow?.document;
     doc?.getElementById('ueh-pip-settings')?.classList.remove('ueh-open');
+    this.syncPanelToggleButtons();
     const root = doc?.getElementById('ueh-pip-root');
     const panel = doc?.getElementById('ueh-word-panel');
     root?.classList.add('ueh-word-open');
@@ -1219,12 +1688,12 @@ export class PipSessionController {
   }
 
   private updatePlayIcon(): void {
-    const btn = this.pipWindow?.document.querySelector(
-      'button[data-act="play"] svg',
-    );
-    if (!btn || !this.video) return;
+    const doc = this.pipWindow?.document;
+    const btn = doc?.querySelector('button[data-act="play"] svg');
+    if (!doc || !this.video) return;
     const paused = this.video.paused;
-    if (this.lastPlayIconPaused === paused) return;
+    doc.getElementById('ueh-pip-root')?.classList.toggle('ueh-paused', paused);
+    if (!btn || this.lastPlayIconPaused === paused) return;
     this.lastPlayIconPaused = paused;
     btn.innerHTML = paused ? ICONS.play : ICONS.pause;
   }
@@ -1239,6 +1708,7 @@ export class PipSessionController {
         if (settingsEl?.classList.contains('ueh-open')) {
           e.preventDefault();
           settingsEl.classList.remove('ueh-open');
+          this.syncPanelToggleButtons();
           return;
         }
         if (rootEl?.classList.contains('ueh-word-open')) {
@@ -1247,11 +1717,24 @@ export class PipSessionController {
           return;
         }
       }
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      const targetEl = e.target as HTMLElement | null;
+      const tag = targetEl?.tagName;
+      if (
+        tag === 'INPUT' ||
+        tag === 'TEXTAREA' ||
+        tag === 'SELECT' ||
+        targetEl?.isContentEditable
+      ) {
+        return;
+      }
+      // Never hijack Space when a toolbar/panel button is focused (let native button click fire)
       if (e.code === 'Space') {
+        if (tag === 'BUTTON' || targetEl?.closest?.('button')) return;
         e.preventDefault();
         this.handleCommandPlayPause();
+      } else if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault();
+        this.toggleMute();
       } else if (e.key === '[' || e.code === 'BracketLeft') {
         e.preventDefault();
         this.seekCue(-1);
@@ -1270,6 +1753,14 @@ export class PipSessionController {
       } else if (e.key === 'r' || e.key === 'R') {
         e.preventDefault();
         void this.handleTranslateCurrent();
+      } else if (
+        (e.key === 'ArrowUp' || e.key === 'ArrowDown') &&
+        !targetEl?.closest?.(
+          '#ueh-word-panel,#ueh-pip-settings,#ueh-pip-cuelist-slot,#ueh-pip-recap-slot',
+        )
+      ) {
+        e.preventDefault();
+        this.adjustVolumeBy(e.key === 'ArrowUp' ? 0.05 : -0.05);
       }
     };
     win.addEventListener('keydown', this.keyHandler);
@@ -1283,21 +1774,53 @@ export class PipSessionController {
   }
 
   private seekCue(delta: number): void {
-    if (!this.video || !this.cues.length) return;
+    if (!this.video) return;
+    if (!this.cues.length) {
+      // Fallback when no subtitle track is available: step ±5s and retry loading captions
+      const dur = Number.isFinite(this.video.duration) ? this.video.duration : Infinity;
+      const nextSec = Math.max(0, Math.min(dur, this.video.currentTime + delta * 5));
+      this.video.currentTime = nextSec;
+      if (isYoutubeHost()) {
+        this.postYoutubePlayerCommand({ action: 'seekTo', seconds: nextSec });
+      }
+      this.mirrorHandle?.requestFrame?.();
+      this.pushPlaybackState();
+      this.toast('info', delta < 0 ? '快退 5 秒（暂无字幕轨）' : '快进 5 秒（暂无字幕轨）');
+      void this.reloadCuesForCurrentVideo({ retries: 1 });
+      return;
+    }
     const t = Math.round(this.video.currentTime * 1000);
     let idx = this.cues.findIndex(
       (c) => t >= c.startMs && t < c.endMs,
     );
     if (idx < 0) {
-      idx = this.cues.findIndex((c) => c.startMs > t);
-      if (idx < 0) idx = this.cues.length - 1;
-      else if (delta < 0) idx = Math.max(0, idx - 1);
+      const nextIdx = this.cues.findIndex((c) => c.startMs > t);
+      if (nextIdx < 0) {
+        idx = delta < 0 ? Math.max(0, this.cues.length - 1) : this.cues.length - 1;
+      } else {
+        idx = delta < 0 ? Math.max(0, nextIdx - 1) : nextIdx;
+      }
     } else {
-      idx = Math.max(0, Math.min(this.cues.length - 1, idx + delta));
+      const next = idx + delta;
+      if (next < 0) {
+        idx = 0;
+        this.toast('info', '已是第一句');
+      } else if (next >= this.cues.length) {
+        idx = this.cues.length - 1;
+        this.toast('info', '已是最后一句');
+      } else {
+        idx = next;
+      }
     }
     const cue = this.cues[idx];
-    this.video.currentTime = cue.startMs / 1000 + 0.01;
+    const targetSec = cue.startMs / 1000 + 0.01;
+    this.video.currentTime = targetSec;
+    if (isYoutubeHost()) {
+      this.postYoutubePlayerCommand({ action: 'seekTo', seconds: targetSec });
+    }
+    this.mirrorHandle?.requestFrame?.();
     this.syncCue(true);
+    this.pushPlaybackState();
   }
 
   private moveVideoToPip(video: HTMLVideoElement, pipWindow: Window): void {
@@ -1500,18 +2023,21 @@ export class PipSessionController {
     if (next) {
       this.video = next;
       this.sampler.attach(next);
+      this.bindVideoMediaListeners(next);
       if (next !== prevVideo && this.pipWindow) {
         this.mode = this.setupVideoInPip(this.pipWindow, next);
+        this.syncVolumeChrome();
+        this.syncRateChrome();
       }
     }
     this.cues = [];
     this.currentCue = null;
+    this.lastActiveCue = null;
     this.lastPrefetchCueId = '';
     this.cueList?.setCues([]);
     this.vocabRecap?.setCues([]);
     this.renderCue(null);
-    const st = this.pipWindow?.document.getElementById('ueh-status');
-    if (st) st.textContent = '加载字幕…';
+    this.toast('info', '正在加载下一集字幕…');
   }
 
   /**
@@ -1526,18 +2052,14 @@ export class PipSessionController {
     this.translateScheduler.reset();
     this.cues = cues;
     this.currentCue = null;
+    this.lastActiveCue = null;
     this.lastPrefetchCueId = '';
     this.cueList?.setCues(cues);
     this.vocabRecap?.setCues(cues);
     void this.refreshRecapBadge();
     this.syncCue(true);
-    if (cues.length && this.wantsAutoTranslate()) {
+    if (cues.length && (this.wantsAutoTranslate() || this.resolveShowTranslation())) {
       this.startBackgroundTranslate();
-    }
-    const st = this.pipWindow?.document.getElementById('ueh-status');
-    if (st) {
-      if (cues.length) st.textContent = '';
-      else if (st.textContent === '加载字幕…') st.textContent = '无字幕轨';
     }
   }
 
@@ -1595,17 +2117,65 @@ export class PipSessionController {
     });
   }
 
+  /**
+   *Cue currently displayed on screen: active cue during playback, or last active
+   * cue when paused in a short inter-sentence gap so toggling 原文/译文 or clicking
+   * words/actions right after pausing works naturally.
+   */
+  private getRenderedCue(): SubtitleCue | null {
+    if (this.currentCue) return this.currentCue;
+    if (this.video?.paused && this.lastActiveCue) {
+      const nowMs = Math.round(this.video.currentTime * 1000);
+      if (
+        nowMs >= this.lastActiveCue.startMs - 500 &&
+        nowMs <= this.lastActiveCue.endMs + 8000
+      ) {
+        return this.lastActiveCue;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Target cue for toolbar actions (翻译当前句 / 朗读 / 保存原声).
+   * Falls back to lastActiveCue or nearest cue when between subtitle lines.
+   */
+  private getActionCue(): SubtitleCue | null {
+    if (this.currentCue) return this.currentCue;
+    if (!this.cues.length) return null;
+    const nowMs = Math.round((this.video?.currentTime ?? 0) * 1000);
+    const active = findActiveCue(this.cues, nowMs);
+    if (active) return active;
+    if (
+      this.lastActiveCue &&
+      nowMs >= this.lastActiveCue.startMs - 1000 &&
+      nowMs <= this.lastActiveCue.endMs + 10_000
+    ) {
+      return this.lastActiveCue;
+    }
+    // Find latest cue that started before nowMs, else the first upcoming cue
+    for (let i = this.cues.length - 1; i >= 0; i--) {
+      if (this.cues[i]!.startMs <= nowMs) return this.cues[i]!;
+    }
+    return this.cues[0] ?? null;
+  }
+
   private syncCue(force: boolean): void {
     if (!this.video) return;
     // Prefer continuous media time (ms) for tight A/V sync
     const t = Math.round(this.video.currentTime * 1000);
     const cue = findActiveCue(this.cues, t);
+    if (cue) {
+      this.lastActiveCue = cue;
+    }
+    const shouldAutoTranslate =
+      this.wantsAutoTranslate() || this.showTranslationOverride === true;
     // Only re-render when the *active* cue identity changes
     if (!force && cue?.id === this.currentCue?.id) {
       // Prefetch only once per cue id (was every rAF → wasted work)
       if (
         cue &&
-        this.wantsAutoTranslate() &&
+        shouldAutoTranslate &&
         cue.id !== this.lastPrefetchCueId
       ) {
         this.lastPrefetchCueId = cue.id;
@@ -1617,16 +2187,14 @@ export class PipSessionController {
     }
     this.currentCue = cue;
     this.cueList?.setActiveCueId(cue?.id ?? null);
-    // Display ONLY the current cue (no next-line stacking)
-    this.renderCue(cue);
+    const displayed = this.getRenderedCue();
+    this.renderCue(displayed);
     this.bridge?.send({
       type: 'pip.subtitleCue',
-      payload: { cue, translation: cue?.translation },
+      payload: { cue: displayed, translation: displayed?.translation },
     });
 
-    const autoTr =
-      this.pipSurface().autoTranslate ?? this.config.features.autoTranslate;
-    if (cue && autoTr) {
+    if (cue && shouldAutoTranslate) {
       this.lastPrefetchCueId = cue.id;
       if (!cue.translation) void this.translateScheduler.translateMany([cue]);
       const ahead = Math.max(5, this.config.features.prefetchCues ?? 3);
@@ -1666,15 +2234,90 @@ export class PipSessionController {
     const trChip = doc.querySelector(
       'button[data-act="toggle-tr"]',
     ) as HTMLElement | null;
-    enChip?.classList.toggle('off', !showEn);
-    trChip?.classList.toggle('off', !showTr);
+    enChip?.setAttribute('aria-pressed', showEn ? 'true' : 'false');
+    trChip?.setAttribute('aria-pressed', showTr ? 'true' : 'false');
   }
 
-  private cycleDisplayFromToggles(): void {
-    // Keep config style in sync so Settings re-open reflects last PiP choice
-    // is not required; runtime only.
+  private toggleSubtitleLine(which: 'en' | 'tr'): void {
+    const curEn = this.resolveShowOriginal();
+    const curTr = this.resolveShowTranslation();
+    const nextEn = which === 'en' ? !curEn : curEn;
+    const nextTr = which === 'tr' ? !curTr : curTr;
+
+    const nextMode: SubtitlesDisplayMode =
+      nextEn && nextTr
+        ? 'bilingual'
+        : nextEn
+          ? 'originalOnly'
+          : nextTr
+            ? 'translationOnly'
+            : 'off';
+
+    this.showOriginalOverride = nextEn;
+    this.showTranslationOverride = nextTr;
+
+    // Sync config.pipSubtitles + settings popover so UI surfaces never diverge or reset
+    const prev = this.config.pipSubtitles;
+    const nextPip = {
+      ...prev,
+      enabled: nextMode !== 'off',
+      autoTranslate:
+        which === 'tr' && nextTr ? true : (prev?.autoTranslate ?? true),
+      style: {
+        ...prev.style,
+        displayMode: nextMode,
+      },
+    };
+    this.config = { ...this.config, pipSubtitles: nextPip };
+
+    const doc = this.pipWindow?.document;
+    if (doc) this.syncPipSettingsFields(doc);
     this.syncSubVisibilityChrome();
-    this.renderCue(this.currentCue);
+    this.renderCue(this.getRenderedCue());
+
+    // Debounce persisting pipSubtitles so page storage echo won't thrash rapid clicks
+    window.clearTimeout(this.togglePersistTimer);
+    this.togglePersistTimer = window.setTimeout(() => {
+      void sendRuntime('config.set', { pipSubtitles: nextPip }, 'content');
+    }, 250);
+
+    // When user turns 译文 ON, immediately translate current/nearby cues if missing!
+    if (nextTr) {
+      const target = this.getActionCue();
+      if (target && !target.translation?.trim()) {
+        void this.translateScheduler.translateForce([target]).then((res) => {
+          if (!res.ok && res.error) {
+            this.toast('warn', `译文获取失败：${res.error}`);
+          }
+        });
+      }
+      if (target) this.translateScheduler.prefetchAround(target, 8);
+      if (this.cues.length) void this.translateScheduler.drainAll();
+    }
+
+    if (!this.cues.length) {
+      const modeLabel =
+        nextMode === 'bilingual'
+          ? '双语'
+          : nextMode === 'originalOnly'
+            ? '仅原文'
+            : nextMode === 'translationOnly'
+              ? '仅译文'
+              : '隐藏字幕';
+      this.toast('warn', `已切换为「${modeLabel}」（暂无字幕轨，正在重试加载…）`);
+      void this.reloadCuesForCurrentVideo({ retries: 2 });
+      return;
+    }
+
+    const modeMsg =
+      nextMode === 'bilingual'
+        ? '字幕显示：双语'
+        : nextMode === 'originalOnly'
+          ? '字幕显示：仅原文'
+          : nextMode === 'translationOnly'
+            ? '字幕显示：仅译文'
+            : '字幕已隐藏';
+    this.toast('info', modeMsg);
   }
 
   private applyPipSubtitleLayout(
@@ -1688,8 +2331,7 @@ export class PipSessionController {
       translationPosition: surface.style?.translationPosition,
       position: surface.position,
     });
-    // PiP bottom chrome is ~64px; use safe base offset 78px to avoid tools bar covering subtitles
-    const baseBottomPx = 78;
+    const baseBottomPx = Math.max(78, this.chromeClearancePx);
     const stackedBottomPx =
       placement.layout === 'stacked' && placement.stackAnchor === 'bottom'
         ? Math.max(baseBottomPx, baseBottomPx + placement.percent * 1.2)
@@ -1809,11 +2451,9 @@ export class PipSessionController {
       if (timeEl.textContent !== text) timeEl.textContent = text;
     }
     this.updatePlayIcon();
-
-    const status = doc.getElementById('ueh-status');
-    if (status && this.captureState === 'CaptureLive') {
-      if (status.textContent !== '● REC') status.textContent = '● REC';
-    }
+    this.syncVolumeChrome();
+    this.syncRateChrome();
+    this.syncCaptureChrome();
   }
 
   private async onBridgeMessage(msg: BridgeMessage): Promise<void> {
@@ -1822,10 +2462,22 @@ export class PipSessionController {
         this.handleCommandPlayPause();
         break;
       case 'pip.command.seek':
-        if (this.video) this.video.currentTime = msg.payload.mediaTimeMs / 1000;
+        if (this.video) {
+          this.video.currentTime = msg.payload.mediaTimeMs / 1000;
+          this.mirrorHandle?.requestFrame?.();
+        }
         break;
       case 'pip.command.setRate':
-        if (this.video) this.video.playbackRate = msg.payload.rate;
+        if (this.video) {
+          this.video.playbackRate = msg.payload.rate;
+          if (isYoutubeHost()) {
+            this.postYoutubePlayerCommand({
+              action: 'setPlaybackRate',
+              rate: msg.payload.rate,
+            });
+          }
+          this.syncRateChrome();
+        }
         break;
       case 'pip.ui.exportClip':
         await this.handleExportClip();
@@ -1886,7 +2538,8 @@ export class PipSessionController {
       });
     } catch {}
 
-    if (this.pipWindow) {
+    // Only pause PiP <video> directly in 'move' mode (in av-mirror mode, pipVideo plays live MediaStream)
+    if (this.pipWindow && this.mode === 'move') {
       try {
         this.pipWindow.document.querySelectorAll('video').forEach((v) => {
           if (!v.paused) {
@@ -1896,15 +2549,12 @@ export class PipSessionController {
       } catch {}
     }
 
-    try {
-      const yt = (document.getElementById('movie_player') ||
-        document.querySelector('.html5-video-player')) as any;
-      if (yt && typeof yt.pauseVideo === 'function') {
-        yt.pauseVideo();
-      }
-    } catch {}
+    if (isYoutubeHost()) {
+      this.postYoutubePlayerCommand({ action: 'pause' });
+    }
 
     this.updatePlayIcon();
+    this.renderCue(this.getRenderedCue());
     this.pushPlaybackState();
   }
 
@@ -1914,19 +2564,13 @@ export class PipSessionController {
       : (this.adapter.findVideo() ?? this.video);
     if (video) this.video = video;
 
-    try {
-      const yt = (document.getElementById('movie_player') ||
-        document.querySelector('.html5-video-player')) as any;
-      if (yt && typeof yt.playVideo === 'function') {
-        yt.playVideo();
-      } else if (this.video) {
-        void this.video.play().catch(() => undefined);
-      }
-    } catch {
-      if (this.video) {
-        void this.video.play().catch(() => undefined);
-      }
+    if (isYoutubeHost()) {
+      this.postYoutubePlayerCommand({ action: 'play' });
     }
+    if (this.video) {
+      void this.video.play().catch(() => undefined);
+    }
+    this.mirrorHandle?.resumePlayback?.();
 
     this.updatePlayIcon();
     this.pushPlaybackState();
@@ -1947,137 +2591,164 @@ export class PipSessionController {
   }
 
   private async translateCue(cue: SubtitleCue): Promise<void> {
-    await this.translateScheduler.translateMany([cue]);
+    await this.translateScheduler.translateForce([cue]);
   }
 
   private async handleTranslateCurrent(): Promise<void> {
-    if (!this.currentCue) return;
-    await this.translateCue(this.currentCue);
+    if (this.translatingBusy) return;
+    if (!this.cues.length) {
+      this.toast('warn', '当前暂无字幕轨，正在尝试加载…');
+      await this.reloadCuesForCurrentVideo({
+        toastOnSuccess: '字幕已加载',
+        retries: 2,
+      });
+    }
+    const cue = this.getActionCue();
+    if (!cue) {
+      this.toast('warn', '当前位置暂无可翻译的字幕句');
+      return;
+    }
+
+    // Ensure translation line is visible so user sees the result immediately
+    if (!this.resolveShowTranslation()) {
+      this.toggleSubtitleLine('tr');
+    }
+
+    const doc = this.pipWindow?.document;
+    const trBtn = doc?.querySelector('button[data-act="translate"]');
+    this.translatingBusy = true;
+    trBtn?.classList.add('is-busy');
+    this.toast('info', '正在翻译当前句…');
+    try {
+      const res = await this.translateScheduler.translateForce([cue]);
+      if (res.ok) {
+        this.renderCue(this.getRenderedCue() ?? cue);
+        this.toast('info', '已更新当前句译文');
+      } else {
+        this.toast('error', `翻译失败：${res.error || '请检查翻译设置或网络'}`);
+      }
+    } finally {
+      this.translatingBusy = false;
+      trBtn?.classList.remove('is-busy');
+    }
   }
 
   private async handleExportClip(): Promise<void> {
-    if (!this.currentCue) {
-      this.toast('warn', 'No active subtitle sentence');
+    const cue = this.getActionCue();
+    if (!cue) {
+      this.toast('warn', '当前暂无可保存原声的字幕句');
       return;
     }
     if (!this.captureSessionId || this.captureState !== 'CaptureLive') {
-      this.toast('warn', 'Enable capture in the extension popup first');
-      return;
+      const synced = await this.syncCaptureStatusFromBackground();
+      if (!synced || !this.captureSessionId) {
+        this.toast(
+          'warn',
+          '请先点击浏览器右上角扩展图标 → 开启「音频采集」后再保存原声',
+        );
+        return;
+      }
     }
-    // pause video slightly for cleaner capture optional — keep playing for continuous ring
-    const res = await sendRuntime<{
-      clipId: number;
-      durationMs: number;
-      mimeType: string;
-    }>(
-      'clips.export',
-      {
-        sessionId: this.captureSessionId,
-        startMs: this.currentCue.startMs,
-        endMs: this.currentCue.endMs,
-        epoch: this.sampler.getEpoch(),
-      },
-      'content',
-    );
-    if (!res.ok) {
-      this.toast('error', `${res.error.code}: ${res.error.message}`);
-      return;
+    const doc = this.pipWindow?.document;
+    const expBtn = doc?.querySelector('button[data-act="export"]');
+    expBtn?.classList.add('is-busy');
+    try {
+      const res = await sendRuntime<{
+        clipId: number;
+        durationMs: number;
+        mimeType: string;
+      }>(
+        'clips.export',
+        {
+          sessionId: this.captureSessionId,
+          startMs: cue.startMs,
+          endMs: cue.endMs,
+          epoch: this.sampler.getEpoch(),
+        },
+        'content',
+      );
+      if (!res.ok) {
+        this.toast('error', `保存原声失败：${res.error.message}`);
+        return;
+      }
+      this.lastClipId = res.data.clipId;
+      this.toast(
+        'info',
+        `已保存原声片段 #${res.data.clipId}（${(res.data.durationMs / 1000).toFixed(1)}s）`,
+      );
+      this.bridge?.send({
+        type: 'pip.exportResult',
+        payload: { clipId: res.data.clipId, durationMs: res.data.durationMs },
+      });
+      await this.playClipId(res.data.clipId);
+    } finally {
+      expBtn?.classList.remove('is-busy');
     }
-    this.lastClipId = res.data.clipId;
-    this.toast('info', `Saved clip #${res.data.clipId} (${res.data.durationMs}ms)`);
-    this.bridge?.send({
-      type: 'pip.exportResult',
-      payload: { clipId: res.data.clipId, durationMs: res.data.durationMs },
-    });
-    await this.playClipId(res.data.clipId);
   }
 
   private async handlePlayLastClip(): Promise<void> {
     if (this.lastClipId == null) {
-      this.toast('warn', 'No saved clip yet');
+      this.toast('warn', '尚未保存任何原声片段');
       return;
     }
     await this.playClipId(this.lastClipId);
   }
 
   private async playClipId(clipId: number): Promise<void> {
-    if (this.video && !this.video.paused) this.video.pause();
+    if (this.video && !this.video.paused) this.pausePlayback();
     await this.clipPlayer.play(clipId, (state, message) => {
       this.bridge?.send({
         type: 'pip.clipPlayState',
         payload: { clipId, state, message },
       });
-      if (state === 'error') this.toast('error', message ?? 'Clip play failed');
+      if (state === 'error') this.toast('error', message ?? '原声回放失败');
     });
   }
 
   private async handleTts(text?: string): Promise<void> {
-    const t = text ?? this.currentCue?.text;
+    const hostWin = this.pipWindow && !this.pipWindow.closed ? this.pipWindow : window;
+    // Clicking 朗读 while already speaking stops TTS cleanly
+    if (!text && (this.ttsBusy || isTtsPlaying())) {
+      stopAllSpeech(hostWin);
+      this.clipPlayer.stop();
+      this.ttsBusy = false;
+      this.pipWindow?.document
+        .querySelector('button[data-act="tts"]')
+        ?.classList.remove('is-busy');
+      this.toast('info', '已停止朗读');
+      return;
+    }
+
+    const t = (text ?? this.getActionCue()?.text)?.trim();
     if (!t) {
-      this.toast('warn', 'No text to speak');
+      this.toast('warn', '当前暂无可朗读的字幕句');
       return;
     }
 
-    // Edge: sequential base64 chunks (avoids MP3 concat stutter / re-accent)
-    if (
-      this.config.tts?.engine === 'edge' &&
-      this.config.features.enableEdgeTts
-    ) {
-      const chunksRes = await sendRuntime<{
-        mode: string;
-        voice: string;
-        chunks: Array<{ audioBase64: string; contentType: string }>;
-      }>('tts.synthChunks', { text: t }, 'content');
-      if (chunksRes.ok && chunksRes.data.chunks?.length) {
-        if (this.video && !this.video.paused) this.video.pause();
-        const { playTtsAudioChunks, stopTtsPlayback } = await import(
-          '../utils/tts-playback/play-chunks'
-        );
-        stopTtsPlayback();
-        const ok = await playTtsAudioChunks(chunksRes.data.chunks);
-        if (!ok) this.toast('warn', 'TTS stopped');
-        return;
+    if (this.video && !this.video.paused) {
+      this.pausePlayback();
+    }
+
+    const ttsBtn = this.pipWindow?.document.querySelector(
+      'button[data-act="tts"]',
+    );
+    this.ttsBusy = true;
+    ttsBtn?.classList.add('is-busy');
+    this.toast('info', '正在朗读…');
+
+    try {
+      const ok = await speakTextSmart(t, 'content', hostWin);
+      if (!ok && this.ttsBusy) {
+        this.toast('error', '朗读失败，请检查语音合成设置或网络连接');
       }
-      if (!chunksRes.ok) {
-        this.toast('error', chunksRes.error.message);
-        return;
-      }
-    }
-
-    const res = await sendRuntime<{
-      mode: string;
-      text: string;
-      voice: string;
-      clipId?: number;
-      clipIds?: number[];
-    }>('tts.synth', { text: t }, 'content');
-    if (!res.ok) {
-      this.toast('error', res.error.message);
-      return;
-    }
-
-    const ids =
-      res.data.clipIds?.length
-        ? res.data.clipIds
-        : res.data.clipId != null
-          ? [res.data.clipId]
-          : [];
-
-    if (ids.length) {
-      this.lastClipId = ids[0]!;
-      if (this.video && !this.video.paused) this.video.pause();
-      await this.clipPlayer.playSequence(ids, (state, message) => {
-        if (state === 'error') this.toast('error', message ?? 'TTS play failed');
-      });
-      return;
-    }
-
-    if (typeof speechSynthesis !== 'undefined') {
-      if (this.video && !this.video.paused) this.video.pause();
-      const u = new SpeechSynthesisUtterance(res.data.text);
-      u.lang = res.data.voice || 'en-US';
-      speechSynthesis.cancel();
-      speechSynthesis.speak(u);
+    } catch (err) {
+      this.toast(
+        'error',
+        `朗读异常：${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      this.ttsBusy = false;
+      ttsBtn?.classList.remove('is-busy');
     }
   }
 
@@ -2089,13 +2760,22 @@ export class PipSessionController {
         'pip',
         (cue) => {
           if (this.video) {
-            this.video.currentTime = cue.startMs / 1000 + 0.01;
-            void this.video.play().catch(() => undefined);
+            const targetSec = cue.startMs / 1000 + 0.01;
+            this.video.currentTime = targetSec;
+            if (isYoutubeHost()) {
+              this.postYoutubePlayerCommand({ action: 'seekTo', seconds: targetSec });
+            }
+            this.mirrorHandle?.requestFrame?.();
+            this.resumePlayback();
           }
         },
         doc,
         (word, context) => {
           void this.handleWordClick(word, context);
+        },
+        () => {
+          this.syncPipSidePanelWindow();
+          this.syncPanelToggleButtons();
         },
       );
       this.cueList.setCues(this.cues);
@@ -2108,12 +2788,20 @@ export class PipSessionController {
         },
       );
       this.cueList.setHighlightMap(this.highlightMap);
+    } else {
+      this.cueList.setCues(this.cues);
     }
     this.cueList.toggle();
     this.syncPipSidePanelWindow();
+    this.syncPanelToggleButtons();
     if (this.cueList.isOpen()) {
       this.cueList.setActiveCueId(this.currentCue?.id ?? null);
-      if (this.wantsAutoTranslate()) void this.translateScheduler.drainAll();
+      if (this.wantsAutoTranslate() || this.resolveShowTranslation()) {
+        void this.translateScheduler.drainAll();
+      }
+      if (!this.cues.length) {
+        void this.reloadCuesForCurrentVideo({ retries: 2 });
+      }
     }
   }
 
@@ -2383,8 +3071,22 @@ export class PipSessionController {
 
   private toast(level: 'info' | 'warn' | 'error', message: string): void {
     this.bridge?.send({ type: 'pip.toast', payload: { level, message } });
-    const status = this.pipWindow?.document.getElementById('ueh-status');
-    if (status) status.textContent = message;
+    const win = this.pipWindow && !this.pipWindow.closed ? this.pipWindow : window;
+    const toastEl = win.document?.getElementById('ueh-pip-toast');
+    if (toastEl) {
+      toastEl.dataset.level = level;
+      toastEl.textContent = message;
+      toastEl.classList.add('ueh-toast-on');
+      try {
+        win.clearTimeout(this.toastHideTimer);
+      } catch {
+        window.clearTimeout(this.toastHideTimer);
+      }
+      const durationMs = level === 'info' ? 2200 : 3400;
+      this.toastHideTimer = win.setTimeout(() => {
+        toastEl.classList.remove('ueh-toast-on');
+      }, durationMs);
+    }
     console[level === 'error' ? 'error' : 'log']('[UEH]', message);
   }
 }

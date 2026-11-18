@@ -35,7 +35,10 @@ export class DOMAudioPlaybackController {
 
   constructor(private readonly playbackErrorMessage: string) {}
 
-  play(request: TTSPlaybackStartRequest): Promise<TTSPlaybackStartResponse> {
+  play(
+    request: TTSPlaybackStartRequest,
+    hostWin?: Window,
+  ): Promise<TTSPlaybackStartResponse> {
     this.stop({ reason: "interrupted" })
 
     return new Promise<TTSPlaybackStartResponse>((resolve, reject) => {
@@ -45,9 +48,13 @@ export class DOMAudioPlaybackController {
         const bytes = base64ToUint8Array(request.audioBase64)
         const audioBuffer = new ArrayBuffer(bytes.byteLength)
         new Uint8Array(audioBuffer).set(bytes)
-        const blob = new Blob([audioBuffer], { type: request.contentType })
-        const audioUrl = URL.createObjectURL(blob)
-        const audio = new Audio(audioUrl)
+        const win = hostWin && !hostWin.closed ? hostWin : window
+        const BlobCtor = (win as unknown as typeof globalThis).Blob ?? Blob
+        const UrlApi = (win as unknown as typeof globalThis).URL ?? URL
+        const AudioCtor = (win as unknown as typeof globalThis).Audio ?? Audio
+        const blob = new BlobCtor([audioBuffer], { type: request.contentType })
+        const audioUrl = UrlApi.createObjectURL(blob)
+        const audio = new AudioCtor(audioUrl)
 
         playback = {
           requestId: request.requestId,
@@ -79,6 +86,10 @@ export class DOMAudioPlaybackController {
         reject(toError(error, this.playbackErrorMessage))
       }
     })
+  }
+
+  isPlaying(): boolean {
+    return this.activePlayback !== null && !this.activePlayback.settled
   }
 
   stop(request: TTSPlaybackStopRequest = {}): boolean {

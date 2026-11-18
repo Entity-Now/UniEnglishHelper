@@ -120,6 +120,7 @@ export function buildPipStyles(opts: {
       border-left: 1px solid rgba(255,255,255,.1);
     }
     #ueh-pip-stage {
+      --ueh-chrome-h: 78px;
       position: relative;
       flex: 1 1 auto;
       min-width: 200px;
@@ -161,20 +162,21 @@ export function buildPipStyles(opts: {
 
     /* Bilingual subtitle layer */
     #ueh-sub-layer {
-      position: absolute; left: 0; right: 0; bottom: 78px;
+      position: absolute; left: 0; right: 0; bottom: var(--ueh-chrome-h, 78px);
       z-index: 10; display: flex; flex-direction: column;
       align-items: center; gap: 0;
       padding: 0 2%; pointer-events: none;
       box-sizing: border-box;
-      transition: padding-right .2s ease, padding-left .2s ease;
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      #ueh-sub-layer {
+        transition: padding-right .2s ease, padding-left .2s ease, bottom .15s ease;
+      }
     }
     #ueh-pip-root.ueh-word-open #ueh-sub-layer {
       padding-right: min(300px, 42%);
       padding-left: 12px;
       z-index: 10;
-    }
-    #ueh-pip-root.ueh-word-open #ueh-chrome {
-      z-index: 8;
     }
     #ueh-sub-card {
       display: flex;
@@ -296,26 +298,82 @@ export function buildPipStyles(opts: {
     }
     /* Gloss layout injected via #ueh-hl-style (buildHighlightCss) */
 
-    /* Bottom chrome */
+    /* Floating live-region toast (outside role="toolbar") */
+    #ueh-pip-toast {
+      position: absolute;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%) translateY(-6px);
+      z-index: 42;
+      margin: 0;
+      padding: 6px 12px;
+      max-width: min(88%, 420px);
+      border-radius: 999px;
+      background: rgba(16, 18, 26, 0.92);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+      backdrop-filter: blur(10px);
+      color: #f5f5f5;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1.35;
+      text-align: center;
+      pointer-events: none;
+      opacity: 0;
+      white-space: normal;
+      word-break: break-word;
+    }
+    #ueh-pip-toast:empty {
+      display: none;
+    }
+    #ueh-pip-toast.ueh-toast-on {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+    #ueh-pip-toast[data-level="warn"] {
+      border-color: oklch(78% 0.14 80 / 0.65);
+      color: oklch(92% 0.08 82);
+    }
+    #ueh-pip-toast[data-level="error"] {
+      border-color: rgba(255, 100, 100, 0.65);
+      color: #ffb4a9;
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      #ueh-pip-toast {
+        transition: opacity .16s ease, transform .16s ease;
+      }
+    }
+
+    /* Bottom chrome — strictly above #ueh-sub-layer (z-index: 10) so wrapped rows never lose clicks */
     #ueh-chrome {
-      position: absolute; left: 0; right: 0; bottom: 0; z-index: 8;
+      position: absolute; left: 0; right: 0; bottom: 0; z-index: 24;
       padding: 8px 10px 10px;
-      background: linear-gradient(180deg, transparent, rgba(0,0,0,.82) 40%);
+      background: linear-gradient(180deg, transparent, rgba(0,0,0,.86) 36%);
       opacity: 0;
       pointer-events: none;
-      transition: opacity .18s ease;
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      #ueh-chrome {
+        transition: opacity .18s ease;
+      }
     }
     #ueh-pip-root:hover #ueh-chrome,
     #ueh-pip-root.ueh-show-chrome #ueh-chrome,
+    #ueh-pip-root.ueh-paused #ueh-chrome,
     #ueh-chrome:focus-within {
       opacity: 1;
       pointer-events: auto;
     }
     #ueh-progress {
       -webkit-appearance: none; appearance: none;
-      width: 100%; height: 4px; border-radius: 999px;
-      background: rgba(255,255,255,.22); outline: none; cursor: pointer;
+      width: 100%; height: 5px; border-radius: 999px;
+      background: rgba(255,255,255,.24); cursor: pointer;
       margin: 0 0 8px;
+      accent-color: oklch(76% 0.12 82);
+    }
+    #ueh-progress:focus-visible {
+      outline: 2px solid oklch(82% 0.12 82);
+      outline-offset: 2px;
     }
     #ueh-progress::-webkit-slider-thumb {
       -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%;
@@ -324,40 +382,154 @@ export function buildPipStyles(opts: {
     #ueh-bar {
       display: flex; align-items: center; gap: 4px; flex-wrap: wrap; row-gap: 4px;
     }
-    @media (max-width: 520px) {
-      .ueh-ico { width: 28px; height: 28px; }
-      .ueh-ico svg { width: 15px; height: 15px; }
-      #ueh-time { min-width: 68px; font-size: 10px; }
-      .ueh-chip { padding: 3px 6px; font-size: 10px; }
+    .ueh-bar-group {
+      display: inline-flex; align-items: center; gap: 3px; flex-wrap: nowrap;
+    }
+    .ueh-sep {
+      display: inline-block;
+      inline-size: 0;
+      block-size: 16px;
+      border-inline-start: 1px solid rgba(255,255,255,.16);
+      margin-inline: 2px;
+      flex: 0 0 auto;
+    }
+    .ueh-vol-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding-inline-end: 2px;
+      border-radius: 8px;
+    }
+    #ueh-volume {
+      -webkit-appearance: none;
+      appearance: none;
+      inline-size: 0;
+      block-size: 4px;
+      margin: 0;
+      border-radius: 999px;
+      background: rgba(255,255,255,.28);
+      cursor: pointer;
+      opacity: 0;
+      overflow: visible;
+      pointer-events: none;
+      accent-color: oklch(76% 0.12 82);
+    }
+    #ueh-volume::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: #fff;
+      border: 0;
+      cursor: pointer;
+    }
+    .ueh-vol-wrap:hover #ueh-volume,
+    .ueh-vol-wrap:focus-within #ueh-volume,
+    .ueh-vol-wrap.ueh-vol-active #ueh-volume {
+      inline-size: 58px;
+      opacity: 1;
+      pointer-events: auto;
+      margin-inline-end: 2px;
+    }
+    @media (min-width: 640px) {
+      #ueh-volume {
+        inline-size: 52px;
+        opacity: 0.92;
+        pointer-events: auto;
+        margin-inline-end: 2px;
+      }
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      #ueh-volume {
+        transition: inline-size .16s ease, opacity .16s ease;
+      }
+    }
+    #ueh-volume:focus-visible {
+      outline: 2px solid oklch(82% 0.12 82);
+      outline-offset: 3px;
     }
     #ueh-time {
-      font-size: 11px; color: rgba(255,255,255,.8);
-      font-variant-numeric: tabular-nums; min-width: 84px;
-      margin-left: 4px;
+      font-size: 11px; color: rgba(255,255,255,.82);
+      font-variant-numeric: tabular-nums; min-inline-size: 74px;
+      margin-inline-start: 2px;
+      white-space: nowrap;
     }
-    .ueh-spacer { flex: 1; }
+    .ueh-spacer { flex: 1 1 4px; min-inline-size: 4px; }
     .ueh-ico {
-      width: 34px; height: 34px; border: 0; border-radius: 8px;
+      position: relative;
+      min-inline-size: 32px; min-block-size: 32px;
+      padding: 4px;
+      border: 1px solid transparent; border-radius: 8px;
       background: transparent; color: #fff; cursor: pointer;
       display: inline-flex; align-items: center; justify-content: center;
-      padding: 0;
+      box-sizing: border-box;
     }
-    .ueh-ico:hover { background: rgba(255,255,255,.12); }
-    .ueh-ico svg { width: 18px; height: 18px; fill: none; stroke: currentColor;
-      stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    @media (hover: hover) {
+      .ueh-ico:hover { background: rgba(255,255,255,.14); }
+      .ueh-chip:hover { background: rgba(255,255,255,.16); }
+    }
+    .ueh-ico:focus-visible,
+    .ueh-chip:focus-visible {
+      outline: 2px solid oklch(82% 0.12 82);
+      outline-offset: 2px;
+    }
+    .ueh-ico[aria-pressed="true"] {
+      background: color-mix(in srgb, oklch(76% 0.12 82) 26%, rgba(255,255,255,.1));
+      border-color: oklch(76% 0.12 82 / 0.72);
+      color: oklch(92% 0.08 82);
+    }
+    .ueh-ico.is-busy {
+      background: color-mix(in srgb, oklch(76% 0.12 82) 30%, rgba(255,255,255,.12));
+      border-color: oklch(76% 0.12 82 / 0.8);
+      color: oklch(92% 0.08 82);
+    }
+    .ueh-ico svg { width: 17px; height: 17px; fill: none; stroke: currentColor;
+      stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
     .ueh-ico.brand { color: oklch(82% 0.12 82); }
-    #ueh-status {
-      font-size: 10px; color: rgba(255,255,255,.55); margin-left: 6px;
-      max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    #ueh-rec-dot {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #ff5252;
+      box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.7);
+      display: none;
+      pointer-events: none;
+    }
+    #ueh-rec-dot.on { display: block; }
+    @media (max-width: 540px) {
+      .ueh-ico { min-inline-size: 28px; min-block-size: 28px; padding: 3px; }
+      .ueh-ico svg { width: 15px; height: 15px; }
+      #ueh-time { min-inline-size: 64px; font-size: 10px; }
+      .ueh-chip { min-block-size: 26px; padding: 2px 6px; font-size: 10px; }
+      .ueh-sep { opacity: 0; margin-inline: 0; }
+    }
+    @media (pointer: coarse) {
+      .ueh-ico { min-inline-size: 38px; min-block-size: 38px; }
+      .ueh-chip { min-block-size: 34px; padding: 4px 10px; }
+    }
+    @media (forced-colors: active) {
+      .ueh-ico, .ueh-chip {
+        color: ButtonText;
+        border-color: ButtonText;
+      }
+      .ueh-ico[aria-pressed="true"],
+      .ueh-chip[aria-pressed="true"] {
+        background: Highlight;
+        color: HighlightText;
+        border-color: Highlight;
+      }
     }
     /* Side dictionary panel — above cue list / chrome so it is never obscured */
     #ueh-word-panel {
       position: absolute;
       top: 10px;
       right: 10px;
-      bottom: 78px;
+      bottom: var(--ueh-chrome-h, 78px);
       width: min(${panelWidth}px, 46%);
-      z-index: 30;
+      z-index: 34;
       display: flex;
       flex-direction: column;
       gap: 0;
@@ -379,7 +551,7 @@ export function buildPipStyles(opts: {
       pointer-events: auto;
     }
     #ueh-pip-root.ueh-word-open.ueh-cue-list-open #ueh-word-panel {
-      z-index: 32;
+      z-index: 36;
     }
     #ueh-word-panel-head {
       display: flex; align-items: flex-start; gap: 6px;
@@ -568,29 +740,48 @@ export function buildPipStyles(opts: {
     }
     .ueh-recap-badge.on { display: block; }
 
-    /* Subtitle visibility toggles in chrome */
+    /* Subtitle visibility & speed chips in chrome */
     .ueh-chip {
-      border: 1px solid rgba(255,255,255,.18);
+      min-inline-size: 32px;
+      min-block-size: 28px;
+      border: 1px solid rgba(255,255,255,.2);
       background: rgba(255,255,255,.08);
-      color: rgba(255,255,255,.85);
+      color: rgba(255,255,255,.88);
       border-radius: 999px;
-      padding: 4px 8px;
-      font-size: 11px; font-weight: 600;
+      padding: 3px 8px;
+      font-size: 11px;
+      font-weight: 600;
       cursor: pointer;
       line-height: 1.2;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
+      white-space: nowrap;
     }
-    .ueh-chip:hover { background: rgba(255,255,255,.14); }
-    .ueh-chip.off {
-      opacity: 0.45;
+    .ueh-chip[aria-pressed="true"] {
+      background: color-mix(in srgb, oklch(76% 0.12 82) 26%, rgba(255,255,255,.1));
+      border-color: oklch(76% 0.12 82 / 0.78);
+      color: oklch(93% 0.06 82);
+    }
+    .ueh-chip[aria-pressed="false"] {
+      background: rgba(255,255,255,.04);
+      border-color: rgba(255,255,255,.14);
+      color: rgba(255,255,255,.46);
       text-decoration: line-through;
+    }
+    .ueh-rate-chip {
+      font-variant-numeric: tabular-nums;
+      min-inline-size: 34px;
+      padding: 3px 7px;
     }
 
     /* PiP subtitle settings panel */
     #ueh-pip-settings {
       position: absolute;
       right: 10px;
-      bottom: 78px;
-      z-index: 14;
+      bottom: var(--ueh-chrome-h, 78px);
+      z-index: 32;
       width: min(280px, 88vw);
       max-height: min(70%, 360px);
       overflow-x: hidden;
@@ -683,7 +874,14 @@ export const ICONS = {
   book:
     '<path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a2.5 2.5 0 0 1 0-5H20"/><path d="M8 11h8"/><path d="M8 7h6"/>',
   volume:
+    '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>',
+  volumeLow:
     '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>',
+  volumeMute:
+    '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/><line x1="22" y1="9" x2="16" y2="15"/><line x1="16" y1="9" x2="22" y2="15"/>',
+  /** Headphones icon for TTS sentence read-aloud — visually distinct from player volume */
+  tts:
+    '<path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3"/>',
   mic: '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/>',
   save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>',
 } as const;
@@ -693,9 +891,19 @@ export function iconButton(
   svgInner: string,
   title: string,
   extraClass = '',
+  opts?: {
+    pressed?: boolean;
+    ariaLabel?: string;
+    innerExtraHtml?: string;
+  },
 ): string {
-  return `<button type="button" class="ueh-ico ${extraClass}" data-act="${act}" title="${title}" aria-label="${title}">
-    <svg viewBox="0 0 24 24" aria-hidden="true">${svgInner}</svg>
+  const ariaLabel = opts?.ariaLabel ?? title;
+  const pressedAttr =
+    typeof opts?.pressed === 'boolean'
+      ? ` aria-pressed="${opts.pressed ? 'true' : 'false'}"`
+      : '';
+  return `<button type="button" class="ueh-ico ${extraClass}" data-act="${act}" title="${title}" aria-label="${ariaLabel}"${pressedAttr}>
+    <svg viewBox="0 0 24 24" aria-hidden="true">${svgInner}</svg>${opts?.innerExtraHtml ?? ''}
   </button>`;
 }
 
@@ -774,32 +982,142 @@ export function buildPipMarkup(): string {
         <div class="ueh-status" id="ueh-pip-settings-status"></div>
         <p class="ueh-hint">仅影响 PiP，与页内全屏字幕配置独立。</p>
       </div>
+      <p id="ueh-pip-toast" role="status" aria-live="polite"></p>
       <div id="ueh-chrome">
-        <input id="ueh-progress" type="range" min="0" max="1000" value="0" step="1" />
-        <div id="ueh-bar">
-          ${iconButton('play', ICONS.play, '播放/暂停')}
-          <span id="ueh-time">0:00 / 0:00</span>
-          <span class="ueh-spacer"></span>
-          <button type="button" class="ueh-chip" data-act="toggle-en" title="显示/隐藏原文字幕">原文</button>
-          <button type="button" class="ueh-chip" data-act="toggle-tr" title="显示/隐藏译文字幕">译文</button>
-          ${iconButton('prev', ICONS.prev, '上一句')}
-          ${iconButton('next', ICONS.next, '下一句')}
-          ${iconButton('translate', ICONS.translate, '翻译当前句', 'brand')}
-          ${iconButton('tts', ICONS.volume, '朗读')}
-          <span class="ueh-ico recap-wrap">
-            ${iconButton('recap', ICONS.book, '生词回顾')}
-            <span class="ueh-recap-badge" id="ueh-recap-badge"></span>
-          </span>
-          ${iconButton('list', ICONS.list, '字幕列表')}
-          ${iconButton('settings', ICONS.settings, 'PiP 字幕设置')}
-          ${iconButton('export', ICONS.save, '保存原声')}
-          <span id="ueh-status"></span>
+        <input id="ueh-progress" type="range" min="0" max="1000" value="0" step="1" aria-label="播放进度" />
+        <div id="ueh-bar" role="toolbar" focusgroup="toolbar wrap" aria-label="画中画播放与学习工具栏">
+          <div class="ueh-bar-group" role="group" aria-label="播放与音量">
+            ${iconButton('play', ICONS.play, '播放/暂停 (Space)', '', { ariaLabel: '播放或暂停' })}
+            <div class="ueh-vol-wrap">
+              ${iconButton('mute', ICONS.volume, '静音切换 (M) · 滚轮调节音量', '', {
+                pressed: false,
+                ariaLabel: '静音切换',
+              })}
+              <input id="ueh-volume" type="range" min="0" max="100" value="100" step="1" tabindex="-1" aria-label="音量调节" title="拖动或滚轮调节音量" />
+            </div>
+            <button type="button" class="ueh-chip ueh-rate-chip" data-act="rate" title="切换播放倍速" aria-label="切换播放倍速">1x</button>
+            <span id="ueh-time" aria-hidden="true">0:00 / 0:00</span>
+          </div>
+          <span class="ueh-spacer" aria-hidden="true"></span>
+          <div class="ueh-bar-group" role="group" aria-label="字幕显示切换">
+            <button type="button" class="ueh-chip" data-act="toggle-en" aria-pressed="true" title="显示/隐藏原文字幕" aria-label="显示原文字幕">原文</button>
+            <button type="button" class="ueh-chip" data-act="toggle-tr" aria-pressed="true" title="显示/隐藏译文字幕" aria-label="显示译文字幕">译文</button>
+          </div>
+          <span class="ueh-sep" role="separator" aria-orientation="vertical"></span>
+          <div class="ueh-bar-group" role="group" aria-label="单句学习操作">
+            ${iconButton('prev', ICONS.prev, '上一句 ([)', '', { ariaLabel: '上一句' })}
+            ${iconButton('next', ICONS.next, '下一句 (])', '', { ariaLabel: '下一句' })}
+            ${iconButton('translate', ICONS.translate, '翻译/重译当前句 (R)', 'brand', { ariaLabel: '翻译当前句' })}
+            ${iconButton('tts', ICONS.tts, '朗读当前句 (T)', '', { ariaLabel: '朗读当前句' })}
+            ${iconButton('export', ICONS.save, '保存当前句原声 (S)', '', {
+              ariaLabel: '保存当前句原声',
+              innerExtraHtml: '<span id="ueh-rec-dot" aria-hidden="true"></span>',
+            })}
+          </div>
+          <span class="ueh-sep" role="separator" aria-orientation="vertical"></span>
+          <div class="ueh-bar-group" role="group" aria-label="学习面板与设置">
+            ${iconButton('recap', ICONS.book, '本视频生词回顾', 'recap-wrap', {
+              pressed: false,
+              ariaLabel: '生词回顾面板',
+              innerExtraHtml: '<span class="ueh-recap-badge" id="ueh-recap-badge" aria-hidden="true"></span>',
+            })}
+            ${iconButton('list', ICONS.list, '完整字幕列表', '', {
+              pressed: false,
+              ariaLabel: '字幕列表面板',
+            })}
+            ${iconButton('settings', ICONS.settings, 'PiP 字幕设置', '', {
+              pressed: false,
+              ariaLabel: '字幕设置面板',
+            })}
+          </div>
         </div>
       </div>
       </div>
       <aside id="ueh-pip-cuelist-slot" aria-label="字幕列表"></aside>
     </div>
   `;
+}
+
+/**
+ * Roving-tabindex fallback for `role="toolbar"` when native `focusgroup`
+ * (`'focusGroup' in HTMLElement.prototype`) is not supported by the browser.
+ */
+export function bindToolbarFocusgroupFallback(
+  bar: HTMLElement,
+  win: Window = window,
+): () => void {
+  const HtmlElProto =
+    (win as unknown as { HTMLElement?: { prototype?: object } }).HTMLElement
+      ?.prototype ?? HTMLElement.prototype;
+  if ('focusGroup' in HtmlElProto) {
+    return () => undefined;
+  }
+
+  const getItems = () =>
+    Array.from(bar.querySelectorAll<HTMLButtonElement>('button'));
+
+  const initItems = getItems();
+  initItems.forEach((b, i) => {
+    b.tabIndex = i === 0 ? 0 : -1;
+  });
+
+  const onFocusIn = (e: FocusEvent) => {
+    const target = (e.target as HTMLElement | null)?.closest?.('button') as
+      | HTMLButtonElement
+      | null
+      | undefined;
+    const items = getItems();
+    if (target && items.includes(target)) {
+      items.forEach((b) => {
+        b.tabIndex = b === target ? 0 : -1;
+      });
+    }
+  };
+
+  const onKeyDown = (e: KeyboardEvent) => {
+    const activeBtn = (e.target as HTMLElement | null)?.closest?.('button') as
+      | HTMLButtonElement
+      | null
+      | undefined;
+    const items = getItems();
+    if (!activeBtn || !items.includes(activeBtn) || items.length === 0) return;
+
+    const vertical = bar.getAttribute('aria-orientation') === 'vertical';
+    const rtl =
+      !vertical &&
+      (win.getComputedStyle?.(bar)?.direction ??
+        getComputedStyle(bar).direction) === 'rtl';
+    const steps: Record<string, number> = vertical
+      ? { ArrowDown: 1, ArrowUp: -1 }
+      : { ArrowRight: rtl ? -1 : 1, ArrowLeft: rtl ? 1 : -1 };
+
+    let nextIdx = -1;
+    const curIdx = items.indexOf(activeBtn);
+    if (e.key in steps) {
+      nextIdx = (curIdx + steps[e.key]! + items.length) % items.length;
+    } else if (e.key === 'Home') {
+      nextIdx = 0;
+    } else if (e.key === 'End') {
+      nextIdx = items.length - 1;
+    }
+
+    if (nextIdx >= 0) {
+      e.preventDefault();
+      const next = items[nextIdx]!;
+      items.forEach((b) => {
+        b.tabIndex = b === next ? 0 : -1;
+      });
+      next.focus();
+    }
+  };
+
+  bar.addEventListener('focusin', onFocusIn);
+  bar.addEventListener('keydown', onKeyDown);
+
+  return () => {
+    bar.removeEventListener('focusin', onFocusIn);
+    bar.removeEventListener('keydown', onKeyDown);
+  };
 }
 
 export function formatTime(sec: number): string {

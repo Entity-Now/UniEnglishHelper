@@ -13,6 +13,10 @@
 export type MirrorHandle = {
   mode: 'av-mirror' | 'video-only' | 'none';
   stop: () => void;
+  getAudioState?: () => { volume: number; muted: boolean };
+  setAudioState?: (opts: { volume?: number; muted?: boolean }) => void;
+  resumePlayback?: () => void;
+  requestFrame?: () => void;
 };
 
 /** Max long-edge for mirror canvas (saves GPU on 1080p/4K sources). */
@@ -109,12 +113,16 @@ type DrawLoopOpts = {
   onResizeNeed?: () => void;
 };
 
-function startCappedDrawLoop(opts: DrawLoopOpts): () => void {
+function startCappedDrawLoop(opts: DrawLoopOpts): {
+  stop: () => void;
+  requestFrame: () => void;
+} {
   const { animWindow, source, draw, onResizeNeed } = opts;
   let raf = 0;
   let stopped = false;
   let lastDraw = 0;
   let lastPaused = true; // force one paint on start
+  let forceNextFrame = true;
 
   const schedule = (cb: FrameRequestCallback) => {
     try {
@@ -134,6 +142,7 @@ function startCappedDrawLoop(opts: DrawLoopOpts): () => void {
   const paint = (now: number) => {
     if (stopped) return;
     lastDraw = now;
+    forceNextFrame = false;
     try {
       const vw = source.videoWidth;
       const vh = source.videoHeight;
@@ -146,25 +155,37 @@ function startCappedDrawLoop(opts: DrawLoopOpts): () => void {
     }
   };
 
+  const requestFrame = () => {
+    forceNextFrame = true;
+  };
+
+  source.addEventListener('seeked', requestFrame);
+  source.addEventListener('loadeddata', requestFrame);
+
   const tick = (now: number) => {
     if (stopped) return;
     const paused = source.paused;
     if (paused) {
-      // One cover frame when entering pause / first frame; then idle lightly
-      if (!lastPaused || lastDraw === 0) paint(now);
+      // Repaint when entering pause, on initial mount, or after seeking while paused
+      if (!lastPaused || lastDraw === 0 || forceNextFrame) paint(now);
       lastPaused = true;
     } else {
       lastPaused = false;
-      if (now - lastDraw >= FRAME_MS - 1) paint(now);
+      if (forceNextFrame || now - lastDraw >= FRAME_MS - 1) paint(now);
     }
     raf = schedule(tick);
   };
 
   raf = schedule(tick);
 
-  return () => {
-    stopped = true;
-    cancel(raf);
+  return {
+    stop: () => {
+      stopped = true;
+      source.removeEventListener('seeked', requestFrame);
+      source.removeEventListener('loadeddata', requestFrame);
+      cancel(raf);
+    },
+    requestFrame,
   };
 }
 
@@ -202,7 +223,7 @@ export function startVideoMirror(
       let lastH = size.h;
       let resizeAccum = 0;
 
-      const stopLoop = startCappedDrawLoop({
+      const loopCtrl = startCappedDrawLoop({
         // Page canvas must be drawn from page context for captureStream
         animWindow: window,
         source,
@@ -237,7 +258,10 @@ export function startVideoMirror(
       pipVideo.playsInline = true;
       pipVideo.setAttribute('playsinline', 'true');
       const hasAudio = audioTracks.length > 0;
-      pipVideo.muted = !hasAudio;
+      let userMuted = wasMuted;
+      let userVolume = Number.isFinite(wasVolume) ? Math.max(0, Math.min(1, wasVolume)) : 1;
+      pipVideo.volume = userVolume;
+      pipVideo.muted = !hasAudio || userMuted;
       pipVideo.srcObject = combined;
       pipVideo.style.cssText =
         'width:100%;height:100%;object-fit:contain;background:#000;display:block;';
@@ -266,6 +290,7 @@ export function startVideoMirror(
             ctx.imageSmoothingEnabled = true;
             ctx.imageSmoothingQuality = 'low';
           }
+          loopCtrl.requestFrame();
         });
         ro.observe(slot);
       } catch {
@@ -274,8 +299,41 @@ export function startVideoMirror(
 
       return {
         mode: hasAudio ? 'av-mirror' : 'video-only',
+        getAudioState: () =>
+          hasAudio
+            ? { volume: userVolume, muted: userMuted }
+            : { volume: source.volume, muted: source.muted },
+        setAudioState: (opts) => {
+          if (typeof opts.volume === 'number' && Number.isFinite(opts.volume)) {
+            userVolume = Math.max(0, Math.min(1, opts.volume));
+          }
+          if (typeof opts.muted === 'boolean') {
+            userMuted = opts.muted;
+          }
+          if (hasAudio) {
+            pipVideo.volume = userVolume;
+            pipVideo.muted = userMuted;
+            // Keep source muted so opener tab never echoes
+            if (!source.muted) {
+              try {
+                source.muted = true;
+              } catch {
+                // ignore
+              }
+            }
+          } else {
+            source.volume = userVolume;
+            source.muted = userMuted;
+          }
+        },
+        resumePlayback: () => {
+          if (pipVideo.paused) {
+            void pipVideo.play().catch(() => undefined);
+          }
+        },
+        requestFrame: loopCtrl.requestFrame,
         stop: () => {
-          stopLoop();
+          loopCtrl.stop();
           ro?.disconnect();
           try {
             pipVideo.pause();
@@ -291,8 +349,8 @@ export function startVideoMirror(
             // ignore
           }
           try {
-            source.muted = wasMuted;
-            source.volume = wasVolume;
+            source.muted = hasAudio ? userMuted : source.muted;
+            source.volume = hasAudio ? userVolume : source.volume;
           } catch {
             // ignore
           }
@@ -348,7 +406,7 @@ export function startVideoMirror(
     }
 
     // Drive from PiP window so FPS stays high while the opener tab is backgrounded
-    const stopLoop = startCappedDrawLoop({
+    const loopCtrl = startCappedDrawLoop({
       animWindow: pipWindow,
       source,
       draw: () => {
@@ -358,8 +416,21 @@ export function startVideoMirror(
 
     return {
       mode: 'video-only',
+      getAudioState: () => ({
+        volume: source.volume,
+        muted: source.muted,
+      }),
+      setAudioState: (opts) => {
+        if (typeof opts.volume === 'number' && Number.isFinite(opts.volume)) {
+          source.volume = Math.max(0, Math.min(1, opts.volume));
+        }
+        if (typeof opts.muted === 'boolean') {
+          source.muted = opts.muted;
+        }
+      },
+      requestFrame: loopCtrl.requestFrame,
       stop: () => {
-        stopLoop();
+        loopCtrl.stop();
         ro?.disconnect();
         canvas.remove();
       },

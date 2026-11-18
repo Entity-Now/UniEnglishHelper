@@ -113,6 +113,56 @@ export class CueTranslateScheduler {
     }
   }
 
+  /**
+   * Explicitly translate/re-translate cues on user demand (e.g. PiP "翻译当前句"),
+   * bypassing empty-check and returning outcome for UI feedback.
+   */
+  async translateForce(
+    cues: SubtitleCue[],
+  ): Promise<{ ok: boolean; count: number; error?: string }> {
+    const valid = cues.filter((c) => Boolean(c?.text?.trim()));
+    if (!valid.length) return { ok: false, count: 0, error: '当前没有可翻译的字幕文本' };
+    const gen = this.generation;
+    const config = this.hooks.getConfig();
+    try {
+      const res = await sendRuntime<{ items: { id: string; text: string }[] }>(
+        'translate.cues',
+        {
+          cues: valid.map((c) => ({ id: c.id, text: c.text })),
+          src: config.sourceLang,
+          dst: config.targetLang,
+        },
+        'content',
+      );
+      if (gen !== this.generation) return { ok: false, count: 0 };
+      if (!res.ok) {
+        return {
+          ok: false,
+          count: 0,
+          error: res.error?.message || '翻译请求失败',
+        };
+      }
+      let count = 0;
+      for (const item of res.data.items) {
+        const text = item.text?.trim();
+        if (!text) continue;
+        this.retries.delete(item.id);
+        this.apply(item.id, text);
+        count++;
+      }
+      if (count === 0) {
+        return { ok: false, count: 0, error: '翻译服务返回为空' };
+      }
+      return { ok: true, count };
+    } catch (err) {
+      return {
+        ok: false,
+        count: 0,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
   private scheduleRetries(cues: SubtitleCue[], gen = this.generation): void {
     if (gen !== this.generation) return;
     for (const c of cues) {
