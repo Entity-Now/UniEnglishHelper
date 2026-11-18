@@ -7,6 +7,14 @@ import { getConfig } from './config';
 import { updateWordTranslation, updateWordTranslationBySurface } from '../../db';
 
 export function handleWordStreamPort(port: chrome.runtime.Port): void {
+  const ac = new AbortController();
+  let disconnected = false;
+
+  port.onDisconnect.addListener(() => {
+    disconnected = true;
+    ac.abort();
+  });
+
   port.onMessage.addListener(async (msg: StreamPortClientMessage) => {
     if (!msg || msg.type !== 'word.explain') return;
     const { requestId, word, surface, context, forceLlm, timeoutMs, id } = msg;
@@ -21,11 +29,13 @@ export function handleWordStreamPort(port: chrome.runtime.Port): void {
         accumulated: '',
       } satisfies StreamPortServerMessage);
     } catch {
+      ac.abort();
       return;
     }
 
     try {
       const config = await getConfig();
+      if (disconnected) return;
       const result = await explainWord(
         config,
         wordSurface,
@@ -34,7 +44,9 @@ export function handleWordStreamPort(port: chrome.runtime.Port): void {
           forceLlm: Boolean(forceLlm),
           resetCircuit: Boolean(forceLlm),
           timeoutMs,
+          signal: ac.signal,
           onChunk: (chunk, accumulated) => {
+            if (disconnected) return;
             try {
               port.postMessage({
                 type: 'chunk',
@@ -43,11 +55,14 @@ export function handleWordStreamPort(port: chrome.runtime.Port): void {
                 accumulated,
               } satisfies StreamPortServerMessage);
             } catch {
-              // Port disconnected
+              disconnected = true;
+              ac.abort();
             }
           },
         },
       );
+
+      if (disconnected) return;
 
       let updatedWord = null;
       if (id != null) {
@@ -74,18 +89,21 @@ export function handleWordStreamPort(port: chrome.runtime.Port): void {
         word: updatedWord,
       };
 
-      port.postMessage({
-        type: 'done',
-        requestId,
-        result: formatted,
-      } satisfies StreamPortServerMessage);
-    } catch (err: any) {
+      if (!disconnected) {
+        port.postMessage({
+          type: 'done',
+          requestId,
+          result: formatted,
+        } satisfies StreamPortServerMessage);
+      }
+    } catch (err: unknown) {
+      if (disconnected || ac.signal.aborted) return;
       try {
         port.postMessage({
           type: 'error',
           requestId,
           code: 'EXPLAIN_FAILED',
-          message: err?.message || String(err),
+          message: err instanceof Error ? err.message : String(err),
         } satisfies StreamPortServerMessage);
       } catch {
         // Port disconnected

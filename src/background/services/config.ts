@@ -269,7 +269,23 @@ export async function getConfig(): Promise<AppConfig> {
   return merged;
 }
 
-export async function setConfig(
+let configWriteChain: Promise<unknown> = Promise.resolve();
+
+export function setConfig(
+  partial: Partial<AppConfig>,
+): Promise<AppConfig> {
+  const op = configWriteChain.then(
+    () => applySetConfig(partial),
+    () => applySetConfig(partial),
+  );
+  configWriteChain = op.then(
+    () => undefined,
+    () => undefined,
+  );
+  return op;
+}
+
+async function applySetConfig(
   partial: Partial<AppConfig>,
 ): Promise<AppConfig> {
   const current = await getConfig();

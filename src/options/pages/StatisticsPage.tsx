@@ -36,7 +36,7 @@ export function StatisticsPage() {
     if (res.ok) setStats(res.data);
     const w = await sendRuntime<WordRecord[]>(
       'word.list',
-      { limit: 500 },
+      { limit: 0 },
       'options',
     );
     if (w.ok) setWords(w.data);
@@ -179,7 +179,7 @@ export function StatisticsPage() {
                 style={{
                   flex: 1,
                   height: 10,
-                  background: '#21262d',
+                  background: 'var(--rf-secondary)',
                   borderRadius: 999,
                   overflow: 'hidden',
                 }}
@@ -244,17 +244,9 @@ export function StatisticsPage() {
 
 function Stat(props: { label: string; value: string }) {
   return (
-    <div
-      style={{
-        background: '#0d1117',
-        borderRadius: 8,
-        padding: 12,
-        border: '1px solid #30363d',
-        minWidth: 100,
-      }}
-    >
-      <div className="muted">{props.label}</div>
-      <div style={{ fontSize: 22, fontWeight: 600 }}>{props.value}</div>
+    <div className="metric" style={{ minWidth: 100 }}>
+      <div className="label">{props.label}</div>
+      <div className="value">{props.value}</div>
     </div>
   );
 }

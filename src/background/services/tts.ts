@@ -241,32 +241,26 @@ async function synthesizeOneChunk(
     audio = http.audio;
     contentType = http.contentType || 'audio/mpeg';
   } catch (httpErr) {
-    try {
-      // Fallback: whole-module synthesize (still one chunk of text)
-      const whole = await synthesizeEdgeTTS(request);
-      if (!whole.ok) throw new Error(whole.error.message);
-      audio = whole.audio;
-      contentType = whole.contentType || 'audio/mpeg';
-    } catch {
-      // Last resort: WebSocket Edge Read Aloud
-      const blob = await synthesizeEdgeTts({
-        text,
-        voice,
-        rate,
-        pitch,
-        volume,
-      });
-      audio = await blob.arrayBuffer();
-      contentType = 'audio/mpeg';
-      void httpErr;
-    }
+    // Fallback directly to WebSocket Edge Read Aloud (avoid duplicating the same HTTP retry loop)
+    const blob = await synthesizeEdgeTts({
+      text,
+      voice,
+      rate,
+      pitch,
+      volume,
+    });
+    audio = await blob.arrayBuffer();
+    contentType = 'audio/mpeg';
+    void httpErr;
   }
 
   if (!audio || audio.byteLength === 0) {
     throw new AppError('TTS_FAILED', 'Edge TTS returned empty audio data');
   }
 
+  const existing = await db.tts_cache.where('key').equals(key).first();
   await db.tts_cache.put({
+    ...(existing?.id != null ? { id: existing.id } : {}),
     key,
     blob: new Blob([audio], { type: contentType }),
     mimeType: contentType,

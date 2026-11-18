@@ -2,7 +2,9 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import type { AppConfig, ReviewResult } from '../../shared/domain/types';
 import type { WordRecord, SkillRecord } from '../../db/schema';
 import { sendRuntime } from '../../shared/messaging/client';
-import { marked } from 'marked';
+import { hasLlmCredentials } from '../../api/ai-provider';
+import { SafeMarkdown } from '../../components/safe-markdown';
+import { speakTextSmart } from '../../utils/tts-playback/speak';
 import {
   BUILTIN_SKILL_IDS,
   DEFAULT_STUDY_SKILL_PROMPT,
@@ -56,9 +58,9 @@ type ListSort = 'newest' | 'oldest' | 'alpha' | 'due';
 type StatusFilter = 'all' | 'new' | 'learning' | 'learned' | 'due';
 
 function statusLabel(w: WordRecord): string {
-  if (w.nextReviewAt <= Date.now()) return '待复习';
   const s = w.learningStatus ?? 'new';
   if (s === 'learned' || w.reviewStage >= 4) return '已掌握';
+  if (w.nextReviewAt <= Date.now()) return '待复习';
   if (s === 'learning' || w.reviewStage > 0) return '学习中';
   return '新词';
 }
@@ -94,6 +96,7 @@ export function StudyPage({
   /** Snapshot for active session (keeps AI explanations stable). */
   const [sessionWords, setSessionWords] = useState<WordRecord[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [revealed, setRevealed] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [retranslatingId, setRetranslatingId] = useState<number | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -104,8 +107,7 @@ export function StudyPage({
   const selectionInitialized = useRef(false);
 
   const providerId = config.ai.providerId;
-  const apiKey = config.ai.apiKeys[providerId];
-  const isAiConfigured = !!apiKey;
+  const isAiConfigured = hasLlmCredentials(config);
 
   const handleRetranslate = async (w: WordRecord) => {
     if (w.id == null) return;
@@ -209,7 +211,8 @@ export function StudyPage({
     if (statusFilter !== 'all') {
       const t = Date.now();
       list = list.filter((w) => {
-        if (statusFilter === 'due') return w.nextReviewAt <= t;
+        if (statusFilter === 'due')
+          return (w.learningStatus ?? 'new') !== 'learned' && w.nextReviewAt <= t;
         if (statusFilter === 'new')
           return (w.learningStatus ?? 'new') === 'new' && w.reviewStage === 0;
         if (statusFilter === 'learning')
@@ -369,12 +372,24 @@ export function StudyPage({
     if (studyList.length === 0) return;
 
     abortRef.current = false;
-    // Deep-enough snapshot for this session
     const queue = studyList.map((w) => ({ ...w }));
     setSessionWords(queue);
+    setAnalysisError(null);
+
+    // If AI is not configured (or every selected word already has an AI explanation),
+    // jump straight into flashcard review without blocking the user.
+    const needsAiAnalysis =
+      isAiConfigured && queue.some((w) => !w.explanation?.trim());
+    if (!needsAiAnalysis) {
+      setIsAnalyzing(false);
+      setIsStudying(true);
+      setCurrentIndex(0);
+      setRevealed(false);
+      return;
+    }
+
     setIsAnalyzing(true);
     setAnalysisProgress(0);
-    setAnalysisError(null);
 
     const studySkill = await resolveStudySkill();
     if (!studySkill) {
@@ -453,56 +468,72 @@ export function StudyPage({
     setIsAnalyzing(false);
     setIsStudying(true);
     setCurrentIndex(0);
+    setRevealed(false);
   };
 
   const handleStop = () => {
     setIsStudying(false);
     setIsAnalyzing(false);
+    setRevealed(false);
     setSessionWords([]);
     abortRef.current = true;
     void onRefresh({ silent: true });
   };
 
   const handleSpeak = (text: string) => {
-    void (async () => {
-      const chunksRes = await sendRuntime<{
-        chunks: Array<{ audioBase64: string; contentType: string }>;
-      }>('tts.synthChunks', { text }, 'options');
-      if (chunksRes.ok && chunksRes.data.chunks?.length) {
-        const { playTtsAudioChunks, stopTtsPlayback } = await import(
-          '../../utils/tts-playback/play-chunks'
-        );
-        stopTtsPlayback();
-        await playTtsAudioChunks(chunksRes.data.chunks);
-        return;
-      }
-      if ('speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-        const u = new SpeechSynthesisUtterance(text);
-        u.lang = 'en-US';
-        window.speechSynthesis.speak(u);
-      }
-    })();
+    void speakTextSmart(text, 'options');
   };
 
-  const handleReview = async (result: ReviewResult) => {
-    if (activeWord?.id == null) return;
+  const handleReview = useCallback(async (result: ReviewResult, wordId?: number) => {
+    if (wordId == null) return;
     await sendRuntime(
       'word.updateReview',
-      { id: activeWord.id, result },
+      { id: wordId, result },
       'options',
     );
+    setRevealed(false);
     setCurrentIndex((prev) => prev + 1);
-  };
+  }, []);
 
   const activeWord = activeList[currentIndex];
   const sessionLen = activeList.length;
+
+  useEffect(() => {
+    if (!isStudying || !activeWord) return;
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.code === 'Space' || e.key === 'Enter') {
+        if (!revealed) {
+          e.preventDefault();
+          setRevealed(true);
+        }
+        return;
+      }
+      if (!revealed) return;
+      if (e.key === '1') {
+        e.preventDefault();
+        void handleReview('again', activeWord.id);
+      } else if (e.key === '2') {
+        e.preventDefault();
+        void handleReview('hard', activeWord.id);
+      } else if (e.key === '3') {
+        e.preventDefault();
+        void handleReview('good', activeWord.id);
+      } else if (e.key === '4') {
+        e.preventDefault();
+        void handleReview('easy', activeWord.id);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isStudying, activeWord, revealed, handleReview]);
 
   if (isAnalyzing) {
     return (
       <div style={{ textAlign: 'center', padding: '40px 20px' }}>
         <div style={{ fontSize: '48px', marginBottom: '16px' }}>🤖</div>
-        <h2 style={{ fontSize: '20px', fontWeight: 'bold', color: '#fff' }}>
+        <h2 style={{ fontSize: '20px', fontWeight: 'bold', color: 'var(--rf-foreground)' }}>
           AI 助教正在为您分析单词...
         </h2>
         <p className="muted" style={{ margin: '8px 0 24px 0', fontSize: '13px' }}>
@@ -600,24 +631,22 @@ export function StudyPage({
           <div
             className="card"
             style={{
-              borderColor: '#f87171',
-              background: 'rgba(239, 68, 68, 0.08)',
-              color: '#f87171',
+              borderColor: 'color-mix(in srgb, var(--rf-brand) 50%, var(--rf-border))',
+              background: 'color-mix(in srgb, var(--rf-brand) 8%, var(--rf-card))',
             }}
           >
-            <h3 style={{ margin: '0 0 6px' }}>⚠️ 尚未配置 AI 功能</h3>
-            <p style={{ margin: '0 0 12px', fontSize: 13, opacity: 0.9 }}>
-              此功能需要 API Key。请先前往翻译设置配置。
+            <h3 style={{ margin: '0 0 6px' }}>💡 当前使用基础闪卡模式（未配置 AI）</h3>
+            <p className="muted" style={{ margin: '0 0 12px', fontSize: 13 }}>
+              您仍可直接使用已保存的单词释义与上下文开始闪卡复习；如需 AI 自动生成词根词缀深度解析，可配置 API Key 或本地 Ollama。
             </p>
             <button
               type="button"
-              className="primary"
-              style={{ background: '#ef4444', border: 'none' }}
+              className="ghost"
               onClick={() => {
                 window.location.hash = '#/translation';
               }}
             >
-              去配置 AI Key
+              去配置 AI / 本地模型
             </button>
           </div>
         )}
@@ -975,7 +1004,6 @@ export function StudyPage({
               type="button"
               className="primary"
               disabled={
-                !isAiConfigured ||
                 selectedCount === 0 ||
                 customInvalid ||
                 refreshing
@@ -1096,23 +1124,6 @@ export function StudyPage({
           </div>
         )}
 
-        {activeWord.translation && (
-          <div
-            style={{
-              background: 'rgba(255,255,255,.03)',
-              border: '1px solid var(--rf-border)',
-              padding: '8px 12px',
-              borderRadius: 'var(--rf-radius)',
-              display: 'inline-block',
-              fontSize: '13px',
-              margin: '0 auto 20px auto',
-              maxWidth: '90%',
-            }}
-          >
-            <strong>释义快照:</strong> {activeWord.translation}
-          </div>
-        )}
-
         {activeWord.context && (
           <div
             style={{
@@ -1120,121 +1131,157 @@ export function StudyPage({
               marginTop: '16px',
               padding: '12px',
               borderLeft: '3px solid var(--rf-brand)',
-              background: 'rgba(255,255,255, .02)',
+              background: 'var(--rf-secondary)',
               fontSize: '13px',
-              borderRadius: '0 4px 4px 0',
+              borderRadius: '0 6px 6px 0',
               marginBottom: '20px',
             }}
           >
             <div style={{ opacity: 0.8, fontWeight: 600, marginBottom: '4px' }}>
-              保存时的上下文：
+              语境原句：
             </div>
-            <div style={{ fontStyle: 'italic', lineHeight: 1.4 }}>
+            <div style={{ fontStyle: 'italic', lineHeight: 1.45 }}>
               &quot;{activeWord.context}&quot;
             </div>
-            {activeWord.contextTranslation && (
-              <div className="muted" style={{ marginTop: '4px', fontSize: '12px' }}>
-                (翻译: {activeWord.contextTranslation})
+            {revealed && activeWord.contextTranslation && (
+              <div className="muted" style={{ marginTop: '6px', fontSize: '12px' }}>
+                译文：{activeWord.contextTranslation}
               </div>
             )}
           </div>
         )}
 
-        <div
-          style={{
-            marginTop: '20px',
-            borderTop: '1px solid var(--rf-border)',
-            paddingTop: '20px',
-            textAlign: 'left',
-          }}
-        >
-          <div
-            className="study-explanation-container"
-            dangerouslySetInnerHTML={{
-              __html: marked.parse(activeWord.explanation || '_暂无解析_') as string,
-            }}
-          />
-        </div>
+        {!revealed ? (
+          <div style={{ margin: '36px auto 12px', textAlign: 'center' }}>
+            <p className="muted" style={{ marginBottom: 16, fontSize: 13 }}>
+              先回想该词在上方语境中的含义，再翻面核对答案
+            </p>
+            <button
+              type="button"
+              className="primary"
+              style={{ padding: '12px 32px', fontSize: 15 }}
+              onClick={() => setRevealed(true)}
+            >
+              显示答案（Space）
+            </button>
+          </div>
+        ) : (
+          <>
+            {activeWord.translation && (
+              <div
+                style={{
+                  background: 'color-mix(in srgb, var(--rf-brand) 12%, var(--rf-card))',
+                  border: '1px solid color-mix(in srgb, var(--rf-brand) 40%, var(--rf-border))',
+                  padding: '10px 16px',
+                  borderRadius: 'var(--rf-radius)',
+                  display: 'inline-block',
+                  fontSize: '15px',
+                  fontWeight: 600,
+                  margin: '0 auto 16px auto',
+                  maxWidth: '90%',
+                }}
+              >
+                {activeWord.translation}
+              </div>
+            )}
+
+            <div
+              style={{
+                marginTop: '16px',
+                borderTop: '1px solid var(--rf-border)',
+                paddingTop: '18px',
+                textAlign: 'left',
+              }}
+            >
+              <SafeMarkdown
+                className="study-explanation-container"
+                markdown={activeWord.explanation || '_暂无深度解析_'}
+              />
+            </div>
+          </>
+        )}
       </div>
 
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          gap: '12px',
-          marginTop: '24px',
-          flexWrap: 'wrap',
-        }}
-      >
-        <button
-          type="button"
-          onClick={() => void handleReview('again')}
+      {revealed && (
+        <div
           style={{
-            flex: 1,
-            padding: '12px',
-            background: '#ef4444',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 'var(--rf-radius)',
-            fontWeight: 'bold',
-            cursor: 'pointer',
-            minWidth: '100px',
+            display: 'flex',
+            justifyContent: 'space-between',
+            gap: '12px',
+            marginTop: '24px',
+            flexWrap: 'wrap',
           }}
         >
-          Again (忘光了)
-        </button>
-        <button
-          type="button"
-          onClick={() => void handleReview('hard')}
-          style={{
-            flex: 1,
-            padding: '12px',
-            background: '#f59e0b',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 'var(--rf-radius)',
-            fontWeight: 'bold',
-            cursor: 'pointer',
-            minWidth: '100px',
-          }}
-        >
-          Hard (模糊)
-        </button>
-        <button
-          type="button"
-          onClick={() => void handleReview('good')}
-          style={{
-            flex: 1,
-            padding: '12px',
-            background: 'oklch(76.034% 0.12361 82.191)',
-            color: '#1a1a1a',
-            border: 'none',
-            borderRadius: 'var(--rf-radius)',
-            fontWeight: 'bold',
-            cursor: 'pointer',
-            minWidth: '100px',
-          }}
-        >
-          Good (记得)
-        </button>
-        <button
-          type="button"
-          onClick={() => void handleReview('easy')}
-          style={{
-            flex: 1,
-            padding: '12px',
-            background: '#10b981',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 'var(--rf-radius)',
-            fontWeight: 'bold',
-            cursor: 'pointer',
-            minWidth: '100px',
-          }}
-        >
-          Easy (秒杀)
-        </button>
-      </div>
+          <button
+            type="button"
+            onClick={() => void handleReview('again', activeWord.id)}
+            style={{
+              flex: 1,
+              padding: '12px',
+              background: '#ef4444',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 'var(--rf-radius)',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              minWidth: '100px',
+            }}
+          >
+            1 · Again (忘光了)
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleReview('hard', activeWord.id)}
+            style={{
+              flex: 1,
+              padding: '12px',
+              background: '#f59e0b',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 'var(--rf-radius)',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              minWidth: '100px',
+            }}
+          >
+            2 · Hard (模糊)
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleReview('good', activeWord.id)}
+            style={{
+              flex: 1,
+              padding: '12px',
+              background: 'oklch(76.034% 0.12361 82.191)',
+              color: '#1a1a1a',
+              border: 'none',
+              borderRadius: 'var(--rf-radius)',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              minWidth: '100px',
+            }}
+          >
+            3 · Good (记得)
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleReview('easy', activeWord.id)}
+            style={{
+              flex: 1,
+              padding: '12px',
+              background: '#10b981',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 'var(--rf-radius)',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              minWidth: '100px',
+            }}
+          >
+            4 · Easy (秒杀)
+          </button>
+        </div>
+      )}
     </div>
   );
 }

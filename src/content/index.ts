@@ -35,18 +35,21 @@ import {
   WebpageTranslateController,
   WebpageTranslateFloatingButton,
 } from './webpage-translate';
+import { speakTextSmart } from '../utils/tts-playback/speak';
 
 declare global {
   interface Window {
     __UEH_CONTENT_LOADED__?: boolean;
+    __UEH_EXT_RUNTIME_ID__?: string;
   }
 }
 
-if (window.__UEH_CONTENT_LOADED__) {
-  // Re-injected: attach fresh runtime listeners for the updated extension context
-  void main();
+const currentRuntimeId = chrome.runtime?.id ?? 'ueh';
+if (window.__UEH_CONTENT_LOADED__ && window.__UEH_EXT_RUNTIME_ID__ === currentRuntimeId) {
+  // Already loaded in this extension context — do not attach duplicate runtime listeners
 } else {
   window.__UEH_CONTENT_LOADED__ = true;
+  window.__UEH_EXT_RUNTIME_ID__ = currentRuntimeId;
   void main();
 }
 
@@ -618,18 +621,7 @@ async function refreshPageRecapBadge(): Promise<void> {
 }
 
 async function speakPageWord(text: string): Promise<void> {
-  const res = await sendRuntime<{
-    mode: string;
-    text?: string;
-    voice?: string;
-  }>('tts.synth', { text }, 'content');
-  if (!res.ok) return;
-  if (res.data.mode === 'web-speech' && res.data.text) {
-    const u = new SpeechSynthesisUtterance(res.data.text);
-    u.lang = res.data.voice || 'en-US';
-    speechSynthesis.cancel();
-    speechSynthesis.speak(u);
-  }
+  await speakTextSmart(text, 'content');
 }
 
 function togglePageVocabRecap(): void {
@@ -664,6 +656,7 @@ function togglePageVocabRecap(): void {
           },
           cueTr,
           targetEl,
+          config.wordShow?.autoExplain !== false,
         );
       },
       onTts: (surface) => {
@@ -724,6 +717,7 @@ function togglePageCueList(): void {
           },
           cueTr,
           targetEl,
+          config.wordShow?.autoExplain !== false,
         );
       }
     );

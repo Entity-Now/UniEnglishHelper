@@ -19,8 +19,10 @@ export const ALL_HOST_ORIGINS: string[] = [
   'https://api-edge.cognitive.microsofttranslator.com/*',
   'https://api.cognitive.microsofttranslator.com/*',
   'https://api.mymemory.translated.net/*',
-  // Edge TTS
+  // Edge TTS (WebSocket + HTTP signed endpoint)
   'https://speech.platform.bing.com/*',
+  'https://dev.microsofttranslator.com/*',
+  'https://*.tts.speech.microsoft.com/*',
 ];
 
 /** Manifest permissions that are required at install (not host). */
@@ -79,12 +81,9 @@ export async function hasOriginPermission(url: string): Promise<boolean> {
  * Request host access for a single page. Prefer requestAllPermissions on first run.
  */
 export async function requestOriginPermission(url: string): Promise<boolean> {
-  const broad = await chrome.permissions.contains({
-    origins: ['http://*/*', 'https://*/*'],
-  });
-  if (broad) return true;
   const origins = [originPatternFromUrl(url)];
-  if (await chrome.permissions.contains({ origins })) return true;
+  // Call request() directly on the synchronous turn of the user gesture;
+  // Chrome resolves true immediately without prompting if already granted.
   return chrome.permissions.request({ origins });
 }
 
@@ -161,33 +160,28 @@ export async function setBootstrapDone(done = true): Promise<void> {
  * MUST be called from a user gesture (button click).
  */
 export async function requestAllPermissions(): Promise<PermissionStatus> {
-  // Prefer one broad request first (best UX, covers MT/TTS/video sites)
-  const broadOk = await chrome.permissions.request({
-    origins: ['http://*/*', 'https://*/*'],
-  });
-
-  if (!broadOk) {
-    // User denied all-sites — try requesting remaining specific origins
-    const status = await getPermissionStatus();
-    if (status.missingOrigins.length > 0) {
-      await chrome.permissions.request({
-        origins: status.missingOrigins,
-      });
-    }
-  }
-
-  // Also request the explicit list (no-ops if already granted via broad)
+  // Single request in the synchronous turn of the user gesture (covers all sites + MT/TTS).
+  // Never chain additional permissions.request() calls after awaiting a prompt — the user
+  // gesture is already consumed once the dialog closes.
   try {
-    await chrome.permissions.request({ origins: ALL_HOST_ORIGINS });
+    await chrome.permissions.request({
+      origins: ALL_HOST_ORIGINS,
+    });
   } catch {
-    // ignore — some patterns may be invalid duplicates
+    try {
+      await chrome.permissions.request({
+        origins: ['http://*/*', 'https://*/*'],
+      });
+    } catch {
+      // User or browser rejected request
+    }
   }
 
   const finalStatus = await getPermissionStatus();
   if (finalStatus.complete || finalStatus.allSites) {
     await setBootstrapDone(true);
   }
-  return getPermissionStatus();
+  return finalStatus;
 }
 
 /**

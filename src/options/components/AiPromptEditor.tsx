@@ -19,9 +19,9 @@ export function AiPromptEditor(props: {
     customPattern?.systemPrompt ?? DEFAULT_SUBTITLE_TRANSLATE_SYSTEM_PROMPT;
   const subtitleUserPrompt =
     customPattern?.prompt ?? DEFAULT_SUBTITLE_TRANSLATE_PROMPT;
-  const wordExplainPrompt =
-    config.wordShow?.customSystemPrompt ??
-    DEFAULT_WORD_EXPLAIN_SYSTEM_PROMPT_TEMPLATE;
+  const wordExplainPrompt = config.wordShow?.customSystemPrompt?.trim()
+    ? config.wordShow.customSystemPrompt
+    : DEFAULT_WORD_EXPLAIN_SYSTEM_PROMPT_TEMPLATE;
 
   const isSubtitleCustomized = Boolean(
     config.videoSubtitles?.customPromptsConfig?.promptId &&
@@ -31,7 +31,7 @@ export function AiPromptEditor(props: {
   );
 
   const isWordExplainCustomized = Boolean(
-    config.wordShow?.customSystemPrompt &&
+    config.wordShow?.customSystemPrompt?.trim() &&
       config.wordShow.customSystemPrompt !==
         DEFAULT_WORD_EXPLAIN_SYSTEM_PROMPT_TEMPLATE,
   );
@@ -87,7 +87,8 @@ export function AiPromptEditor(props: {
       ...config,
       wordShow: {
         ...config.wordShow,
-        customSystemPrompt: undefined,
+        // Empty string overwrites in deepMerge so reset actually persists to chrome.storage
+        customSystemPrompt: '',
       },
     });
   };

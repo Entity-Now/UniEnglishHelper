@@ -36,7 +36,8 @@ describe('vocab-highlight', () => {
     expect(shortGloss('查询: 计算机', 6)).toBe('计算机');
     expect(shortGloss('待查内容：单词', 6)).toBe('单词');
     expect(shortGloss('待查内容: 计算机', 6)).toBe('计算机');
-    expect(shortGloss('Query: greeting', 6)).toBe('greeting');
+    expect(shortGloss('Query: greeting', 10)).toBe('greeting');
+    expect(shortGloss('Query: greeting', 6)).toBe('greeti…');
     expect(shortGloss('释义：单词；话语', 6)).toBe('单词');
     expect(shortGloss('中文释义：测试', 6)).toBe('测试');
     expect(shortGloss('n. 释义：单词', 6)).toBe('单词');

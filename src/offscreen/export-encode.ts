@@ -26,6 +26,12 @@ export async function exportRangeToWav(input: {
   if (endAudio <= startAudio) {
     throw new AppError('CLIP_NOT_IN_RING', 'Mapped audio range empty');
   }
+  if (endAudio - startAudio > DEFAULT_APP_CONFIG.recorder.maxClipMs * 1.5) {
+    throw new AppError(
+      'CLIP_TOO_LONG',
+      `Mapped audio span exceeds limit (${Math.round(endAudio - startAudio)}ms)`,
+    );
+  }
 
   const samples = ring.sliceByAudioTime(startAudio, endAudio);
   const blob = encodeWav(samples, ring.sampleRate);

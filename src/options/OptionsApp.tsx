@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { sendRuntime } from '../shared/messaging/client';
 import type { AppConfig } from '../shared/domain/types';
 import type { WordRecord, SkillRecord } from '../db/schema';
-import { WORDS_REVISION_KEY } from '../shared/constants';
+import { CONFIG_STORAGE_KEY, WORDS_REVISION_KEY } from '../shared/constants';
 import { NAV_ITEMS, type OptionsRoute } from './nav';
 import { GeneralPage } from './pages/GeneralPage';
 import { TranslationPage } from './pages/TranslationPage';
@@ -96,13 +96,18 @@ export function OptionsApp() {
     void load();
   }, [route, load]);
 
-  // Auto-sync when words change elsewhere (PiP / toolbar / other options tab)
+  // Auto-sync when words or config change elsewhere (PiP / Popup / toolbar / other options tab)
   useEffect(() => {
     const onStorage = (
       changes: Record<string, chrome.storage.StorageChange>,
       area: string,
     ) => {
       if (area !== 'local') return;
+      if (changes[CONFIG_STORAGE_KEY]) {
+        void sendRuntime<AppConfig>('config.get', {}, 'options').then((c) => {
+          if (c.ok) setConfig(c.data);
+        });
+      }
       const rev = changes[WORDS_REVISION_KEY];
       if (!rev) return;
       const next = Number(rev.newValue ?? 0);
@@ -172,6 +177,7 @@ export function OptionsApp() {
     [],
   );
 
+  const totalEntries = words.length;
   const wordCount = words.filter((w) => w.kind !== 'sentence').length;
 
   if (!config) {
@@ -182,7 +188,7 @@ export function OptionsApp() {
     <div className="shell">
       <aside className="sidebar">
         <div className="sidebar-brand">
-          <img src={chrome.runtime.getURL('public/icons/icon48.png')} alt="logo" />
+          <img src={chrome.runtime.getURL('icons/icon48.png')} alt="logo" />
           UniEnglishHelper
         </div>
         <div className="nav-group-label">Settings</div>
@@ -207,7 +213,7 @@ export function OptionsApp() {
           >
             <span className="ico">{item.icon}</span>
             {item.id === 'dictionary'
-              ? `${item.label} (${wordCount})`
+              ? `${item.label} (${totalEntries})`
               : item.id === 'study'
                 ? `${item.label}${wordCount ? ` (${wordCount})` : ''}`
                 : item.label}
@@ -220,7 +226,11 @@ export function OptionsApp() {
           <GeneralPage config={config} onSave={saveConfig} />
         )}
         {route === 'translation' && (
-          <TranslationPage config={config} onSave={saveConfig} />
+          <TranslationPage
+            config={config}
+            onSave={saveConfig}
+            onToast={(msg, kind) => flash(msg, kind)}
+          />
         )}
         {route === 'video-subtitles' && (
           <VideoSubtitlesPage config={config} onSave={saveConfig} />

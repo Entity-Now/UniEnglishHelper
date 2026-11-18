@@ -249,14 +249,20 @@ function collectCandidates(
     }
   }
 
-  // Also collect leaf divs from main/article/root for modern SPA/div soup pages
-  const article =
-    (root.matches?.('article, main, [role="main"]') ? root : null) ??
-    (root.querySelector('article, main, [role="main"]') as HTMLElement | null) ??
-    root;
-  article.querySelectorAll('div').forEach((n) => {
-    if (n instanceof HTMLElement && isLeafDiv(n)) push(n);
-  });
+  // Also collect leaf divs from active scopes (or main/article/root when unscoped)
+  const divRoots = siteRule.includeSelector
+    ? scopes
+    : [
+        (root.matches?.('article, main, [role="main"]') ? root : null) ??
+          (root.querySelector('article, main, [role="main"]') as HTMLElement | null) ??
+          root,
+      ];
+  for (const divRoot of divRoots) {
+    if (isLeafDiv(divRoot) && acceptElement(divRoot, siteRule)) push(divRoot);
+    divRoot.querySelectorAll('div').forEach((n) => {
+      if (n instanceof HTMLElement && isLeafDiv(n)) push(n);
+    });
+  }
 
   return out;
 }
@@ -282,6 +288,7 @@ export function extractTranslatableParagraphs(
   const targetLang = options.targetLang;
 
   const candidates = collectCandidates(host, siteRule);
+  const candidateSet = new Set<HTMLElement>(candidates);
 
   for (const el of candidates) {
     if (!acceptElement(el, siteRule)) continue;
@@ -289,9 +296,8 @@ export function extractTranslatableParagraphs(
       continue;
     }
 
-    const isIncludedByRule = Boolean(
-      siteRule.includeSelector &&
-        (el.matches(siteRule.includeSelector) || el.closest(siteRule.includeSelector)),
+    const directlyIncluded = Boolean(
+      siteRule.includeSelector && el.matches(siteRule.includeSelector),
     );
     const forcedInline = Boolean(
       siteRule.forceInlineSelector && el.matches(siteRule.forceInlineSelector),
@@ -301,16 +307,24 @@ export function extractTranslatableParagraphs(
     );
     const isBlock = forcedBlock || BLOCK_TAGS.has(el.tagName) || isLeafDiv(el);
 
-    if (!isIncludedByRule && !forcedInline && !isBlock) continue;
+    if (!directlyIncluded && !forcedInline && !isBlock) continue;
 
-    // Prefer leaf blocks: skip containers that wrap other paragraphs/headings/items.
-    if (
-      !isIncludedByRule &&
-      !forcedInline &&
-      !forcedBlock &&
-      el.querySelector('p, h1, h2, h3, h4, h5, h6, li, blockquote')
-    ) {
-      continue;
+    // Always skip container elements that wrap block children or other explicit candidates
+    // (unless explicitly forced as an atomic block/inline leaf).
+    if (!forcedInline && !forcedBlock) {
+      if (el.querySelector('p, h1, h2, h3, h4, h5, h6, li, blockquote')) {
+        continue;
+      }
+      if (directlyIncluded && !isBlock) {
+        let wrapsOtherCandidate = false;
+        for (const other of candidateSet) {
+          if (other !== el && el.contains(other)) {
+            wrapsOtherCandidate = true;
+            break;
+          }
+        }
+        if (wrapsOtherCandidate) continue;
+      }
     }
     if (el.tagName === 'LI' && el.querySelector('ul, ol')) continue;
 
@@ -329,7 +343,7 @@ export function extractTranslatableParagraphs(
       id,
       element: el,
       text: rawText,
-      inline: (forcedInline && !forcedBlock) || (isIncludedByRule && !isBlock),
+      inline: (forcedInline && !forcedBlock) || (directlyIncluded && !isBlock),
     });
   }
 

@@ -177,7 +177,7 @@ export class CueListSidebar {
     root.id = PAGE_ROOT_ID;
     root.setAttribute('data-ueh-overlay', 'cue-list');
 
-    if (secondary instanceof HTMLElement) {
+    if (secondary instanceof HTMLElement && !this.hostDoc.fullscreenElement) {
       this.pageOverlay = false;
       root.classList.remove('ueh-page-dock-overlay');
       root.style.cssText =
@@ -185,12 +185,15 @@ export class CueListSidebar {
       secondary.insertBefore(root, secondary.firstChild);
       setCueListOverlayMode(false, this.hostDoc);
     } else {
-      // Fixed right gutter — page layout CSS reserves space so video is not covered
+      // Fixed right gutter (or fullscreen top-layer container)
       this.pageOverlay = true;
       root.classList.add('ueh-page-dock-overlay');
       root.style.cssText = '';
-      this.hostDoc.documentElement.appendChild(root);
-      setCueListOverlayMode(true, this.hostDoc);
+      const container =
+        (this.hostDoc.fullscreenElement as HTMLElement | null) ??
+        this.hostDoc.documentElement;
+      container.appendChild(root);
+      setCueListOverlayMode(!this.hostDoc.fullscreenElement, this.hostDoc);
     }
 
     this.root = root;

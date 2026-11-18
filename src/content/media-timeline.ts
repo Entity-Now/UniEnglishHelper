@@ -84,15 +84,23 @@ export class MediaTimelineSampler {
   private tick(): void {
     if (!this.running) return;
     const s = this.sample();
-    if (s) this.batch.push(s);
+    if (!s) return;
+    // Avoid flooding stationary anchors while video is paused (play/pause events flush explicitly)
+    const prev = this.batch[this.batch.length - 1];
+    if (s.paused && prev?.paused && prev.mediaTimeMs === s.mediaTimeMs) {
+      return;
+    }
+    this.batch.push(s);
     if (this.batch.length >= 3) void this.flush(false);
   }
 
   private async flush(force: boolean): Promise<void> {
     if (!this.sessionId) return;
-    if (!force && this.batch.length === 0) return;
-    const s = this.sample();
-    if (s) this.batch.push(s);
+    if (force) {
+      const s = this.sample();
+      if (s) this.batch.push(s);
+    }
+    if (this.batch.length === 0) return;
     const samples = this.batch.splice(0, this.batch.length);
     if (!samples.length) return;
     await sendRuntime(

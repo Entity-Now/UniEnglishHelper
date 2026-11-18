@@ -6,8 +6,7 @@ import {
   type PermissionStatus,
 } from '../shared/permissions';
 import { EXT_VERSION } from '../shared/version';
-import { CONFIG_STORAGE_KEY } from '../shared/constants';
-import { DEFAULT_APP_CONFIG } from '../shared/domain/types';
+import { sendRuntime } from '../shared/messaging/client';
 
 export function OnboardingApp() {
   const [status, setStatus] = useState<PermissionStatus | null>(null);
@@ -33,16 +32,7 @@ export function OnboardingApp() {
       setStatus(s);
       // Prefer global host mode once broad access exists
       if (s.allSites || s.complete) {
-        // Persist global host mode without going through SW
-        const stored = await chrome.storage.local.get(CONFIG_STORAGE_KEY);
-        const prev = (stored[CONFIG_STORAGE_KEY] as object) ?? {};
-        await chrome.storage.local.set({
-          [CONFIG_STORAGE_KEY]: {
-            ...DEFAULT_APP_CONFIG,
-            ...prev,
-            hostAccessMode: 'global',
-          },
-        });
+        await sendRuntime('config.set', { hostAccessMode: 'global' }, 'options');
         await setBootstrapDone(true);
         setMessage('全部权限已就绪，可以开始使用了。');
       } else {
@@ -74,8 +64,7 @@ export function OnboardingApp() {
 
       {ready ? (
         <div className="banner success">
-          权限已就绪。你可以关闭本页，打开任意视频网站，点击扩展图标使用 Open
-          PiP / Start capture。
+          权限已就绪。你可以关闭本页，打开任意视频网站，点击扩展图标使用「打开学习 PiP / 开始采集」。
         </div>
       ) : (
         <div className="banner warn">

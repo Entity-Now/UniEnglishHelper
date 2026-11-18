@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import type { AppConfig } from '../../shared/domain/types';
+import { requestAllPermissions } from '../../shared/permissions';
 
 export function GeneralPage(props: {
   config: AppConfig;
@@ -9,11 +10,21 @@ export function GeneralPage(props: {
   const [saving, setSaving] = useState(false);
   const [localMsg, setLocalMsg] = useState('');
 
+  useEffect(() => {
+    setForm(props.config);
+  }, [props.config]);
+
   const save = async () => {
     setSaving(true);
     setLocalMsg('');
     try {
-      await props.onSave(form);
+      await props.onSave({
+        sourceLang: form.sourceLang,
+        targetLang: form.targetLang,
+        hostAccessMode: form.hostAccessMode,
+        webPageTranslate: form.webPageTranslate,
+        features: form.features,
+      });
       setLocalMsg('已保存通用设置');
     } catch (e) {
       setLocalMsg(e instanceof Error ? e.message : '保存失败');
@@ -68,11 +79,8 @@ export function GeneralPage(props: {
           type="button"
           className="primary"
           onClick={async () => {
-            const { requestAllPermissions } = await import(
-              '../../shared/permissions'
-            );
             await requestAllPermissions();
-            await props.onSave(form);
+            await props.onSave({ hostAccessMode: form.hostAccessMode });
             setLocalMsg('权限已请求，配置已保存');
           }}
         >

@@ -64,4 +64,16 @@ describe('AnchorStore', () => {
     ]);
     expect(store.mediaToAudio(50, 1)).toBe(100);
   });
+
+  it('collapses stationary pause anchors so post-pause audio spans remain accurate', () => {
+    const store = new AnchorStore();
+    store.append([
+      { audioTimeMs: 1000, mediaTimeMs: 5000, playbackRate: 1, paused: true, epoch: 0 },
+      { audioTimeMs: 30000, mediaTimeMs: 5000, playbackRate: 1, paused: true, epoch: 0 },
+      { audioTimeMs: 31000, mediaTimeMs: 5000, playbackRate: 1, paused: false, epoch: 0 },
+      { audioTimeMs: 32000, mediaTimeMs: 6000, playbackRate: 1, paused: false, epoch: 0 },
+    ]);
+    expect(store.mediaToAudio(5000, 0)).toBe(31000);
+    expect(store.mediaToAudio(5500, 0)).toBe(31500);
+  });
 });

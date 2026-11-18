@@ -147,13 +147,16 @@ export class VideoVocabRecap {
       slot.appendChild(root);
       this.root = root;
     } else {
-      // Dock into left gutter; page layout CSS reserves space so video is not covered
+      // Dock into left gutter (or fullscreen top-layer container)
       ensurePageSideLayoutStyles(this.hostDoc);
       const root = this.hostDoc.createElement('div');
       root.id = PAGE_ROOT_ID;
       root.classList.add('ueh-page-dock');
       root.style.cssText = '';
-      this.hostDoc.documentElement.appendChild(root);
+      const container =
+        (this.hostDoc.fullscreenElement as HTMLElement | null) ??
+        this.hostDoc.documentElement;
+      container.appendChild(root);
       this.root = root;
     }
 

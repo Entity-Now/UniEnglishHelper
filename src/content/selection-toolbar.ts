@@ -14,13 +14,10 @@ import type { SkillRecord } from '../db/schema';
 import { BUILTIN_SKILL_IDS } from '../utils/constants/skills';
 import { matchDomainPattern } from '../utils/site-control';
 import { sendRuntime } from '../shared/messaging/client';
-import { ClipPlayer } from './clip-player';
-import {
-  playTtsAudioChunks,
-  stopTtsPlayback,
-} from '../utils/tts-playback/play-chunks';
+import { speakTextSmart } from '../utils/tts-playback/speak';
 import { ICON_BTN_CSS, UI_ICON_SVG } from './ui-icons';
-import { marked } from 'marked';
+import { renderSafeMarkdownToElement } from '../utils/dom/safe-markdown';
+import { mountFullscreenAwareHost } from '../utils/dom/fullscreen-host';
 import {
   streamWordExplain,
   type StreamExplainSession,
@@ -55,14 +52,26 @@ export class SelectionToolbar {
   private skillMenuOpen = false;
   private boundMouseUp: (e: MouseEvent) => void;
   private boundKeyDown: (e: KeyboardEvent) => void;
-  private boundScroll: () => void;
+  private boundScroll: (e: Event) => void;
+  private unbindFullscreen: (() => void) | null = null;
   private activeExplainSession: StreamExplainSession | null = null;
 
   constructor(config: AppConfig) {
     this.config = config;
     this.boundMouseUp = (e) => this.onMouseUp(e);
     this.boundKeyDown = (e) => this.onKeyDown(e);
-    this.boundScroll = () => this.hide();
+    this.boundScroll = (e) => this.onScroll(e);
+  }
+
+  private onScroll(e: Event): void {
+    if (!this.shadow) return;
+    // Never dismiss when scrolling inside the toolbar's own panel / skill menu
+    const path = e.composedPath?.() ?? [];
+    if (this.host && path.includes(this.host)) return;
+    // Keep open while user is actively reading an open result panel or skill menu
+    const panel = this.shadow.getElementById('panel');
+    if (panel?.classList.contains('open') || this.skillMenuOpen) return;
+    this.hide();
   }
 
   updateConfig(config: AppConfig): void {
@@ -84,6 +93,10 @@ export class SelectionToolbar {
     document.removeEventListener('mouseup', this.boundMouseUp, true);
     document.removeEventListener('keydown', this.boundKeyDown, true);
     window.removeEventListener('scroll', this.boundScroll, true);
+    this.activeExplainSession?.abort();
+    this.activeExplainSession = null;
+    this.unbindFullscreen?.();
+    this.unbindFullscreen = null;
     this.host?.remove();
     this.host = null;
     this.shadow = null;
@@ -200,7 +213,7 @@ export class SelectionToolbar {
       host.setAttribute('data-ueh-overlay', 'selection');
       host.style.cssText =
         'all:initial;position:fixed;z-index:2147483646;pointer-events:none;';
-      document.documentElement.appendChild(host);
+      this.unbindFullscreen = mountFullscreenAwareHost(host, document);
     }
     this.host = host;
     this.shadow = host.attachShadow({ mode: 'open' });
@@ -617,6 +630,23 @@ export class SelectionToolbar {
     wrap.style.top = `${top}px`;
   }
 
+  /** Keep #wrap inside the viewport when .panel or .skill-menu expands downward. */
+  private clampWrapInViewport(): void {
+    const wrap = this.shadow?.getElementById('wrap') as HTMLElement | null;
+    if (!wrap || wrap.style.display === 'none') return;
+    const rect = wrap.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    if (rect.right > vw - 8) {
+      const nextLeft = Math.max(8, vw - rect.width - 8);
+      wrap.style.left = `${nextLeft}px`;
+    }
+    if (rect.bottom > vh - 8) {
+      const nextTop = Math.max(8, vh - rect.height - 8);
+      wrap.style.top = `${nextTop}px`;
+    }
+  }
+
   private closeSkillMenu(): void {
     this.skillMenuOpen = false;
     this.shadow
@@ -660,6 +690,7 @@ export class SelectionToolbar {
     }
     menu.classList.add('open');
     this.skillMenuOpen = true;
+    this.clampWrapInViewport();
   }
 
   private mkSkillChip(
@@ -726,6 +757,8 @@ export class SelectionToolbar {
     panel: HTMLElement,
     skill: SkillRecord,
   ): Promise<void> {
+    this.activeExplainSession?.abort();
+    this.activeExplainSession = null;
     const orig = this.selectedText;
     const context = [
       document.title ? `页面：${document.title}` : '',
@@ -765,9 +798,12 @@ export class SelectionToolbar {
     } else {
       resultEl.textContent = res.error.message;
     }
+    this.clampWrapInViewport();
   }
 
   private async runTranslate(panel: HTMLElement): Promise<void> {
+    this.activeExplainSession?.abort();
+    this.activeExplainSession = null;
     const orig = this.selectedText;
     panel.classList.add('open');
     panel.innerHTML = `
@@ -798,6 +834,7 @@ export class SelectionToolbar {
     } else {
       trEl.textContent = res.error.message;
     }
+    this.clampWrapInViewport();
   }
 
   private async runExplain(panel: HTMLElement): Promise<void> {
@@ -815,6 +852,9 @@ export class SelectionToolbar {
     const origEl = panel.querySelector('.orig') as HTMLElement;
     const body = panel.querySelector('.body') as HTMLElement;
     if (origEl) origEl.textContent = orig;
+    this.clampWrapInViewport();
+
+    let mdContainer: HTMLElement | null = null;
 
     const session = streamWordExplain(
       {
@@ -829,11 +869,14 @@ export class SelectionToolbar {
           body.innerHTML = '<div class="loading-hint"><span>🧠</span> AI 正在思考中…</div>';
           return;
         }
-        try {
-          body.innerHTML = `<div class="md-body">${marked.parse(accumulated)}</div>`;
-        } catch {
-          body.textContent = accumulated;
+        if (!mdContainer || !body.contains(mdContainer)) {
+          body.replaceChildren();
+          mdContainer = document.createElement('div');
+          mdContainer.className = 'md-body';
+          body.appendChild(mdContainer);
         }
+        renderSafeMarkdownToElement(mdContainer, accumulated);
+        this.clampWrapInViewport();
       },
     );
     this.activeExplainSession = session;
@@ -843,11 +886,10 @@ export class SelectionToolbar {
       if (!body) return;
       const rawMarkdown = d.explanation || (!d.definition ? d.text : '');
       if (rawMarkdown) {
-        try {
-          body.innerHTML = `<div class="md-body">${marked.parse(rawMarkdown)}</div>`;
-        } catch {
-          body.textContent = rawMarkdown;
-        }
+        const md = document.createElement('div');
+        md.className = 'md-body';
+        renderSafeMarkdownToElement(md, rawMarkdown);
+        body.replaceChildren(md);
       } else {
         const lines = [
           d.definition,
@@ -856,62 +898,20 @@ export class SelectionToolbar {
         ].filter(Boolean);
         body.textContent = lines.join('\n\n') || d.text || orig;
       }
-    } catch (err: any) {
+      this.clampWrapInViewport();
+    } catch (err: unknown) {
       if (!body) return;
-      body.textContent = `查询异常: ${err?.message || String(err)}`;
+      body.textContent = `查询异常: ${err instanceof Error ? err.message : String(err)}`;
     }
   }
 
   private async runTts(): Promise<void> {
-    if (
-      this.config.tts?.engine === 'edge' &&
-      this.config.features.enableEdgeTts
-    ) {
-      const chunksRes = await sendRuntime<{
-        mode: string;
-        voice: string;
-        chunks: Array<{ audioBase64: string; contentType: string }>;
-      }>('tts.synthChunks', { text: this.selectedText }, 'content');
-
-      if (chunksRes.ok && chunksRes.data.chunks?.length) {
-        stopTtsPlayback();
-        await playTtsAudioChunks(chunksRes.data.chunks);
-        return;
-      }
-    }
-
-    const res = await sendRuntime<{
-      mode: string;
-      text?: string;
-      voice?: string;
-      clipId?: number;
-      clipIds?: number[];
-    }>('tts.synth', { text: this.selectedText }, 'content');
-
-    if (!res.ok) return;
-
-    if (res.data.mode === 'web-speech' && res.data.text) {
-      if (typeof speechSynthesis !== 'undefined') {
-        const u = new SpeechSynthesisUtterance(res.data.text);
-        u.lang = res.data.voice || 'en-US';
-        speechSynthesis.cancel();
-        speechSynthesis.speak(u);
-      }
-      return;
-    }
-
-    const ids = res.data.clipIds?.length
-      ? res.data.clipIds
-      : res.data.clipId != null
-        ? [res.data.clipId]
-        : [];
-    if (!ids.length) return;
-
-    const player = new ClipPlayer();
-    await player.playSequence(ids, () => undefined);
+    await speakTextSmart(this.selectedText, 'content');
   }
 
   private async runAddWord(panel: HTMLElement): Promise<void> {
+    this.activeExplainSession?.abort();
+    this.activeExplainSession = null;
     const surface = this.selectedText.split(/\s+/).slice(0, 6).join(' ');
     const exp = await sendRuntime<{
       definition?: string;
@@ -961,6 +961,7 @@ export class SelectionToolbar {
       body.textContent = res.ok ? '已加入生词本' : res.error.message;
       if (res.ok) body.style.color = 'oklch(80% 0.1 145)';
     }
+    this.clampWrapInViewport();
   }
 }
 

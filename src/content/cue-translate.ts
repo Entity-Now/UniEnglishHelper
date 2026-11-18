@@ -38,8 +38,22 @@ export class CueTranslateScheduler {
   private prefetching = new Set<string>();
   private draining = false;
   private retries = new Map<string, number>();
+  private retryTimers = new Set<number>();
+  private generation = 0;
 
   constructor(private hooks: CueTranslateHooks) {}
+
+  /** Cancel any in-flight drain loop or retry timers from a previous video. */
+  reset(): void {
+    this.generation += 1;
+    this.draining = false;
+    this.prefetching.clear();
+    this.retries.clear();
+    for (const id of this.retryTimers) {
+      window.clearTimeout(id);
+    }
+    this.retryTimers.clear();
+  }
 
   private apply(cueId: string, translation: string): void {
     const stored = this.hooks.getCues().find((c) => c.id === cueId);
@@ -52,7 +66,8 @@ export class CueTranslateScheduler {
     this.hooks.onTranslated?.(cueId, translation);
   }
 
-  async translateMany(cues: SubtitleCue[]): Promise<void> {
+  async translateMany(cues: SubtitleCue[], gen = this.generation): Promise<void> {
+    if (gen !== this.generation) return;
     const pending = cues.filter(
       (c) => !c.translation?.trim() && !this.prefetching.has(c.id),
     );
@@ -72,8 +87,10 @@ export class CueTranslateScheduler {
         'content',
       );
 
+      if (gen !== this.generation) return;
+
       if (!res.ok) {
-        this.scheduleRetries(pending);
+        this.scheduleRetries(pending, gen);
         return;
       }
 
@@ -86,23 +103,28 @@ export class CueTranslateScheduler {
       }
 
       const missing = pending.filter((c) => !returned.has(c.id));
-      if (missing.length) this.scheduleRetries(missing);
+      if (missing.length) this.scheduleRetries(missing, gen);
     } catch {
-      this.scheduleRetries(pending);
+      if (gen === this.generation) {
+        this.scheduleRetries(pending, gen);
+      }
     } finally {
       for (const c of pending) this.prefetching.delete(c.id);
     }
   }
 
-  private scheduleRetries(cues: SubtitleCue[]): void {
+  private scheduleRetries(cues: SubtitleCue[], gen = this.generation): void {
+    if (gen !== this.generation) return;
     for (const c of cues) {
       const n = this.retries.get(c.id) ?? 0;
       if (n >= MAX_RETRIES) continue;
       this.retries.set(c.id, n + 1);
-      window.setTimeout(
-        () => void this.translateMany([c]),
-        1200 * (n + 1),
-      );
+      const timerId = window.setTimeout(() => {
+        this.retryTimers.delete(timerId);
+        if (gen !== this.generation) return;
+        void this.translateMany([c], gen);
+      }, 1200 * (n + 1));
+      this.retryTimers.add(timerId);
     }
   }
 
@@ -125,18 +147,23 @@ export class CueTranslateScheduler {
   /** Translate all missing cues in batches (list / full-video prefetch). */
   async drainAll(): Promise<void> {
     if (this.draining) return;
+    const gen = this.generation;
     this.draining = true;
     try {
-      const cues = this.hooks.getCues();
-      for (let offset = 0; offset < cues.length; offset += BATCH_SIZE) {
+      for (let offset = 0; gen === this.generation; offset += BATCH_SIZE) {
+        const cues = this.hooks.getCues();
+        if (offset >= cues.length) break;
         const batch = cues
           .slice(offset, offset + BATCH_SIZE)
           .filter((c) => !c.translation?.trim());
-        if (batch.length) await this.translateMany(batch);
+        if (batch.length) await this.translateMany(batch, gen);
+        if (gen !== this.generation) break;
         await new Promise((r) => setTimeout(r, 80));
       }
     } finally {
-      this.draining = false;
+      if (gen === this.generation) {
+        this.draining = false;
+      }
     }
   }
 }

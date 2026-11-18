@@ -248,6 +248,7 @@ export class PageSubtitlesOverlay {
   }
 
   setCues(cues: SubtitleCue[]): void {
+    this.translateScheduler.reset();
     this.cues = cues;
     this.renderCue(findActiveCue(this.cues, this.mediaTimeMs()));
     if (this.wantsAutoTranslate()) void this.translateScheduler.drainAll();
@@ -555,7 +556,9 @@ export class PageSubtitlesOverlay {
           span.addEventListener('click', (e) => {
             e.stopPropagation();
             e.preventDefault();
-            this.pausePlayback();
+            if (this.config.wordShow?.pauseOnOpen !== false) {
+              this.pausePlayback();
+            }
             void this.onWordClick(seg.text, cue.text, span);
           });
           // Hover preview only — never steal focus / pause the player
@@ -634,6 +637,7 @@ export class PageSubtitlesOverlay {
       },
       contextTranslation,
       anchorTarget,
+      this.config.wordShow?.autoExplain !== false,
     );
   }
 

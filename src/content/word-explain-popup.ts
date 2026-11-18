@@ -1,18 +1,16 @@
 import { sendRuntime } from '../shared/messaging/client';
 import type { WordExplainResult } from '../shared/domain/types';
 import { ICON_BTN_CSS, iconActionButton } from './ui-icons';
-import { marked } from 'marked';
+import { renderSafeMarkdownToElement } from '../utils/dom/safe-markdown';
+import { mountFullscreenAwareHost } from '../utils/dom/fullscreen-host';
+import { speakTextSmart } from '../utils/tts-playback/speak';
 import {
   streamWordExplain,
   type StreamExplainSession,
 } from './stream-client';
 
-marked.setOptions({
-  breaks: true,
-  gfm: true,
-});
-
 const POPUP_HOST_ID = 'ueh-word-explain-host';
+let cleanupActiveWordPopup: (() => void) | null = null;
 
 /**
  * Page-side word explain tooltip.
@@ -46,8 +44,11 @@ export async function showWordExplainPopup(
   onAddSuccess?: () => void | Promise<void>,
   contextTranslation?: string,
   anchorTarget?: PopupAnchorTarget,
+  autoExplain = true,
 ): Promise<void> {
-  // One host at a time
+  // Cleanly tear down previous popup (aborting any in-flight stream & timers)
+  cleanupActiveWordPopup?.();
+  cleanupActiveWordPopup = null;
   hostDoc.getElementById(POPUP_HOST_ID)?.remove();
 
   const host = hostDoc.createElement('div');
@@ -61,7 +62,7 @@ export async function showWordExplainPopup(
     pointer-events: none !important;
     display: block !important;
   `;
-  hostDoc.documentElement.appendChild(host);
+  const unbindFullscreen = mountFullscreenAwareHost(host, hostDoc);
   const shadow = host.attachShadow({ mode: 'open' });
 
   shadow.innerHTML = `
@@ -102,6 +103,7 @@ export async function showWordExplainPopup(
           width: 100% !important;
           max-height: none !important;
           height: 100% !important;
+          transform: none !important;
           border-radius: 0;
         }
       }
@@ -337,34 +339,80 @@ export async function showWordExplainPopup(
   renderCtxBlock();
 
   let activeStreamSession: StreamExplainSession | null = null;
+  let pointerInside = false;
+  let timer = 0;
+
+  const armAutoClose = (ms: number) => {
+    window.clearTimeout(timer);
+    if (pointerInside) return;
+    timer = window.setTimeout(remove, ms);
+  };
+
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      remove();
+    }
+  };
+
+  const onOutsidePointerDown = (e: Event) => {
+    const path = e.composedPath?.() ?? [];
+    if (path.includes(host)) return;
+    remove();
+  };
 
   const remove = () => {
     window.clearTimeout(timer);
+    hostDoc.removeEventListener('keydown', onKeyDown, true);
+    hostDoc.removeEventListener('pointerdown', onOutsidePointerDown, true);
+    unbindFullscreen();
     activeStreamSession?.abort();
     activeStreamSession = null;
     host.remove();
+    if (cleanupActiveWordPopup === remove) {
+      cleanupActiveWordPopup = null;
+    }
   };
+  cleanupActiveWordPopup = remove;
+
+  hostDoc.addEventListener('keydown', onKeyDown, true);
+  // Defer outside-click binding by one tick so the opening click itself doesn't trigger it
+  window.setTimeout(() => {
+    if (host.isConnected) {
+      hostDoc.addEventListener('pointerdown', onOutsidePointerDown, true);
+    }
+  }, 0);
+
+  const cardForHover = shadow.querySelector('.card');
+  cardForHover?.addEventListener('pointerenter', () => {
+    pointerInside = true;
+    window.clearTimeout(timer);
+  });
+  cardForHover?.addEventListener('pointerleave', () => {
+    pointerInside = false;
+    armAutoClose(18_000);
+  });
 
   shadow.getElementById('ueh-close')?.addEventListener('click', remove);
 
-  // TTS available immediately (doesn't need explain result)
-  shadow.getElementById('ueh-tts')?.addEventListener('click', () => {
+  // TTS available immediately (supports Edge TTS + Web Speech fallback without leaking audio_clips)
+  const ttsBtn = shadow.getElementById('ueh-tts') as HTMLButtonElement | null;
+  ttsBtn?.addEventListener('click', () => {
     void (async () => {
-      const res = await sendRuntime<{
-        mode: string;
-        text?: string;
-        voice?: string;
-      }>('tts.synth', { text: surface }, 'content');
-      if (res.ok && res.data.mode === 'web-speech' && res.data.text) {
-        const u = new SpeechSynthesisUtterance(res.data.text);
-        u.lang = res.data.voice || 'en-US';
-        speechSynthesis.cancel();
-        speechSynthesis.speak(u);
+      if (ttsBtn) ttsBtn.disabled = true;
+      try {
+        await speakTextSmart(
+          surface,
+          'content',
+          hostDoc.defaultView ?? window,
+        );
+      } finally {
+        if (ttsBtn) ttsBtn.disabled = false;
       }
     })();
   });
 
-  let timer = window.setTimeout(remove, 25_000);
+  armAutoClose(25_000);
   let latestExplain: WordExplainResult | null = null;
   let isAlreadyInVocab = false;
 
@@ -566,13 +614,12 @@ export async function showWordExplainPopup(
         forceLlm,
       },
       (_chunk, accumulated) => {
-        if (!hostDoc.documentElement.contains(host)) return;
-        window.clearTimeout(timer);
-        timer = window.setTimeout(remove, 60_000);
+        if (!host.isConnected) return;
+        armAutoClose(60_000);
 
         const clean = accumulated.trim();
         if (!clean) {
-          bodyEl.innerHTML = '<div style="color:#aaa;font-size:12px;">🧠 AI 正在思考中…</div>';
+          bodyEl.textContent = '🧠 AI 正在思考中…';
           return;
         }
 
@@ -588,18 +635,14 @@ export async function showWordExplainPopup(
           mdContainer.className = 'md-body';
           bodyEl.appendChild(mdContainer);
         }
-        try {
-          mdContainer.innerHTML = marked.parse(accumulated) as string;
-        } catch {
-          mdContainer.textContent = accumulated;
-        }
+        renderSafeMarkdownToElement(mdContainer, accumulated);
       },
     );
     activeStreamSession = session;
 
     try {
       const explain = await session.promise;
-      if (!hostDoc.documentElement.contains(host) || !explain) return;
+      if (!host.isConnected || !explain) return;
 
       latestExplain = explain;
       const def = explain.definition || explain.text || '';
@@ -645,11 +688,7 @@ export async function showWordExplainPopup(
       if (rawMarkdown) {
         const mdEl = hostDoc.createElement('div');
         mdEl.className = 'md-body';
-        try {
-          mdEl.innerHTML = marked.parse(rawMarkdown) as string;
-        } catch {
-          mdEl.textContent = rawMarkdown;
-        }
+        renderSafeMarkdownToElement(mdEl, rawMarkdown);
         bodyEl.appendChild(mdEl);
       }
       if (!bodyEl.textContent?.trim()) {
@@ -688,10 +727,9 @@ export async function showWordExplainPopup(
         }
       }
 
-      window.clearTimeout(timer);
-      timer = window.setTimeout(remove, 30_000);
+      armAutoClose(35_000);
     } catch (err) {
-      if (!hostDoc.documentElement.contains(host)) return;
+      if (!host.isConnected) return;
       if (bodyEl) {
         bodyEl.className = 'body err';
         bodyEl.textContent = `查询异常: ${
@@ -710,5 +748,12 @@ export async function showWordExplainPopup(
     void executeExplain(true);
   });
 
-  void executeExplain(false);
+  if (autoExplain) {
+    void executeExplain(false);
+  } else {
+    const bodyEl = shadow.getElementById('ueh-popup-body');
+    if (bodyEl) {
+      bodyEl.textContent = '自动释义已关闭，点击右上角「重新翻译」查询 AI 或直接加入生词本。';
+    }
+  }
 }

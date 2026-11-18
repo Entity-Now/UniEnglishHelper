@@ -1,13 +1,19 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import type { AppConfig } from '../../shared/domain/types';
+import { ensureFreeMtPermissions } from '../../api/translate';
 import { AiPromptEditor } from '../components/AiPromptEditor';
 import { LlmConfigCard } from '../components/LlmConfigCard';
 
 export function TranslationPage(props: {
   config: AppConfig;
   onSave: (p: Partial<AppConfig>) => Promise<void>;
+  onToast?: (msg: string, kind?: 'success' | 'error' | 'info') => void;
 }) {
   const [form, setForm] = useState(props.config);
+
+  useEffect(() => {
+    setForm(props.config);
+  }, [props.config]);
 
   return (
     <div>
@@ -54,11 +60,18 @@ export function TranslationPage(props: {
           type="button"
           className="ghost"
           onClick={async () => {
-            const { ensureFreeMtPermissions } = await import(
-              '../../api/translate'
-            );
-            const ok = await ensureFreeMtPermissions(form.freeMtProvider);
-            alert(ok ? '已授权免费翻译网络' : '授权被拒绝');
+            try {
+              const ok = await ensureFreeMtPermissions(form.freeMtProvider);
+              props.onToast?.(
+                ok ? '已授权免费翻译网络' : '授权未通过，请在浏览器弹窗中允许',
+                ok ? 'success' : 'error',
+              );
+            } catch (e) {
+              props.onToast?.(
+                e instanceof Error ? e.message : '请求网络授权失败',
+                'error',
+              );
+            }
           }}
         >
           授权免费翻译网络
@@ -93,7 +106,19 @@ export function TranslationPage(props: {
         />
       </div>
 
-      <SaveButton label="保存翻译设置" onSave={() => props.onSave(form)} />
+      <SaveButton
+        label="保存翻译设置"
+        onSave={() =>
+          props.onSave({
+            translateEngine: form.translateEngine,
+            freeMtProvider: form.freeMtProvider,
+            ai: form.ai,
+            videoSubtitles: form.videoSubtitles,
+            wordShow: form.wordShow,
+            features: form.features,
+          })
+        }
+      />
     </div>
   );
 }

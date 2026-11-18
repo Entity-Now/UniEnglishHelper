@@ -27,7 +27,7 @@ export class GenericHtml5Adapter extends BasePlayerAdapter {
   }
 
   async getCues(options?: GetCuesOptions): Promise<SubtitleCue[]> {
-    const video = this.findVideo();
+    const video = options?.video ?? this.findVideo();
     if (!video) return [];
     const preferredLang = options?.preferredLang || this.preferredLang || 'en';
 

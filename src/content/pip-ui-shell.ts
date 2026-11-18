@@ -322,7 +322,13 @@ export function buildPipStyles(opts: {
       background: oklch(76% 0.12 82); border: 0; cursor: pointer;
     }
     #ueh-bar {
-      display: flex; align-items: center; gap: 4px;
+      display: flex; align-items: center; gap: 4px; flex-wrap: wrap; row-gap: 4px;
+    }
+    @media (max-width: 520px) {
+      .ueh-ico { width: 28px; height: 28px; }
+      .ueh-ico svg { width: 15px; height: 15px; }
+      #ueh-time { min-width: 68px; font-size: 10px; }
+      .ueh-chip { padding: 3px 6px; font-size: 10px; }
     }
     #ueh-time {
       font-size: 11px; color: rgba(255,255,255,.8);

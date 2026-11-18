@@ -13,22 +13,32 @@ body[data-ueh-view-mode="original"] .ueh-translated-inline {
   display: none !important;
 }
 
-/* In translation_only mode, hide original text via CSS on translated parent */
+/* In translation_only mode, hide original text while preserving host typography & theme color */
 body[data-ueh-view-mode="translation_only"] .ueh-has-translation {
   font-size: 0 !important;
   line-height: 0 !important;
   color: transparent !important;
 }
-body[data-ueh-view-mode="translation_only"] .ueh-has-translation > * {
+body[data-ueh-view-mode="translation_only"] .ueh-has-translation > :not([data-ueh-translated]) {
   display: none !important;
 }
-body[data-ueh-view-mode="translation_only"] .ueh-has-translation > .ueh-translated-block,
-body[data-ueh-view-mode="translation_only"] .ueh-has-translation > .ueh-translated-inline {
+body[data-ueh-view-mode="translation_only"] .ueh-has-translation > .ueh-translated-block {
   display: block !important;
-  font-size: 1rem !important;
-  line-height: normal !important;
-  color: initial !important;
+  font-size: var(--ueh-host-fs, 1rem) !important;
+  line-height: var(--ueh-host-lh, 1.55) !important;
+  color: var(--ueh-trans-color, var(--ueh-host-color, CanvasText)) !important;
   -webkit-text-fill-color: currentColor !important;
+  margin-top: 0 !important;
+  animation: none !important;
+}
+body[data-ueh-view-mode="translation_only"] .ueh-has-translation > .ueh-translated-inline {
+  display: inline !important;
+  font-size: var(--ueh-host-fs, 1rem) !important;
+  line-height: var(--ueh-host-lh, 1.45) !important;
+  color: var(--ueh-trans-color, var(--ueh-host-color, CanvasText)) !important;
+  -webkit-text-fill-color: currentColor !important;
+  margin-left: 0 !important;
+  animation: none !important;
 }
 
 .ueh-translated-block {
@@ -81,17 +91,6 @@ body[data-ueh-view-mode="translation_only"] .ueh-has-translation > .ueh-translat
   opacity: 1 !important;
   user-select: text !important;
   animation: ueh-trans-in 0.2s ease-out !important;
-}
-
-/* Translation-only: occupy the original's full type scale so the page looks native. */
-body[data-ueh-view-mode="translation_only"] .ueh-translated-block,
-body[data-ueh-view-mode="translation_only"] .ueh-translated-inline {
-  margin-top: 0 !important;
-  margin-left: 0 !important;
-  font-size: 1em !important;
-  color: inherit !important;
-  -webkit-text-fill-color: currentColor !important;
-  animation: none !important;
 }
 
 /* Quiet skeleton — a faint line in the host's type scale, no "翻译中" chrome. */

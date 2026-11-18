@@ -32,12 +32,24 @@ export async function getCaptureStatus(tabId?: number) {
   if (!session) {
     return { state: 'CaptureIdle' as CaptureState, sessionId: undefined, loopbackOk: undefined };
   }
+
+  // Verify the captured tab still exists; if closed, clean up stale session
+  try {
+    await chrome.tabs.get(session.tabId);
+  } catch {
+    await sendToOffscreen('offscreen.capture.stop', { sessionId: session.sessionId }).catch(() => undefined);
+    await saveSession(null);
+    return { state: 'CaptureIdle' as CaptureState, sessionId: undefined, loopbackOk: undefined };
+  }
+
+  // If querying for a specific tab, do not report another tab's capture as belonging to this tab
   if (tabId !== undefined && session.tabId !== tabId) {
     return {
-      state: session.state,
-      sessionId: session.sessionId,
-      loopbackOk: session.loopbackOk,
-      tabId: session.tabId,
+      state: 'CaptureIdle' as CaptureState,
+      sessionId: undefined,
+      loopbackOk: undefined,
+      otherTabActive: session.state === 'CaptureLive' || session.state === 'CaptureArming',
+      activeTabId: session.tabId,
     };
   }
   return {
@@ -46,6 +58,12 @@ export async function getCaptureStatus(tabId?: number) {
     loopbackOk: session.loopbackOk,
     tabId: session.tabId,
   };
+}
+
+export async function stopCaptureForTab(tabId: number): Promise<void> {
+  const session = await getSession();
+  if (!session || session.tabId !== tabId) return;
+  await stopCapture(session.sessionId);
 }
 
 /**
@@ -62,11 +80,28 @@ export async function armCapture(
   }
 
   const existing = await getSession();
-  if (existing && existing.state === 'CaptureLive') {
-    if (existing.tabId === tabId) {
-      return { sessionId: existing.sessionId };
+  if (existing && existing.state === 'CaptureArming') {
+    if (Date.now() - existing.startedAt < 15_000) {
+      throw new AppError('CAPTURE_ACTIVE', 'Capture is currently starting, please wait');
     }
-    throw new AppError('CAPTURE_ACTIVE', 'Another tab capture session is active');
+    await saveSession(null);
+  } else if (existing && existing.state === 'CaptureLive') {
+    let tabAlive = false;
+    try {
+      await chrome.tabs.get(existing.tabId);
+      const off = await sendToOffscreen<{ state: string }>('offscreen.capture.status', {});
+      tabAlive = Boolean(off.ok && off.data.state === 'live');
+    } catch {
+      tabAlive = false;
+    }
+    if (!tabAlive) {
+      await sendToOffscreen('offscreen.capture.stop', { sessionId: existing.sessionId }).catch(() => undefined);
+      await saveSession(null);
+    } else if (existing.tabId === tabId) {
+      return { sessionId: existing.sessionId };
+    } else {
+      throw new AppError('CAPTURE_ACTIVE', 'Another tab capture session is active');
+    }
   }
 
   const sessionId = crypto.randomUUID();

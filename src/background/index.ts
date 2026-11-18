@@ -4,6 +4,7 @@ import { createEnvelope } from '../shared/messages/envelope';
 import { routeMessage } from './router';
 import { handleClipPort } from './services/clips';
 import { handleWordStreamPort } from './services/word-stream';
+import { stopCaptureForTab } from './services/capture';
 import { sendTabMessageWithInjection } from './services/inject-content';
 import { ensureDefaultSkills, autoHealHistoricalWords } from '../db';
 import { getOnboardingUrl } from '../shared/permissions';
@@ -136,6 +137,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   void routeMessage(message, sender).then(sendResponse);
   return true;
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  void stopCaptureForTab(tabId).catch(() => undefined);
 });
 
 chrome.runtime.onConnect.addListener((port) => {

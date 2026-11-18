@@ -40,6 +40,8 @@ export default defineManifest({
   // Extra explicit hosts (subset of above; kept for clarity / future narrowing)
   optional_host_permissions: [
     'https://speech.platform.bing.com/*',
+    'https://dev.microsofttranslator.com/*',
+    'https://*.tts.speech.microsoft.com/*',
     'https://translate.googleapis.com/*',
     'https://translate.google.com/*',
     'https://edge.microsoft.com/*',

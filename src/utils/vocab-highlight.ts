@@ -113,9 +113,19 @@ export function shortGloss(
       }
     }
   } else {
-    // Single line: if it's purely a sentence/context line, reject it so subtitle doesn't show context sentence
+    // Single line: reject only if it looks like an actual sentence/context translation,
+    // while still stripping prefixes from short single-word glosses (e.g. "上下文：单词").
     if (isSentenceLine(rawLines[0]) && !isExplicitDefinitionLine(rawLines[0])) {
-      return '';
+      const candidate = cleanLine(rawLines[0], surface);
+      if (
+        !candidate ||
+        isSurface(candidate) ||
+        /[。！？.!?]/.test(candidate) ||
+        candidate.includes(' ') ||
+        candidate.length > 10
+      ) {
+        return '';
+      }
     }
     chosenLine = rawLines[0];
   }

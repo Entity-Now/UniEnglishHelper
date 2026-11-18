@@ -161,18 +161,14 @@ export async function synthesizeEdgeTts(opts: EdgeTtsOptions): Promise<Blob> {
       ws.send(ssmlMsg);
     };
 
+    let turnEnded = false;
+
     ws.onmessage = (ev) => {
       if (typeof ev.data === 'string') {
-        // Look for turn end
-        if (
-          ev.data.includes('Path:turn.end') ||
-          ev.data.includes('Path:response')
-        ) {
-          // turn.end means complete
-          if (ev.data.includes('Path:turn.end')) {
-            clearTimeout(timer);
-            finishOk();
-          }
+        if (ev.data.includes('Path:turn.end')) {
+          turnEnded = true;
+          clearTimeout(timer);
+          finishOk();
         }
         return;
       }
@@ -193,8 +189,8 @@ export async function synthesizeEdgeTts(opts: EdgeTtsOptions): Promise<Blob> {
     ws.onclose = () => {
       clearTimeout(timer);
       if (!settled) {
-        if (chunks.length > 0) finishOk();
-        else finishErr(new AppError('TTS_FAILED', 'Edge TTS closed early'));
+        if (turnEnded && chunks.length > 0) finishOk();
+        else finishErr(new AppError('TTS_FAILED', 'Edge TTS closed before turn.end'));
       }
     };
   });
@@ -208,10 +204,11 @@ export function extractAudioFromBinaryMessage(buf: ArrayBuffer): ArrayBuffer | n
   if (buf.byteLength < 2) return null;
   const view = new DataView(buf);
   const headerLen = view.getUint16(0, false);
-  if (headerLen > 0 && headerLen + 2 < buf.byteLength) {
+  if (headerLen > 0 && headerLen + 2 <= buf.byteLength) {
     const header = new TextDecoder().decode(buf.slice(2, 2 + headerLen));
     if (header.includes('Path:audio')) {
-      return buf.slice(2 + headerLen);
+      const payload = buf.slice(2 + headerLen);
+      return payload.byteLength > 0 ? payload : null;
     }
     // other binary path — ignore
     return null;

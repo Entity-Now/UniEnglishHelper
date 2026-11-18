@@ -173,12 +173,6 @@ export function TtsPage(props: {
 
     setPreviewing(true);
     try {
-      // Persist current form before preview so background uses latest values
-      await props.onSave({
-        tts: form.tts,
-        features: form.features,
-      });
-
       const sample =
         PREVIEW_SAMPLES[lang] ?? PREVIEW_SAMPLES.default ?? 'Hello';
       const res = await sendRuntime<{
@@ -190,6 +184,9 @@ export function TtsPage(props: {
         {
           text: sample,
           voice: forcedVoice,
+          rate: form.tts.rate,
+          pitch: form.tts.pitch,
+          volume: form.tts.volume,
         },
         'options',
       );

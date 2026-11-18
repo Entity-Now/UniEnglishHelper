@@ -8,6 +8,7 @@
 import type { AppConfig } from '../shared/domain/types';
 import type { SubtitlesDisplayMode } from '../types/config/subtitles';
 import { sendRuntime } from '../shared/messaging/client';
+import { mountFullscreenAwareHost } from '../utils/dom/fullscreen-host';
 
 export type PipHandler = () => void;
 export type CueListHandler = () => void;
@@ -30,6 +31,8 @@ export class PlayerChromeButton {
   private onSubtitlesClick: (() => void) | null = null;
   private panelOpen = false;
   private boundDocClick: ((e: MouseEvent) => void) | null = null;
+  private boundKeyDown: ((e: KeyboardEvent) => void) | null = null;
+  private unbindFullscreen: (() => void) | null = null;
 
   constructor(
     config: AppConfig,
@@ -71,6 +74,13 @@ export class PlayerChromeButton {
       this.closePanel();
     };
     document.addEventListener('click', this.boundDocClick, true);
+
+    this.boundKeyDown = (e) => {
+      if (e.key === 'Escape' && this.panelOpen) {
+        this.closePanel();
+      }
+    };
+    document.addEventListener('keydown', this.boundKeyDown, true);
   }
 
   stop(): void {
@@ -82,6 +92,12 @@ export class PlayerChromeButton {
       document.removeEventListener('click', this.boundDocClick, true);
       this.boundDocClick = null;
     }
+    if (this.boundKeyDown) {
+      document.removeEventListener('keydown', this.boundKeyDown, true);
+      this.boundKeyDown = null;
+    }
+    this.unbindFullscreen?.();
+    this.unbindFullscreen = null;
     this.panel?.remove();
     this.panel = null;
     this.group?.remove();
@@ -324,7 +340,7 @@ export class PlayerChromeButton {
   private openPanel(anchor: HTMLElement): void {
     if (!this.panel) {
       this.panel = this.createPanel();
-      document.documentElement.appendChild(this.panel);
+      this.unbindFullscreen = mountFullscreenAwareHost(this.panel, document);
     }
     this.syncPanelFields();
     this.panel.classList.add('ueh-open');
@@ -334,15 +350,25 @@ export class PlayerChromeButton {
       ?.classList.add('ueh-active');
 
     const rect = anchor.getBoundingClientRect();
-    const panelW = Math.min(320, window.innerWidth - 24);
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const panelW = Math.min(320, vw - 24);
     let left = rect.right - panelW;
-    left = Math.max(12, Math.min(left, window.innerWidth - panelW - 12));
-    let top = rect.top - 8;
-    // Prefer above controls; if no room, place above with clamp
+    left = Math.max(12, Math.min(left, vw - panelW - 12));
     this.panel.style.left = `${left}px`;
-    this.panel.style.bottom = `${window.innerHeight - rect.top + 8}px`;
-    this.panel.style.top = 'auto';
-    void top;
+
+    const spaceAbove = rect.top - 12;
+    const spaceBelow = vh - rect.bottom - 12;
+    if (spaceAbove >= 260 || spaceAbove >= spaceBelow) {
+      this.panel.style.bottom = `${Math.max(12, vh - rect.top + 8)}px`;
+      this.panel.style.top = 'auto';
+      this.panel.style.maxHeight = `${Math.max(180, Math.min(440, spaceAbove))}px`;
+    } else {
+      this.panel.style.top = `${Math.max(12, rect.bottom + 8)}px`;
+      this.panel.style.bottom = 'auto';
+      this.panel.style.maxHeight = `${Math.max(180, Math.min(440, spaceBelow))}px`;
+    }
+    this.panel.style.overflowY = 'auto';
   }
 
   private closePanel(): void {
@@ -407,7 +433,7 @@ export class PlayerChromeButton {
         <button type="button" class="ueh-close" id="ueh-ps-close">关闭</button>
       </div>
       <div class="ueh-status" id="ueh-ps-status"></div>
-      <p class="ueh-hint">设置会同步到扩展 Options，并立即作用于当前页面与 PiP。</p>
+      <p class="ueh-hint">设置会同步到扩展 Options，并立即作用于当前页面字幕（PiP 字幕独立配置）。</p>
     `;
 
     // Live preview on change (apply immediately + debounce persist optional)

@@ -18,10 +18,23 @@ export interface ChatMessage {
   content: string;
 }
 
-function resolveBaseUrl(config: AppConfig, providerId: string): string {
-  let baseUrl =
-    config.ai.baseUrls?.[providerId]?.replace(/\/$/, '') ||
+const KNOWN_PROVIDER_BASE_URLS: Record<string, string> = {
+  openai: 'https://api.openai.com/v1',
+  'openai-compatible': 'https://api.openai.com/v1',
+  deepseek: 'https://api.deepseek.com/v1',
+  siliconflow: 'https://api.siliconflow.cn/v1',
+  openrouter: 'https://openrouter.ai/api/v1',
+  gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
+  ollama: 'http://localhost:11434/v1',
+  local: 'http://localhost:11434/v1',
+};
+
+export function resolveBaseUrl(config: AppConfig, providerId: string): string {
+  const configured = config.ai.baseUrls?.[providerId]?.trim().replace(/\/$/, '');
+  const fallback =
+    KNOWN_PROVIDER_BASE_URLS[providerId.trim().toLowerCase()] ||
     'https://api.openai.com/v1';
+  let baseUrl = configured || fallback;
 
   // Auto-correct common baseUrls missing /v1
   if (baseUrl.includes('api.deepseek.com') && !baseUrl.endsWith('/v1')) {
@@ -40,6 +53,29 @@ function resolveBaseUrl(config: AppConfig, providerId: string): string {
     baseUrl += '/v1';
   }
   return baseUrl;
+}
+
+export function isLocalLlmEndpoint(baseUrl: string): boolean {
+  const lower = baseUrl.toLowerCase();
+  return (
+    lower.includes('localhost') ||
+    lower.includes('127.0.0.1') ||
+    lower.includes('0.0.0.0')
+  );
+}
+
+/**
+ * True when the provider either has a configured API key or targets a local
+ * OpenAI-compatible server (Ollama, LM Studio, vLLM, LiteRT-LM) that needs no key.
+ */
+export function hasLlmCredentials(
+  config: AppConfig,
+  providerIdOverride?: string,
+): boolean {
+  const providerId = (providerIdOverride || config.ai.providerId || '').trim();
+  if (!providerId) return false;
+  if (config.ai.apiKeys?.[providerId]?.trim()) return true;
+  return isLocalLlmEndpoint(resolveBaseUrl(config, providerId));
 }
 
 /**
@@ -329,7 +365,13 @@ export async function chatCompletion(
         const cleaned = stripThinkingTags(fullText).trim();
         if (cleaned) return cleaned;
       } catch (streamErr) {
-        // If streaming fails or connection interrupted, fall back to non-stream fetch
+        if (signal?.aborted) throw streamErr;
+        const msg = streamErr instanceof Error ? streamErr.message : String(streamErr);
+        // Do not retry non-streaming on auth, quota/rate-limit, or explicit abort errors
+        if (/\b(?:401|403|429)\b|abort/i.test(msg)) {
+          throw streamErr;
+        }
+        // If streaming fails due to proxy/SSE incompatibility, fall back to non-stream fetch
         console.warn('[UEH] stream chat failed, falling back to non-stream', streamErr);
       }
     }
@@ -462,17 +504,29 @@ async function explainWithFreeMt(
   };
 }
 
-export const DEFINITION_PREFIX_PATTERN =
-  /^(?:[【(\[]|\*{1,2})?\s*(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境)?(?:单\s*词|生\s*词|词|释义|中文释义|语境释义|核心释义|翻译|解释|Word|Target|Definition|Translation)\s*(?:[】)\]]|\*{1,2})?\s*[:：]?\s*/i;
+const DEF_CORE_LABELS =
+  '(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境)?(?:单\\s*词|生\\s*词|词|释义|中文释义|语境释义|核心释义|翻译|解释|Word|Target|Definition|Translation)';
+const SENT_CORE_LABELS =
+  '(?:结合语境的)?(?:精准)?(?:上下文|语境|句子|整句|例句|Context|Sentence|Example|语境翻译|句子翻译|上下文翻译)';
+const ECHO_CORE_LABELS =
+  '(?:待查内容|待查单词|待查词|待查|查询|Query|Input)';
+const ALL_CORE_LABELS =
+  '(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境|上下文|句子|整句)?(?:待查内容|待查单词|待查词|待查|单\\s*词|生\\s*词|词|查询|释义|中文释义|语境释义|核心释义|翻译|解释|上下文|语境|句子翻译|上下文翻译|Query|Definition|Translation|Word|Target|Input|Context|Sentence|Example|例句)';
 
-export const SENTENCE_PREFIX_PATTERN =
-  /^(?:[【(\[]|\*{1,2})?\s*(?:结合语境的)?(?:精准)?(?:上下文|语境|句子|整句|例句|Context|Sentence|Example|语境翻译|句子翻译|上下文翻译)\s*(?:[】)\]]|\*{1,2})?\s*[:：]?\s*/i;
+function buildPrefixRegex(core: string): RegExp {
+  return new RegExp(
+    `^(?:(?:[【(\\[]\\s*${core}\\s*[】)\\]]\\s*[:：]?)|(?:\\*{1,2}\\s*)?${core}(?:\\s*\\*{1,2})?\\s*[:：])\\s*`,
+    'i',
+  );
+}
 
-export const QUERY_ECHO_PREFIX_PATTERN =
-  /^(?:[【(\[]|\*{1,2})?\s*(?:待查内容|待查单词|待查词|待查|查询|Query|Input)\s*(?:[】)\]]|\*{1,2})?\s*[:：]?\s*/i;
+export const DEFINITION_PREFIX_PATTERN = buildPrefixRegex(DEF_CORE_LABELS);
 
-export const ALL_PREFIX_PATTERN =
-  /^(?:[【(\[]|\*{1,2})?\s*(?:结合语境的)?(?:精准)?(?:中文|核心|常用核心|语境|上下文|句子|整句)?(?:待查内容|待查单词|待查词|待查|单\s*词|生\s*词|词|查询|释义|中文释义|语境释义|核心释义|翻译|解释|上下文|语境|句子翻译|上下文翻译|Query|Definition|Translation|Word|Target|Input|Context|Sentence|Example|例句)\s*(?:[】)\]]|\*{1,2})?\s*[:：]?\s*/i;
+export const SENTENCE_PREFIX_PATTERN = buildPrefixRegex(SENT_CORE_LABELS);
+
+export const QUERY_ECHO_PREFIX_PATTERN = buildPrefixRegex(ECHO_CORE_LABELS);
+
+export const ALL_PREFIX_PATTERN = buildPrefixRegex(ALL_CORE_LABELS);
 
 export const QUERY_PREFIX_PATTERN = ALL_PREFIX_PATTERN;
 
@@ -532,21 +586,26 @@ export function extractDefinitionFromLlm(
   const isSurface = (text: string) =>
     Boolean(surface && text.toLowerCase() === surface.toLowerCase().trim());
 
-  // 0. Try to extract from first line header: "# [word] [IPA] [词性. 中文翻译]"
-  for (const line of lines.slice(0, 3)) {
-    if (/^#+\s+/i.test(line)) {
-      const titleContent = line.replace(/^#+\s*/, '').trim();
-      let rest = titleContent;
-      if (surface && rest.toLowerCase().startsWith(surface.toLowerCase())) {
-        rest = rest.slice(surface.length).trim();
+  // 0. Try to extract from first-line H1 header: "# [word] [IPA] [词性. 中文翻译]"
+  // Only match top-level `# ` (not `##` / `###` section headers) and require a
+  // leading headword or IPA token so section titles are never mistaken for definitions.
+  for (const line of lines.slice(0, 2)) {
+    if (/^#\s+(?!#)/.test(line) && !isQueryEchoLine(line)) {
+      const titleContent = line.replace(/^#\s+/, '').trim();
+      let rest = '';
+      if (surface && titleContent.toLowerCase().startsWith(surface.toLowerCase())) {
+        rest = titleContent.slice(surface.length).trim();
       } else {
-        rest = rest.replace(/^(?:\[[^\]]+\]|[a-zA-Z\s'-]+)\s*/, '').trim();
+        const headMatch = titleContent.match(/^(?:[a-zA-Z][a-zA-Z\s'-]*)\s+([\s\S]+)$/);
+        if (headMatch) rest = headMatch[1]!.trim();
       }
-      // Remove IPA phonetics: [/][^/]+[/] or [[][^\]]+[\]]
-      rest = rest.replace(/^(?:\[[^\]]+\]|\/[^\/]+\/)\s*/, '').trim();
-      const cleaned = cleanLine(rest, surface);
-      if (cleaned && !isSurface(cleaned) && /[\u4e00-\u9fa5]/.test(cleaned)) {
-        return cleaned;
+      if (rest) {
+        // Remove IPA phonetics: [/][^/]+[/] or [[][^\]]+[\]]
+        rest = rest.replace(/^(?:\[[^\]]+\]|\/[^/]+\/)\s*/, '').trim();
+        const cleaned = cleanLine(rest, surface);
+        if (cleaned && !isSurface(cleaned) && /[\u4e00-\u9fa5]/.test(cleaned)) {
+          return cleaned;
+        }
       }
     }
   }
@@ -706,6 +765,7 @@ export interface ExplainWordOptions {
   forceLlm?: boolean;
   resetCircuit?: boolean;
   timeoutMs?: number;
+  signal?: AbortSignal;
   onChunk?: (chunk: string, fullText: string) => void;
 }
 
@@ -715,6 +775,7 @@ async function explainWithLlm(
   context: string,
   opts?: {
     timeoutMs?: number;
+    signal?: AbortSignal;
     onChunk?: (chunk: string, fullText: string) => void;
   },
 ): Promise<WordExplainResult> {
@@ -736,6 +797,7 @@ async function explainWithLlm(
     ],
     {
       timeoutMs: effectiveTimeout,
+      signal: opts?.signal,
       onChunk: opts?.onChunk,
       disableThinking: true,
     },
@@ -759,11 +821,10 @@ async function explainWithLlm(
  * Structured word explain with **fast free-MT fallback**.
  *
  * Strategy:
- * 1. Start free MT immediately (parallel) so the user is never blocked on a hung LLM.
- * 2. Try LLM with configured timeout when a key is present and the circuit is closed.
- * 3. Prefer LLM if it wins; otherwise return free MT.
- * 4. After repeated LLM failures, open a short circuit → free MT only (instant path).
- * 5. If options.forceLlm is set, bypass circuit breaker and try LLM with extended timeout.
+ * 1. Prefer configured LLM (including keyless local endpoints like Ollama) when circuit is closed.
+ * 2. Fall back to free MT only when LLM is unconfigured, circuit-broken, or fails — avoiding
+ *    unnecessary third-party traffic when LLM succeeds or when free MT is disabled.
+ * 3. If options.forceLlm is set, bypass circuit breaker and try LLM once with extended timeout.
  */
 export async function explainWord(
   config: AppConfig,
@@ -771,106 +832,85 @@ export async function explainWord(
   context: string,
   options?: ExplainWordOptions,
 ): Promise<WordExplainResult> {
-  const key = config.ai.apiKeys[config.ai.providerId];
+  const hasKey = hasLlmCredentials(config);
   if (options?.resetCircuit || options?.forceLlm) {
     resetLlmCircuit();
   }
   const circuitOpen = options?.forceLlm ? false : isLlmCircuitOpen();
 
-  // If forceLlm is set and key exists, try LLM with extended timeout
-  if (options?.forceLlm && key) {
-    try {
-      const timeoutMs = resolveEffectiveTimeoutMs(
-        config,
-        options.timeoutMs ?? LLM_RETRY_TIMEOUT_MS,
-      );
-      const res = await explainWithLlm(config, surface, context, {
-        timeoutMs,
-        onChunk: options.onChunk,
-      });
-      recordLlmSuccess();
-      return res;
-    } catch (err) {
-      console.warn('[UEH] force LLM explain failed, falling back to free MT', err);
-      // fallback to standard path below
-    }
-  }
-
-  // Free MT always starts for word popup (UX) — not gated on feature flags.
-  // Feature flags still apply to bulk subtitle translation elsewhere.
   const freeNoteNoKey = '未配置 AI API Key，已使用免费翻译';
   const freeNoteCircuit = 'AI 暂时不可用（已熔断），已使用免费翻译';
   const freeNoteFail = 'AI 请求失败或超时，已回退免费翻译';
 
-  const freePromise = explainWithFreeMt(
-    config,
-    surface,
-    context,
-    !key ? freeNoteNoKey : circuitOpen ? freeNoteCircuit : freeNoteFail,
-  ).then(
-    (r) => ({ ok: true as const, r }),
-    (e) => ({
-      ok: false as const,
-      err: e instanceof Error ? e : new Error(String(e)),
-    }),
-  );
+  const tryFreeFallback = async (
+    note: string,
+  ): Promise<{ ok: true; r: WordExplainResult } | { ok: false; err: Error }> => {
+    if (config.features?.enableUnofficialFreeMt === false && hasKey) {
+      return {
+        ok: false,
+        err: new Error('免费 MT 已在通用设置中关闭'),
+      };
+    }
+    return explainWithFreeMt(config, surface, context, note).then(
+      (r) => ({ ok: true as const, r }),
+      (e) => ({
+        ok: false as const,
+        err: e instanceof Error ? e : new Error(String(e)),
+      }),
+    );
+  };
 
-  // No key or circuit open → free MT only (do not wait on LLM)
-  if (!key || circuitOpen) {
-    const free = await freePromise;
+  // No LLM credentials or circuit open → free MT directly
+  if (!hasKey || circuitOpen) {
+    const free = await tryFreeFallback(!hasKey ? freeNoteNoKey : freeNoteCircuit);
     if (free.ok) return free.r;
     return {
       surface,
       definition: '',
       context,
       engine: 'none',
-      note: !key
+      note: !hasKey
         ? '未配置 AI API Key，且免费翻译失败'
         : `AI 熔断中且免费翻译失败：${free.err.message}`,
     };
   }
 
-  // Race: free runs in parallel while LLM has a hard deadline
-  const effectiveTimeout = resolveEffectiveTimeoutMs(
-    config,
-    options?.timeoutMs ?? LLM_WORD_EXPLAIN_TIMEOUT_MS,
-  );
-  const llmPromise = explainWithLlm(config, surface, context, {
-    timeoutMs: effectiveTimeout,
-    onChunk: options?.onChunk,
-  }).then(
-    (r) => ({ ok: true as const, r }),
-    (e) => ({
-      ok: false as const,
-      err: e instanceof Error ? e : new Error(String(e)),
-    }),
-  );
+  // Primary LLM path (single attempt — never double-fire on forceLlm failure)
+  const requestedTimeout = options?.forceLlm
+    ? (options.timeoutMs ?? LLM_RETRY_TIMEOUT_MS)
+    : (options?.timeoutMs ?? LLM_WORD_EXPLAIN_TIMEOUT_MS);
+  const effectiveTimeout = resolveEffectiveTimeoutMs(config, requestedTimeout);
 
-  const llm = await llmPromise;
-  if (llm.ok) {
+  try {
+    const res = await explainWithLlm(config, surface, context, {
+      timeoutMs: effectiveTimeout,
+      signal: options?.signal,
+      onChunk: options?.onChunk,
+    });
     recordLlmSuccess();
-    return llm.r;
-  }
+    return res;
+  } catch (err) {
+    if (options?.signal?.aborted) throw err;
+    const llmErr = err instanceof Error ? err : new Error(String(err));
+    recordLlmFailure();
+    console.warn('[UEH] AI explain failed, falling back to free MT', llmErr.message);
 
-  // LLM failed / timed out → free path (already running)
-  recordLlmFailure();
-  console.warn('[UEH] AI explain failed, using free MT', llm.err.message);
+    const free = await tryFreeFallback(freeNoteFail);
+    if (free.ok) {
+      return {
+        ...free.r,
+        note: freeNoteFail,
+      };
+    }
 
-  const free = await freePromise;
-  if (free.ok) {
     return {
-      ...free.r,
-      note: freeNoteFail,
+      surface,
+      definition: '',
+      context,
+      engine: 'none',
+      note: `AI 与免费翻译均失败：${llmErr.message} / ${free.err.message}`,
     };
   }
-
-  return {
-    surface,
-    definition: '',
-    context,
-    engine: 'none',
-    note: `AI 与免费翻译均失败：${llm.err.message} / ${free.err.message}`,
-  };
 }
 
 /**

@@ -15,13 +15,18 @@ export function HelpTooltip(props: {
       <button
         type="button"
         aria-label={props.label ?? '帮助'}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') setOpen(false);
+        }}
         style={{
           width: 18,
           height: 18,
           borderRadius: '50%',
-          border: '1px solid #484f58',
+          border: '1px solid var(--rf-border)',
           background: 'transparent',
-          color: '#8b949e',
+          color: 'var(--rf-muted-foreground)',
           fontSize: 11,
           cursor: 'help',
           padding: 0,
@@ -43,12 +48,12 @@ export function HelpTooltip(props: {
             maxWidth: 280,
             padding: '8px 10px',
             borderRadius: 8,
-            background: '#161b22',
-            border: '1px solid #30363d',
-            color: '#e6edf3',
+            background: 'var(--rf-card)',
+            border: '1px solid var(--rf-border)',
+            color: 'var(--rf-card-foreground)',
             fontSize: 12,
             lineHeight: 1.4,
-            boxShadow: '0 8px 24px rgba(0,0,0,.35)',
+            boxShadow: '0 8px 24px rgba(0,0,0,.22)',
             pointerEvents: 'none',
           }}
         >

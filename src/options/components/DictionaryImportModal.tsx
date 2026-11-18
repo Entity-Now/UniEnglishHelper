@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { WordCreate } from '../../shared/domain/types';
 import { importWordsApi } from '../../api/dictionary';
 
@@ -23,6 +23,24 @@ export function DictionaryImportModal({
   const [dragOver, setDragOver] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleResetAndClose = useCallback(() => {
+    setFile(null);
+    setParsedWords([]);
+    setParseError(null);
+    setImporting(false);
+    setMode('merge');
+    onClose();
+  }, [onClose]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') handleResetAndClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen, handleResetAndClose]);
 
   if (!isOpen) return null;
 
@@ -174,15 +192,6 @@ export function DictionaryImportModal({
     }
   };
 
-  const handleResetAndClose = () => {
-    setFile(null);
-    setParsedWords([]);
-    setParseError(null);
-    setImporting(false);
-    setMode('merge');
-    onClose();
-  };
-
   return (
     <div className="modal-backdrop" onClick={handleResetAndClose}>
       <div
@@ -215,10 +224,14 @@ export function DictionaryImportModal({
               if (e.target.files && e.target.files[0]) {
                 handleFileSelect(e.target.files[0]);
               }
+              // Reset input value so re-selecting the same file triggers onChange again
+              e.target.value = '';
             }}
           />
 
           <div
+            role="button"
+            tabIndex={0}
             className={`dropzone ${dragOver ? 'drag-over' : ''} ${
               file ? 'has-file' : ''
             }`}
@@ -229,6 +242,12 @@ export function DictionaryImportModal({
             onDragLeave={() => setDragOver(false)}
             onDrop={handleDrop}
             onClick={() => fileInputRef.current?.click()}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                fileInputRef.current?.click();
+              }
+            }}
           >
             {file ? (
               <div>

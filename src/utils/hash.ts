@@ -6,5 +6,6 @@ export async function sha256Hex(data: ArrayBuffer): Promise<string> {
 }
 
 export function simpleKey(...parts: string[]): string {
-  return parts.join('::').toLowerCase();
+  // Preserve text casing (e.g. "US" vs "us") and prevent "::" boundary collisions
+  return parts.map((p) => JSON.stringify(p)).join('::');
 }

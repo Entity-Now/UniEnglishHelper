@@ -1,5 +1,5 @@
 import React from 'react';
-import { marked } from 'marked';
+import { SafeMarkdown } from '../../components/safe-markdown';
 
 export type WordPopupEngine = 'llm' | 'free_mt' | 'none';
 
@@ -99,7 +99,6 @@ export function WordPopup(props: {
     : stripEmbeddedSentenceTranslation(props.text);
 
   const isMarkdown = !props.loading && Boolean(bodyText) && /^[#*-]|```|\*\*|##/.test(bodyText);
-  const parsedHtml = isMarkdown ? (marked.parse(bodyText) as string) : '';
 
   return (
     <div className="ueh-word-popup" role="dialog" aria-label="单词释义">
@@ -166,10 +165,7 @@ export function WordPopup(props: {
             <span>⏳</span> 正在连接 AI 查询释义…
           </div>
         ) : isMarkdown ? (
-          <div
-            className="md-body"
-            dangerouslySetInnerHTML={{ __html: parsedHtml }}
-          />
+          <SafeMarkdown className="md-body" markdown={bodyText} />
         ) : (
           bodyText
         )}

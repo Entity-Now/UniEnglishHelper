@@ -57,7 +57,7 @@ import {
   type VideoVocabRecapResult,
 } from '../utils/video-vocab-recap';
 import type { WordExplainResult } from '../shared/domain/types';
-import { marked } from 'marked';
+import { renderSafeMarkdownToElement } from '../utils/dom/safe-markdown';
 import {
   streamWordExplain,
   type StreamExplainSession,
@@ -506,7 +506,8 @@ export class PipSessionController {
 
         let cues = getPageCues();
         if (cues.length > 0) {
-          this.cues = cues;
+          this.translateScheduler.reset();
+    this.cues = cues;
           this.cueList?.setCues(cues);
           this.vocabRecap?.setCues(cues);
           void this.refreshRecapBadge();
@@ -515,11 +516,12 @@ export class PipSessionController {
           return;
         }
 
-        // Retry fallback
+        // Retry fallback (pass explicit video ref so move-mode HTML5 players still resolve <track>/textTracks)
         for (let i = 0; i < 5; i++) {
-          cues = await this.adapter.getCues();
+          cues = await this.adapter.getCues({ video: this.video });
           if (cues.length > 0) {
-            this.cues = cues;
+            this.translateScheduler.reset();
+    this.cues = cues;
             this.cueList?.setCues(cues);
             this.vocabRecap?.setCues(cues);
             void this.refreshRecapBadge();
@@ -595,17 +597,30 @@ export class PipSessionController {
    */
   private renderPageStandbyOverlay(on: boolean): void {
     const existing = document.getElementById('ueh-pip-page-standby');
+    const strayPip = this.pipWindow?.document.getElementById('ueh-pip-page-standby');
     if (!on) {
       existing?.remove();
+      strayPip?.remove();
       return;
     }
+    strayPip?.remove();
     if (existing) return;
 
+    // Never resolve parent from this.video when <video> has been moved into pipWindow.document!
+    const hostParent =
+      this.originalParent instanceof HTMLElement &&
+      this.originalParent.ownerDocument === document &&
+      this.originalParent.isConnected
+        ? this.originalParent.closest('.html5-video-player') || this.originalParent
+        : null;
+    const videoInPage =
+      this.video && this.video.ownerDocument === document ? this.video : null;
     const player =
-      this.video?.closest('.html5-video-player') ||
-      this.video?.parentElement ||
+      hostParent ||
+      videoInPage?.closest('.html5-video-player') ||
+      videoInPage?.parentElement ||
       document.querySelector('#movie_player, .video-stream')?.parentElement;
-    if (!player) return;
+    if (!player || player.ownerDocument !== document) return;
 
     const compPos = getComputedStyle(player).position;
     if (compPos === 'static') {
@@ -990,7 +1005,10 @@ export class PipSessionController {
     const panel = doc.getElementById('ueh-pip-settings');
     if (!panel) return;
     const open = panel.classList.toggle('ueh-open');
-    if (open) this.syncPipSettingsFields(doc);
+    if (open) {
+      this.closeWordPanel();
+      this.syncPipSettingsFields(doc);
+    }
   }
 
   private bindPipSettingsPanel(doc: Document): void {
@@ -1168,8 +1186,10 @@ export class PipSessionController {
   }
 
   private openWordPanel(): void {
-    const root = this.pipWindow?.document.getElementById('ueh-pip-root');
-    const panel = this.pipWindow?.document.getElementById('ueh-word-panel');
+    const doc = this.pipWindow?.document;
+    doc?.getElementById('ueh-pip-settings')?.classList.remove('ueh-open');
+    const root = doc?.getElementById('ueh-pip-root');
+    const panel = doc?.getElementById('ueh-word-panel');
     root?.classList.add('ueh-word-open');
     panel?.setAttribute('aria-hidden', 'false');
   }
@@ -1212,8 +1232,23 @@ export class PipSessionController {
   private bindHotkeys(win: Window): void {
     this.unbindHotkeys();
     this.keyHandler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        const doc = this.pipWindow?.document;
+        const settingsEl = doc?.getElementById('ueh-pip-settings');
+        const rootEl = doc?.getElementById('ueh-pip-root');
+        if (settingsEl?.classList.contains('ueh-open')) {
+          e.preventDefault();
+          settingsEl.classList.remove('ueh-open');
+          return;
+        }
+        if (rootEl?.classList.contains('ueh-word-open')) {
+          e.preventDefault();
+          this.closeWordPanel();
+          return;
+        }
+      }
       const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (e.code === 'Space') {
         e.preventDefault();
         this.handleCommandPlayPause();
@@ -1286,9 +1321,13 @@ export class PipSessionController {
   }
 
   private restoreVideo(): void {
-    if (!this.video || !this.placeholder || !this.originalParent) return;
+    if (!this.video) {
+      this.placeholder = null;
+      this.originalParent = null;
+      return;
+    }
+    const v = this.video;
     try {
-      const v = this.video;
       if (v.dataset.uehPrevStyle !== undefined) {
         if (v.dataset.uehPrevStyle) v.setAttribute('style', v.dataset.uehPrevStyle);
         else v.removeAttribute('style');
@@ -1296,8 +1335,26 @@ export class PipSessionController {
         delete v.dataset.uehPrevStyle;
         delete v.dataset.uehPrevControls;
       }
-      this.originalParent.insertBefore(v, this.placeholder);
-      this.placeholder.remove();
+      if (
+        this.originalParent &&
+        this.originalParent.isConnected &&
+        this.placeholder &&
+        this.placeholder.parentNode === this.originalParent
+      ) {
+        this.originalParent.insertBefore(v, this.placeholder);
+        this.placeholder.remove();
+      } else if (this.originalParent instanceof HTMLElement && this.originalParent.isConnected) {
+        this.originalParent.appendChild(v);
+        this.placeholder?.remove();
+      } else {
+        const fallbackContainer = document.querySelector<HTMLElement>(
+          '.html5-video-player, [data-video-container], main, article',
+        ) ?? document.body;
+        if (v.ownerDocument !== document && fallbackContainer) {
+          fallbackContainer.appendChild(v);
+        }
+        this.placeholder?.remove();
+      }
     } catch {
       // node may be gone
     }
@@ -1435,12 +1492,17 @@ export class PipSessionController {
    */
   onMainVideoSwitching(): void {
     if (!this.isPipActive()) return;
+    this.translateScheduler.reset();
     this.adapter.clearCache?.();
-    // YouTube usually reuses the same <video>; still re-resolve + re-attach sampler
+    const prevVideo = this.video;
+    // YouTube usually reuses the same <video>; if SPA swapped the element, rebind mirror too
     const next = this.adapter.findVideo();
     if (next) {
       this.video = next;
       this.sampler.attach(next);
+      if (next !== prevVideo && this.pipWindow) {
+        this.mode = this.setupVideoInPip(this.pipWindow, next);
+      }
     }
     this.cues = [];
     this.currentCue = null;
@@ -1461,6 +1523,7 @@ export class PipSessionController {
       // Still accept while opening so host-page load can race in
       if (this.state === 'Idle' || this.state === 'Closed') return;
     }
+    this.translateScheduler.reset();
     this.cues = cues;
     this.currentCue = null;
     this.lastPrefetchCueId = '';
@@ -1683,7 +1746,9 @@ export class PipSessionController {
           span.addEventListener('click', (e) => {
             e.stopPropagation();
             e.preventDefault();
-            this.pausePlayback();
+            if (this.config.wordShow?.pauseOnOpen !== false) {
+              this.pausePlayback();
+            }
             void this.handleWordClick(seg.text, cue.text);
           });
           // Avoid player focus/pause side-effects when interacting with words
@@ -2056,8 +2121,10 @@ export class PipSessionController {
     const doc = this.pipWindow?.document;
     if (!doc) return;
 
-    this.pausePlayback();
     const wordShow = this.config.wordShow;
+    if (wordShow?.pauseOnOpen !== false) {
+      this.pausePlayback();
+    }
 
     const title = doc.getElementById('ueh-word-panel-title');
     const ctxEl = doc.getElementById('ueh-word-panel-ctx');
@@ -2141,11 +2208,7 @@ export class PipSessionController {
           badge.textContent = 'AI 实时输出中…';
           badge.style.background = 'color-mix(in srgb, oklch(76% 0.12 82) 35%, transparent)';
           badge.style.color = 'oklch(92% 0.06 82)';
-          try {
-            contentWrap.innerHTML = marked.parse(accumulated) as string;
-          } catch {
-            contentWrap.textContent = accumulated;
-          }
+          renderSafeMarkdownToElement(contentWrap, accumulated);
         },
       );
       this.activeWordStreamSession = session;
@@ -2187,11 +2250,7 @@ export class PipSessionController {
         if (rawMarkdown) {
           const full = doc.createElement('div');
           full.className = 'md-body';
-          try {
-            full.innerHTML = marked.parse(rawMarkdown) as string;
-          } catch {
-            full.textContent = rawMarkdown;
-          }
+          renderSafeMarkdownToElement(full, rawMarkdown);
           body.appendChild(full);
         }
 
@@ -2251,7 +2310,7 @@ export class PipSessionController {
     if (wordShow?.autoExplain !== false) {
       void fetchExplain(false);
     } else if (body) {
-      body.textContent = '点击右上角加入生词本，或等待自动释义。';
+      body.textContent = '自动释义已关闭，点击右上角「重新翻译」查询 AI 或直接加入生词本。';
     }
 
     if (headActions) {

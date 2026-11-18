@@ -4,7 +4,7 @@
  * so free MT can answer immediately.
  */
 
-const FAILURE_THRESHOLD = 4;
+const FAILURE_THRESHOLD = 2;
 const WINDOW_MS = 60_000;
 /** Skip LLM for this long after the circuit opens. */
 const OPEN_MS = 60_000;

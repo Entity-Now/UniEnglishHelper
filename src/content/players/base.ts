@@ -15,6 +15,8 @@ export interface GetCuesOptions {
   bypassPreload?: boolean;
   /** Preferred subtitle source language (e.g. 'en'). Defaults to adapter configured language. */
   preferredLang?: string;
+  /** Optional explicit video element (used when PiP move mode relocated <video> out of document). */
+  video?: HTMLVideoElement | null;
 }
 
 export interface PlayerAdapter {

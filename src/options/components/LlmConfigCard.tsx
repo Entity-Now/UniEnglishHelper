@@ -102,8 +102,8 @@ export function LlmConfigCard({ config, onChange }: LlmConfigCardProps) {
                     ai: {
                       ...f.ai,
                       baseUrls: {
-                        ...(form.ai.baseUrls ?? {}),
-                        [form.ai.providerId]: e.target.value,
+                        ...(f.ai.baseUrls ?? {}),
+                        [f.ai.providerId]: e.target.value,
                       },
                     },
                   }))
@@ -115,7 +115,7 @@ export function LlmConfigCard({ config, onChange }: LlmConfigCardProps) {
               <label>API Key</label>
               <input
                 type="password"
-                placeholder="sk-…"
+                placeholder="sk-…（本地 Ollama 可留空）"
                 value={form.ai.apiKeys[form.ai.providerId] ?? ''}
                 onChange={(e) =>
                   setForm((f) => ({
@@ -123,8 +123,8 @@ export function LlmConfigCard({ config, onChange }: LlmConfigCardProps) {
                     ai: {
                       ...f.ai,
                       apiKeys: {
-                        ...form.ai.apiKeys,
-                        [form.ai.providerId]: e.target.value,
+                        ...f.ai.apiKeys,
+                        [f.ai.providerId]: e.target.value,
                       },
                     },
                   }))
@@ -147,6 +147,66 @@ export function LlmConfigCard({ config, onChange }: LlmConfigCardProps) {
                 }
               />
             </div>
+
+            {form.ai.translationProviderId?.trim() &&
+              form.ai.translationProviderId.trim() !== form.ai.providerId && (
+                <>
+                  <div className="llm-connection-field">
+                    <label>
+                      翻译专用 Base URL ({form.ai.translationProviderId.trim()})
+                    </label>
+                    <input
+                      placeholder={
+                        form.ai.translationProviderId.trim().toLowerCase() === 'ollama' ||
+                        form.ai.translationProviderId.trim().toLowerCase() === 'local'
+                          ? 'http://localhost:11434/v1'
+                          : 'https://api.openai.com/v1'
+                      }
+                      value={
+                        form.ai.baseUrls?.[form.ai.translationProviderId.trim()] ?? ''
+                      }
+                      onChange={(e) => {
+                        const tid = form.ai.translationProviderId!.trim();
+                        setForm((f) => ({
+                          ...f,
+                          ai: {
+                            ...f.ai,
+                            baseUrls: {
+                              ...(f.ai.baseUrls ?? {}),
+                              [tid]: e.target.value,
+                            },
+                          },
+                        }));
+                      }}
+                    />
+                  </div>
+                  <div className="llm-connection-field">
+                    <label>
+                      翻译专用 API Key ({form.ai.translationProviderId.trim()}，本地可留空)
+                    </label>
+                    <input
+                      type="password"
+                      placeholder="本地 Ollama / LM Studio 无需填写"
+                      value={
+                        form.ai.apiKeys[form.ai.translationProviderId.trim()] ?? ''
+                      }
+                      onChange={(e) => {
+                        const tid = form.ai.translationProviderId!.trim();
+                        setForm((f) => ({
+                          ...f,
+                          ai: {
+                            ...f.ai,
+                            apiKeys: {
+                              ...f.ai.apiKeys,
+                              [tid]: e.target.value,
+                            },
+                          },
+                        }));
+                      }}
+                    />
+                  </div>
+                </>
+              )}
           </div>
         </div>
 

@@ -50,6 +50,7 @@ import { openPipWithInjection } from './services/inject-content';
 import { EXT_VERSION } from '../shared/version';
 import { EDGE_TTS_VOICES } from '../api/edge-tts';
 import { listEdgeTTSVoices } from '../utils/edge-tts/voices';
+import { isBuiltinSkillId } from '../utils/constants/skills';
 import {
   allFreeMtOrigins,
   FREE_MT_PROVIDERS,
@@ -142,14 +143,26 @@ async function dispatch(
 
     case 'youtube.fetchCaption': {
       const url = String(p.url || '');
-      if (!url.includes('youtube.com') && !url.includes('googlevideo.com')) {
-        // still allow timedtext hosts
-        if (!url.includes('timedtext') && !url.includes('youtube')) {
-          throw new AppError('TRANSLATE_FAILED', 'Invalid caption URL');
-        }
+      let parsedUrl: URL;
+      try {
+        parsedUrl = new URL(url);
+      } catch {
+        throw new AppError('TRANSLATE_FAILED', 'Invalid caption URL');
+      }
+      const host = parsedUrl.hostname.toLowerCase();
+      const isAllowedYoutubeHost =
+        parsedUrl.protocol === 'https:' &&
+        (host === 'youtube.com' ||
+          host.endsWith('.youtube.com') ||
+          host === 'googlevideo.com' ||
+          host.endsWith('.googlevideo.com') ||
+          host === 'youtube-nocookie.com' ||
+          host.endsWith('.youtube-nocookie.com'));
+      if (!isAllowedYoutubeHost) {
+        throw new AppError('TRANSLATE_FAILED', 'Disallowed caption host');
       }
       try {
-        const text = await fetchCaptionText(url);
+        const text = await fetchCaptionText(parsedUrl.toString());
         return { text };
       } catch (err) {
         throw new AppError(
@@ -423,7 +436,6 @@ async function dispatch(
       return saveSkill(p as never);
 
     case 'skill.delete': {
-      const { isBuiltinSkillId } = await import('../utils/constants/skills');
       if (isBuiltinSkillId(String(p.id))) {
         throw new AppError(
           'CONFIG_INVALID',
@@ -453,15 +465,19 @@ async function dispatch(
       const userText = String(p.text ?? '').trim();
       if (!userText) throw new AppError('AI_FAILED', 'No text to run skill on');
       const ctx = String(p.context ?? '').trim();
-      const text = await chatCompletion(config, [
-        { role: 'system', content: skill.systemPrompt },
-        {
-          role: 'user',
-          content: ctx
-            ? `【选中文本】\n${userText}\n\n【上下文】\n${ctx}`
-            : userText,
-        },
-      ]);
+      const text = await chatCompletion(
+        config,
+        [
+          { role: 'system', content: skill.systemPrompt },
+          {
+            role: 'user',
+            content: ctx
+              ? `【选中文本】\n${userText}\n\n【上下文】\n${ctx}`
+              : userText,
+          },
+        ],
+        { timeoutMs: 45_000 },
+      );
       return { text, skillId: skill.id, skillName: skill.name };
     }
 

@@ -205,7 +205,8 @@ button.primary:hover {
   filter: brightness(1.04);
 }
 
-button.ghost {
+button.ghost,
+button.secondary {
   background: var(--rf-secondary);
   color: var(--rf-secondary-foreground);
   border: 1px solid var(--rf-border);
@@ -213,6 +214,31 @@ button.ghost {
   padding: 8px 12px;
   cursor: pointer;
   font-size: 13px;
+}
+
+button.ghost:hover:not(:disabled),
+button.secondary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--rf-foreground) 7%, var(--rf-secondary));
+}
+
+button.danger {
+  background: color-mix(in srgb, var(--rf-destructive) 12%, transparent);
+  color: var(--rf-destructive);
+  border: 1px solid color-mix(in srgb, var(--rf-destructive) 35%, var(--rf-border));
+  border-radius: var(--rf-radius);
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+button.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--rf-destructive) 22%, transparent);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .word-item {
@@ -300,18 +326,24 @@ button.ghost {
 }
 
 .badge-male {
-  background: color-mix(in srgb, #3b82f6 18%, transparent);
-  color: #93c5fd;
+  background: color-mix(in srgb, #2563eb 15%, transparent);
+  color: #1d4ed8;
 }
 
 .badge-female {
-  background: color-mix(in srgb, #ec4899 18%, transparent);
-  color: #f9a8d4;
+  background: color-mix(in srgb, #db2777 15%, transparent);
+  color: #be185d;
 }
 
 .badge-neutral {
-  background: color-mix(in srgb, #eab308 18%, transparent);
-  color: #fde047;
+  background: color-mix(in srgb, #ca8a04 16%, transparent);
+  color: #a16207;
+}
+
+@media (prefers-color-scheme: dark) {
+  .badge-male { color: #93c5fd; }
+  .badge-female { color: #f9a8d4; }
+  .badge-neutral { color: #fde047; }
 }
 
 .save-feedback {
@@ -381,14 +413,23 @@ input[type='number'] {
 }
 
 .toast.toast-error {
-  background: color-mix(in srgb, var(--rf-card) 85%, #c0392b);
+  background: color-mix(in srgb, var(--rf-card) 88%, #c0392b);
   border-color: #e74c3c;
+  color: var(--rf-foreground);
 }
 
 .toast.toast-success {
-  background: color-mix(in srgb, #0d1f14 40%, var(--rf-card));
-  border-color: oklch(72% 0.14 145);
-  color: oklch(92% 0.04 145);
+  background: color-mix(in srgb, oklch(72% 0.14 145) 14%, var(--rf-card));
+  border-color: oklch(62% 0.14 145);
+  color: oklch(34% 0.11 145);
+}
+
+@media (prefers-color-scheme: dark) {
+  .toast.toast-success {
+    background: color-mix(in srgb, #0d1f14 45%, var(--rf-card));
+    border-color: oklch(72% 0.14 145);
+    color: oklch(92% 0.04 145);
+  }
 }
 
 .toast .toast-icon {
@@ -432,15 +473,24 @@ input[type='number'] {
 }
 
 .save-feedback.ok {
-  background: color-mix(in srgb, oklch(72% 0.14 145) 18%, var(--rf-card));
-  border-color: color-mix(in srgb, oklch(72% 0.14 145) 45%, var(--rf-border));
-  color: oklch(88% 0.08 145);
+  background: color-mix(in srgb, oklch(72% 0.14 145) 14%, var(--rf-card));
+  border-color: color-mix(in srgb, oklch(62% 0.14 145) 45%, var(--rf-border));
+  color: oklch(38% 0.12 145);
 }
 
 .save-feedback.err {
-  background: color-mix(in srgb, #e74c3c 16%, var(--rf-card));
-  border-color: color-mix(in srgb, #e74c3c 50%, var(--rf-border));
-  color: #ffb4a9;
+  background: color-mix(in srgb, #e74c3c 12%, var(--rf-card));
+  border-color: color-mix(in srgb, #e74c3c 45%, var(--rf-border));
+  color: #b91c1c;
+}
+
+@media (prefers-color-scheme: dark) {
+  .save-feedback.ok {
+    color: oklch(88% 0.08 145);
+  }
+  .save-feedback.err {
+    color: #ffb4a9;
+  }
 }
 
 /* Legacy class kept for any external refs */
@@ -670,8 +720,14 @@ input[type='number'] {
 }
 
 .study-explanation-container strong {
-  color: oklch(80% 0.12 82);
+  color: oklch(48% 0.13 78);
   font-weight: 700;
+}
+
+@media (prefers-color-scheme: dark) {
+  .study-explanation-container strong {
+    color: oklch(82% 0.12 82);
+  }
 }
 
 /* Modal Backdrop & Dialog */
@@ -784,15 +840,20 @@ input[type='number'] {
 }
 
 .import-alert-error {
-  background: rgba(248, 81, 73, 0.15);
-  border: 1px solid rgba(248, 81, 73, 0.3);
-  color: #ff7b72;
+  background: rgba(248, 81, 73, 0.12);
+  border: 1px solid rgba(248, 81, 73, 0.35);
+  color: #b91c1c;
 }
 
 .import-alert-success {
-  background: rgba(46, 160, 67, 0.15);
-  border: 1px solid rgba(46, 160, 67, 0.3);
-  color: #56d364;
+  background: rgba(46, 160, 67, 0.12);
+  border: 1px solid rgba(46, 160, 67, 0.35);
+  color: #15803d;
+}
+
+@media (prefers-color-scheme: dark) {
+  .import-alert-error { color: #ff7b72; }
+  .import-alert-success { color: #56d364; }
 }
 
 .import-preview-list {

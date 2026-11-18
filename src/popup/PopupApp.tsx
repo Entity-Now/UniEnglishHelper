@@ -123,33 +123,41 @@ export function PopupApp() {
 
   const setPageMode = async (mode: 'bilingual' | 'translation_only') => {
     if (!tabId) return;
-    await chrome.tabs.sendMessage(
-      tabId,
-      createEnvelope({
-        channel: 'runtime',
-        type: 'page.toggleMode',
-        source: 'popup',
-        payload: { mode },
-      }),
-    );
-    setPageTrStatus((prev) => (prev ? { ...prev, viewMode: mode } : null));
+    try {
+      await chrome.tabs.sendMessage(
+        tabId,
+        createEnvelope({
+          channel: 'runtime',
+          type: 'page.toggleMode',
+          source: 'popup',
+          payload: { mode },
+        }),
+      );
+      setPageTrStatus((prev) => (prev ? { ...prev, viewMode: mode } : null));
+    } catch {
+      setStatus('切换翻译视图失败（请刷新页面重试）');
+    }
   };
 
   const restorePage = async () => {
     if (!tabId) return;
-    await chrome.tabs.sendMessage(
-      tabId,
-      createEnvelope({
-        channel: 'runtime',
-        type: 'page.restore',
-        source: 'popup',
-        payload: {},
-      }),
-    );
-    setPageTrStatus((prev) =>
-      prev ? { ...prev, status: 'restored', viewMode: 'original' } : null,
-    );
-    setStatus('已恢复网页原文');
+    try {
+      await chrome.tabs.sendMessage(
+        tabId,
+        createEnvelope({
+          channel: 'runtime',
+          type: 'page.restore',
+          source: 'popup',
+          payload: {},
+        }),
+      );
+      setPageTrStatus((prev) =>
+        prev ? { ...prev, status: 'restored', viewMode: 'original' } : null,
+      );
+      setStatus('已恢复网页原文');
+    } catch {
+      setStatus('恢复原文失败（请刷新页面重试）');
+    }
   };
 
   const [showTranslateSettings, setShowTranslateSettings] = useState(false);
@@ -198,6 +206,28 @@ export function PopupApp() {
     void loadWords();
     void loadConfig();
   }, [refresh, refreshPerm, loadWords, loadConfig]);
+
+  // Poll page translation progress while translating so the counter updates live
+  useEffect(() => {
+    if (!tabId || pageTrStatus?.status !== 'translating') return;
+    const timer = window.setInterval(() => {
+      void chrome.tabs
+        .sendMessage(
+          tabId,
+          createEnvelope({
+            channel: 'runtime',
+            type: 'page.getStatus',
+            source: 'popup',
+            payload: {},
+          }),
+        )
+        .then((res) => {
+          if (res?.ok) setPageTrStatus(res.data);
+        })
+        .catch(() => undefined);
+    }, 800);
+    return () => window.clearInterval(timer);
+  }, [tabId, pageTrStatus?.status]);
 
   const toggleSiteDisable = async (disabled: boolean) => {
     if (!tabUrl || !appConfig) return;
@@ -249,8 +279,7 @@ export function PopupApp() {
   };
 
   const ensureHostInGesture = async (url: string): Promise<boolean> => {
-    const current = perm ?? (await getPermissionStatus());
-    if (!current.allSites && !current.complete) {
+    if (perm && !perm.allSites && !perm.complete) {
       return grantAllInGesture();
     }
     try {
@@ -262,23 +291,29 @@ export function PopupApp() {
   };
 
   const openPip = async () => {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id || !tab.url) {
+    let targetId = tabId;
+    let targetUrl = tabUrl;
+    if (!targetId || !targetUrl) {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      targetId = tab?.id ?? null;
+      targetUrl = tab?.url ?? '';
+    }
+    if (!targetId || !targetUrl) {
       setStatus('没有活动标签页');
       return;
     }
-    if (isRestrictedUrl(tab.url)) {
+    if (isRestrictedUrl(targetUrl)) {
       setStatus('请在普通 https 视频页面使用');
       return;
     }
     setBusy(true);
-    setTabId(tab.id);
-    setTabUrl(tab.url);
+    setTabId(targetId);
+    setTabUrl(targetUrl);
     try {
-      if (!(await ensureHostInGesture(tab.url))) return;
+      if (!(await ensureHostInGesture(targetUrl))) return;
       const res = await sendRuntime<{ mode: string }>(
         'pip.open',
-        { tabId: tab.id },
+        { tabId: targetId },
         'popup',
       );
       if (!res.ok) setStatus(`${res.error.code}: ${res.error.message}`);
@@ -295,23 +330,29 @@ export function PopupApp() {
   };
 
   const armCapture = async () => {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id || !tab.url) {
+    let targetId = tabId;
+    let targetUrl = tabUrl;
+    if (!targetId || !targetUrl) {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      targetId = tab?.id ?? null;
+      targetUrl = tab?.url ?? '';
+    }
+    if (!targetId || !targetUrl) {
       setStatus('没有活动标签页');
       return;
     }
-    if (isRestrictedUrl(tab.url)) {
+    if (isRestrictedUrl(targetUrl)) {
       setStatus('请在普通 https 视频页面使用');
       return;
     }
     setBusy(true);
-    setTabId(tab.id);
-    setTabUrl(tab.url);
+    setTabId(targetId);
+    setTabUrl(targetUrl);
     try {
-      if (!(await ensureHostInGesture(tab.url))) return;
+      // Request tabCapture streamId FIRST in the user gesture turn before any permission dialog
       let streamId: string;
       try {
-        streamId = await getTabCaptureStreamId(tab.id);
+        streamId = await getTabCaptureStreamId(targetId);
       } catch (err) {
         setStatus(
           `采集失败: ${err instanceof Error ? err.message : String(err)}`,
@@ -320,7 +361,7 @@ export function PopupApp() {
       }
       const res = await sendRuntime<{ sessionId: string }>(
         'capture.arm',
-        { tabId: tab.id, streamId },
+        { tabId: targetId, streamId },
         'popup',
       );
       if (!res.ok) setStatus(`${res.error.code}: ${res.error.message}`);
@@ -367,7 +408,9 @@ export function PopupApp() {
       );
     }
     if (vocabFilter === 'due') {
-      list = list.filter((w) => w.nextReviewAt <= now);
+      list = list.filter(
+        (w) => (w.learningStatus ?? 'new') !== 'learned' && w.nextReviewAt <= now,
+      );
     } else if (vocabFilter !== 'all') {
       list = list.filter(
         (w) => (w.learningStatus ?? 'new') === vocabFilter,
@@ -382,7 +425,7 @@ export function PopupApp() {
     for (const w of words) {
       const s = w.learningStatus ?? 'new';
       c[s] += 1;
-      if (w.nextReviewAt <= now) c.due += 1;
+      if (s !== 'learned' && w.nextReviewAt <= now) c.due += 1;
     }
     return c;
   }, [words]);
@@ -536,7 +579,7 @@ export function PopupApp() {
       <div className="popup-main">
         <div className="popup-header">
           <div className="popup-brand">
-            <img src={chrome.runtime.getURL('public/icons/icon48.png')} alt="logo" />
+            <img src={chrome.runtime.getURL('icons/icon48.png')} alt="logo" />
             UniEnglishHelper
           </div>
           <span className="popup-version">v{EXT_VERSION}</span>
@@ -725,6 +768,20 @@ export function PopupApp() {
                   恢复原文
                 </button>
               </div>
+            ) : pageTrStatus?.status === 'translating' ? (
+              <div className="row">
+                <button type="button" className="brand" disabled>
+                  正在翻译 ({pageTrStatus.progress.completed}/{pageTrStatus.progress.total || '…'})
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  style={{ flex: '0 0 auto' }}
+                  onClick={() => void restorePage()}
+                >
+                  取消 / 恢复
+                </button>
+              </div>
             ) : (
               <div className="row">
                 <button
@@ -734,14 +791,11 @@ export function PopupApp() {
                     busy ||
                     tabId == null ||
                     isRestricted ||
-                    siteDisabled ||
-                    pageTrStatus?.status === 'translating'
+                    siteDisabled
                   }
                   onClick={() => void translatePage()}
                 >
-                  {pageTrStatus?.status === 'translating'
-                    ? '正在翻译本页...'
-                    : '翻译当前网页 (双语对照)'}
+                  翻译当前网页 (双语对照)
                 </button>
               </div>
             )}
@@ -775,6 +829,7 @@ export function PopupApp() {
               busy ||
               tabId == null ||
               isRestricted ||
+              siteDisabled ||
               capture.state === 'CaptureLive'
             }
             onClick={() => void armCapture()}
@@ -819,7 +874,13 @@ export function PopupApp() {
         >
           设置
         </a>
-        <span className="popup-version">read-frog style</span>
+        <a
+          href={chrome.runtime.getURL('src/options/index.html#/study')}
+          target="_blank"
+          rel="noreferrer"
+        >
+          背单词
+        </a>
         <button
           type="button"
           className="linkish"

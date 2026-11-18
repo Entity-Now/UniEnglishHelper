@@ -26,4 +26,14 @@ describe('extractAudioFromBinaryMessage', () => {
     new Uint8Array(buf, 2, headerBytes.length).set(headerBytes);
     expect(extractAudioFromBinaryMessage(buf)).toBeNull();
   });
+
+  it('returns null for empty trailing Path:audio frame instead of leaking header bytes', () => {
+    const header = 'Content-Type:audio/mpeg\r\nPath:audio\r\n';
+    const headerBytes = new TextEncoder().encode(header);
+    const buf = new ArrayBuffer(2 + headerBytes.length);
+    const view = new DataView(buf);
+    view.setUint16(0, headerBytes.length, false);
+    new Uint8Array(buf, 2, headerBytes.length).set(headerBytes);
+    expect(extractAudioFromBinaryMessage(buf)).toBeNull();
+  });
 });

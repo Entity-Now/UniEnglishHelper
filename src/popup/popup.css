@@ -12,9 +12,14 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 280px;
+  max-height: 560px;
+  overflow: hidden;
 }
 
 .popup-main {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -225,18 +230,24 @@ body {
 }
 
 .vocab-badge-new {
-  background: color-mix(in srgb, #f5c542 28%, transparent);
-  color: #f5c542;
+  background: color-mix(in srgb, #f5c542 24%, transparent);
+  color: #a16207;
 }
 
 .vocab-badge-learning {
-  background: color-mix(in srgb, #5b9fff 28%, transparent);
-  color: #5b9fff;
+  background: color-mix(in srgb, #3b82f6 20%, transparent);
+  color: #1d4ed8;
 }
 
 .vocab-badge-learned {
-  background: color-mix(in srgb, #3ddc97 28%, transparent);
-  color: #3ddc97;
+  background: color-mix(in srgb, #10b981 20%, transparent);
+  color: #047857;
+}
+
+@media (prefers-color-scheme: dark) {
+  .vocab-badge-new { color: #f5c542; }
+  .vocab-badge-learning { color: #5b9fff; }
+  .vocab-badge-learned { color: #3ddc97; }
 }
 
 .vocab-tr {

@@ -63,12 +63,28 @@ async function dispatch(type: string, payload: unknown): Promise<unknown> {
       });
 
       const graph = await createCaptureGraph(stream);
-      active = {
+      const runtimeSession: SessionRuntime = {
         sessionId,
         tabId,
         graph,
         anchors: new AnchorStore(),
       };
+      active = runtimeSession;
+
+      const track = stream.getAudioTracks()[0];
+      if (track) {
+        track.addEventListener(
+          'ended',
+          () => {
+            if (active === runtimeSession) {
+              active.graph.stop();
+              active = null;
+            }
+          },
+          { once: true },
+        );
+      }
+
       return {
         loopbackOk: graph.loopbackOk,
         suspended: graph.ctx.state === 'suspended',
@@ -110,19 +126,29 @@ async function dispatch(type: string, payload: unknown): Promise<unknown> {
         return { accepted: 0 };
       }
       const samples = (p.samples as MediaTimelineSample[]) ?? [];
+      if (samples.length === 0) return { accepted: 0 };
       const audioTimeMs = active.graph.ctx.currentTime * 1000;
       const wallClockRecvMs = Date.now();
-      const accepted = active.anchors.append(
-        samples.map((s) => ({
-          audioTimeMs,
-          mediaTimeMs: s.mediaTimeMs,
-          playbackRate: s.playbackRate,
-          paused: s.paused,
-          epoch: s.epoch,
-          wallClockRecvMs,
-        })),
+      const latestWall = samples.reduce(
+        (max, s) => Math.max(max, s.wallClockMs || 0),
+        0,
       );
-      // refine: stamp each with same recv time; good enough for v1
+      const accepted = active.anchors.append(
+        samples.map((s) => {
+          const ageMs =
+            latestWall > 0 && s.wallClockMs
+              ? Math.max(0, latestWall - s.wallClockMs)
+              : 0;
+          return {
+            audioTimeMs: Math.max(0, audioTimeMs - ageMs),
+            mediaTimeMs: s.mediaTimeMs,
+            playbackRate: s.playbackRate,
+            paused: s.paused,
+            epoch: s.epoch,
+            wallClockRecvMs,
+          };
+        }),
+      );
       return { accepted };
     }
 
@@ -148,7 +174,14 @@ async function dispatch(type: string, payload: unknown): Promise<unknown> {
   }
 }
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Reject foreign extensions and direct content-script messages
+  if (sender.id && sender.id !== chrome.runtime.id) {
+    return false;
+  }
+  if (sender.tab != null) {
+    return false;
+  }
   if (
     !message ||
     typeof message !== 'object' ||

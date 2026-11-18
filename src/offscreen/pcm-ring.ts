@@ -101,7 +101,14 @@ export class AnchorStore {
         this.epoch = a.epoch;
         this.anchors = [];
       }
-      this.anchors.push(a);
+      const last = this.anchors[this.anchors.length - 1];
+      if (last && last.mediaTimeMs === a.mediaTimeMs) {
+        // Collapse consecutive stationary/pause anchors to the latest audio timestamp
+        // so resuming after a pause does not span the entire pause duration.
+        this.anchors[this.anchors.length - 1] = a;
+      } else {
+        this.anchors.push(a);
+      }
       // keep last ~500 anchors
       if (this.anchors.length > 500) {
         this.anchors.splice(0, this.anchors.length - 500);
@@ -121,7 +128,7 @@ export class AnchorStore {
 
     // find bracketing anchors with same epoch
     let i = 0;
-    while (i < list.length - 1 && list[i + 1].mediaTimeMs < mediaTimeMs) {
+    while (i < list.length - 2 && list[i + 1].mediaTimeMs <= mediaTimeMs) {
       i += 1;
     }
     const a = list[Math.max(0, i)];

@@ -53,9 +53,9 @@ export class WebpageTranslateController {
   private highQueue: TranslatableParagraph[] = [];
   private lowQueue: TranslatableParagraph[] = [];
   private queuedIds = new Set<string>();
-  private claimedElements = new Set<HTMLElement>();
+  private claimedElements = new WeakSet<HTMLElement>();
   private activeWorkers = 0;
-  private mutating = false;
+  private generation = 0;
   private translationCache = new Map<string, string>();
   private pendingMutationRoots: HTMLElement[] = [];
 
@@ -230,21 +230,29 @@ export class WebpageTranslateController {
   }
 
   private async runWorker(): Promise<void> {
+    const gen = this.generation;
     this.activeWorkers += 1;
     this.status = 'translating';
     try {
-      while (true) {
+      while (gen === this.generation) {
         const chunk = this.dequeueChunk();
         if (!chunk) break;
-        await this.translateChunk(chunk);
+        await this.translateChunk(chunk, gen);
       }
     } catch (err) {
-      console.error('[UEH] Translation worker failed', err);
-      this.status = 'error';
+      if (gen === this.generation) {
+        console.error('[UEH] Translation worker failed', err);
+        this.status = 'error';
+      }
     } finally {
-      this.activeWorkers -= 1;
-      if (this.activeWorkers === 0 && this.highQueue.length === 0 && this.lowQueue.length === 0) {
-        if (this.status !== 'error') this.status = 'translated';
+      this.activeWorkers = Math.max(0, this.activeWorkers - 1);
+      if (
+        gen === this.generation &&
+        this.activeWorkers === 0 &&
+        this.highQueue.length === 0 &&
+        this.lowQueue.length === 0
+      ) {
+        if (this.status === 'translating') this.status = 'translated';
         this.notify();
       }
     }
@@ -291,11 +299,24 @@ export class WebpageTranslateController {
   }
 
   private withDomMutation(fn: () => void): void {
-    this.mutating = true;
+    fn();
+  }
+
+  private captureHostTypography(element: HTMLElement): void {
+    if (element.style.getPropertyValue('--ueh-host-fs')) return;
     try {
-      fn();
-    } finally {
-      this.mutating = false;
+      const cs = window.getComputedStyle(element);
+      if (cs.fontSize && cs.fontSize !== '0px') {
+        element.style.setProperty('--ueh-host-fs', cs.fontSize);
+      }
+      if (cs.lineHeight && cs.lineHeight !== '0px') {
+        element.style.setProperty('--ueh-host-lh', cs.lineHeight);
+      }
+      if (cs.color && cs.color !== 'rgba(0, 0, 0, 0)') {
+        element.style.setProperty('--ueh-host-color', cs.color);
+      }
+    } catch {
+      // ignore detached / non-computed elements
     }
   }
 
@@ -350,7 +371,11 @@ export class WebpageTranslateController {
     if (oldest) this.translationCache.delete(oldest);
   }
 
-  private async translateChunk(chunk: TranslatableParagraph[]): Promise<void> {
+  private async translateChunk(
+    chunk: TranslatableParagraph[],
+    gen = this.generation,
+  ): Promise<void> {
+    if (gen !== this.generation) return;
     const live = chunk.filter((p) => p.element.isConnected);
     if (live.length === 0) return;
 
@@ -388,6 +413,9 @@ export class WebpageTranslateController {
         'content',
       );
 
+      // Discard results if user clicked Restore/Cancel while request was in flight
+      if (gen !== this.generation) return;
+
       if (res.ok && Array.isArray(res.data?.items)) {
         const resultMap = new Map(res.data.items.map((it) => [it.id, it.text]));
         this.withDomMutation(() => {
@@ -411,6 +439,7 @@ export class WebpageTranslateController {
         this.progress.failed += need.length;
       }
     } catch (err) {
+      if (gen !== this.generation) return;
       console.warn('[UEH WebTranslate] translate.cues request failed:', err);
       this.withDomMutation(() => {
         for (const p of need) this.removeLoadingPlaceholder(p.element, p.id);
@@ -431,6 +460,8 @@ export class WebpageTranslateController {
       return;
     }
 
+    // Snapshot host typography BEFORE adding .ueh-has-translation (which hides text in translation_only mode)
+    this.captureHostTypography(element);
     element.setAttribute('data-ueh-trans-id', id);
 
     let transBlock =
@@ -460,6 +491,11 @@ export class WebpageTranslateController {
   }
 
   setViewMode(mode: ViewMode): void {
+    if (mode === 'translation_only' && this.viewMode !== 'translation_only') {
+      document.querySelectorAll<HTMLElement>('.ueh-has-translation').forEach((el) => {
+        this.captureHostTypography(el);
+      });
+    }
     this.viewMode = mode;
     this.applyViewModeToBody();
     this.notify();
@@ -470,9 +506,16 @@ export class WebpageTranslateController {
   }
 
   restore(): void {
+    this.generation += 1;
     this.status = 'restored';
     this.viewMode = 'original';
     this.applyViewModeToBody();
+
+    if (this.mutationObserver) {
+      this.mutationObserver.disconnect();
+      this.mutationObserver = null;
+    }
+    window.clearTimeout(this.mutationDebounceTimer);
 
     if (this.intersectionObserver) {
       this.intersectionObserver.disconnect();
@@ -482,7 +525,7 @@ export class WebpageTranslateController {
     this.highQueue = [];
     this.lowQueue = [];
     this.queuedIds.clear();
-    this.claimedElements.clear();
+    this.claimedElements = new WeakSet<HTMLElement>();
     this.pendingMutationRoots = [];
 
     this.withDomMutation(() => {
@@ -490,9 +533,12 @@ export class WebpageTranslateController {
         .querySelectorAll('.ueh-translated-block, .ueh-translated-inline, [data-ueh-translated]')
         .forEach((el) => el.remove());
 
-      document.querySelectorAll('[data-ueh-trans-id]').forEach((el) => {
+      document.querySelectorAll<HTMLElement>('[data-ueh-trans-id]').forEach((el) => {
         el.removeAttribute('data-ueh-trans-id');
         el.classList.remove('ueh-has-translation');
+        el.style.removeProperty('--ueh-host-fs');
+        el.style.removeProperty('--ueh-host-lh');
+        el.style.removeProperty('--ueh-host-color');
       });
     });
 
@@ -541,8 +587,34 @@ export class WebpageTranslateController {
   private ensureMutationObserver(): void {
     if (this.mutationObserver) return;
 
+    const flushPendingRoots = () => {
+      if (this.status !== 'translated' && this.status !== 'translating') {
+        this.pendingMutationRoots = [];
+        return;
+      }
+      const rawRoots = this.pendingMutationRoots.splice(0);
+      const connected = rawRoots.filter((el) => el.isConnected);
+      if (connected.length === 0) return;
+
+      // Deduplicate nested descendants so we don't walk the same subtree multiple times
+      const uniqueRoots = connected.filter(
+        (el, idx) =>
+          connected.indexOf(el) === idx &&
+          !connected.some((other) => other !== el && other.contains(el)),
+      );
+
+      const batch = uniqueRoots.slice(0, 8);
+      const remaining = uniqueRoots.slice(8);
+      for (const root of batch) {
+        void this.translate({ root });
+      }
+      if (remaining.length > 0) {
+        this.pendingMutationRoots.push(...remaining);
+        this.mutationDebounceTimer = window.setTimeout(flushPendingRoots, 350);
+      }
+    };
+
     this.mutationObserver = new MutationObserver((mutations) => {
-      if (this.mutating) return;
       if (this.status !== 'translated' && this.status !== 'translating') return;
 
       for (const mutation of mutations) {
@@ -557,15 +629,7 @@ export class WebpageTranslateController {
       if (this.pendingMutationRoots.length === 0) return;
 
       window.clearTimeout(this.mutationDebounceTimer);
-      this.mutationDebounceTimer = window.setTimeout(() => {
-        const roots = this.pendingMutationRoots.splice(0);
-        const connected = roots.filter((el) => el.isConnected);
-        if (connected.length === 0) return;
-        // Limit maximum simultaneous incremental roots to prevent recursion storms
-        for (const root of connected.slice(0, 8)) {
-          void this.translate({ root });
-        }
-      }, 500);
+      this.mutationDebounceTimer = window.setTimeout(flushPendingRoots, 500);
     });
 
     this.mutationObserver.observe(document.body, {
@@ -581,6 +645,9 @@ export class WebpageTranslateController {
     }
     window.clearTimeout(this.mutationDebounceTimer);
     this.restore();
+    document.getElementById(STYLE_TAG_ID)?.remove();
+    document.documentElement.style.removeProperty('--ueh-trans-font-size');
+    document.documentElement.style.removeProperty('--ueh-trans-color');
     this.translationCache.clear();
     this.listeners.clear();
   }

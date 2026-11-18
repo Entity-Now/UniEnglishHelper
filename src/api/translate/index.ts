@@ -1,7 +1,7 @@
 import { getTranslationCache, putTranslationCache } from '../../db';
 import { simpleKey } from '../../utils/hash';
 import type { AppConfig } from '../../shared/domain/types';
-import { chatCompletion } from '../ai-provider';
+import { chatCompletion, hasLlmCredentials } from '../ai-provider';
 import type { FreeMtProviderId } from './types';
 import {
   FREE_MT_PROVIDERS,
@@ -34,8 +34,8 @@ export async function ensureFreeMtPermissions(
       ? allFreeMtOrigins()
       : FREE_MT_PROVIDERS[provider].origins;
 
-  const has = await chrome.permissions.contains({ origins });
-  if (has) return true;
+  // Call chrome.permissions.request directly without awaiting contains() first
+  // so transient user activation is never lost across async IPC boundaries.
   return chrome.permissions.request({ origins });
 }
 
@@ -161,11 +161,13 @@ async function translateWithLlm(
   src: string,
   dst: string,
   config: AppConfig,
-): Promise<string> {
+): Promise<{ text: string; cached: boolean; engine: string }> {
   const effectiveModel = config.ai.translationModel?.trim() || config.ai.model;
   const effectiveProviderId = config.ai.translationProviderId?.trim() || config.ai.providerId;
-  const key = config.ai.apiKeys[effectiveProviderId] || config.ai.apiKeys[config.ai.providerId];
-  if (!key) {
+  const hasKey =
+    hasLlmCredentials(config, effectiveProviderId) ||
+    hasLlmCredentials(config, config.ai.providerId);
+  if (!hasKey) {
     if (freeMtEnabled(config) || config.features.enableUnofficialFreeMt) {
       const r = await translateFree(
         text,
@@ -173,16 +175,19 @@ async function translateWithLlm(
         dst,
         resolveFreeProvider(config),
       );
-      return r.text;
+      return { text: r.text, cached: true, engine: r.provider };
     }
-    return text;
+    return { text, cached: false, engine: 'passthrough' };
   }
+  const activeProviderId = hasLlmCredentials(config, effectiveProviderId)
+    ? effectiveProviderId
+    : config.ai.providerId;
   const promptObj = getSubtitlesTranslatePromptFromConfig(
     config.videoSubtitles?.customPromptsConfig ?? { promptId: null, patterns: [] },
     dst,
     text,
   );
-  return chatCompletion(
+  const out = await chatCompletion(
     config,
     [
       { role: 'system', content: promptObj.systemPrompt },
@@ -190,10 +195,16 @@ async function translateWithLlm(
     ],
     {
       model: effectiveModel,
-      providerId: effectiveProviderId,
+      providerId: activeProviderId,
       disableThinking: true,
+      timeoutMs: 30_000,
     },
   );
+  return {
+    text: out,
+    cached: true,
+    engine: `llm:${activeProviderId}:${effectiveModel}`,
+  };
 }
 
 /**
@@ -205,6 +216,11 @@ export async function translateTexts(
   dst: string,
   config: AppConfig,
 ): Promise<{ id: string; text: string; provider?: string }[]> {
+  const effectiveProviderId = config.ai.translationProviderId?.trim() || config.ai.providerId;
+  const hasLlmKey =
+    hasLlmCredentials(config, effectiveProviderId) ||
+    hasLlmCredentials(config, config.ai.providerId);
+
   const useLlm =
     config.translateEngine === 'official_llm' ||
     (config.features.enableLlmTranslate &&
@@ -218,26 +234,24 @@ export async function translateTexts(
   const forceFree =
     config.translateEngine === 'free_mt' ||
     config.translateEngine === 'unofficial_free' ||
-    config.translateEngine === 'google_free' ||
-    config.translateEngine === 'microsoft_free' ||
-    config.translateEngine === 'mymemory_free' ||
-    (config.features.enableUnofficialFreeMt &&
-      !(config.ai.apiKeys[config.ai.translationProviderId?.trim() || config.ai.providerId] || config.ai.apiKeys[config.ai.providerId]) &&
-      !useLlm);
+    config.translateEngine !== 'official_llm' && !useLlm ||
+    (config.features.enableUnofficialFreeMt && !hasLlmKey && !useLlm);
 
   const preferFree =
     forceFree ||
     (config.features.enableUnofficialFreeMt &&
       config.translateEngine !== 'official_llm');
 
-  const tag = engineCacheTag(config);
+  const srcKey = src.toLowerCase();
+  const dstKey = dst.toLowerCase();
+  const tag = engineCacheTag(config).toLowerCase();
   const results: { id: string; text: string; provider?: string }[] = [];
   const miss: TranslateItem[] = [];
 
   for (const item of texts) {
-    const key = simpleKey(src, dst, tag, item.text);
+    const key = simpleKey(srcKey, dstKey, tag, item.text);
     const cached = await getTranslationCache(key);
-    if (cached) {
+    if (cached && cached.engine !== 'passthrough') {
       results.push({
         id: item.id,
         text: cached.text,
@@ -250,18 +264,13 @@ export async function translateTexts(
 
   if (miss.length === 0) return orderLike(texts, results);
 
-  const effectiveProviderId = config.ai.translationProviderId?.trim() || config.ai.providerId;
-  const effectiveModel = config.ai.translationModel?.trim() || config.ai.model;
-  const hasLlmKey = Boolean(
-    config.ai.apiKeys[effectiveProviderId] || config.ai.apiKeys[config.ai.providerId],
-  );
-
   if (preferFree || forceFree) {
     const preferred = resolveFreeProvider(config);
     try {
       const batch = await translateFreeBatch(miss, src, dst, preferred);
       for (const item of batch) {
-        const key = simpleKey(src, dst, tag, miss.find((m) => m.id === item.id)!.text);
+        const origText = miss.find((m) => m.id === item.id)?.text ?? '';
+        const key = simpleKey(srcKey, dstKey, tag, origText);
         await putTranslationCache(key, src, dst, item.provider, item.text);
         results.push(item);
       }
@@ -274,16 +283,24 @@ export async function translateTexts(
     }
   }
 
-  // LLM path (per item)
-  for (const item of miss) {
-    const translated = await translateWithLlm(item.text, src, dst, config);
-    const key = simpleKey(src, dst, tag, item.text);
-    const engine = hasLlmKey
-      ? `llm:${effectiveProviderId}:${effectiveModel}`
-      : 'passthrough';
-    await putTranslationCache(key, src, dst, engine, translated);
-    results.push({ id: item.id, text: translated, provider: engine });
-  }
+  // LLM path (bounded concurrency = 3 to avoid head-of-line blocking without flooding local/API servers)
+  const CONCURRENCY = 3;
+  let cursor = 0;
+  const runWorker = async () => {
+    while (cursor < miss.length) {
+      const idx = cursor++;
+      const item = miss[idx]!;
+      const res = await translateWithLlm(item.text, src, dst, config);
+      if (res.cached && res.engine !== 'passthrough') {
+        const key = simpleKey(srcKey, dstKey, tag, item.text);
+        await putTranslationCache(key, src, dst, res.engine, res.text);
+      }
+      results.push({ id: item.id, text: res.text, provider: res.engine });
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, miss.length) }, () => runWorker()),
+  );
 
   return orderLike(texts, results);
 }

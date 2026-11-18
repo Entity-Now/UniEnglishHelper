@@ -26,6 +26,7 @@ async function getAuthToken(force = false): Promise<string> {
     headers: {
       Accept: '*/*',
     },
+    signal: AbortSignal.timeout(10_000),
   });
   if (!res.ok) {
     throw new Error(`Microsoft auth HTTP ${res.status}`);
@@ -74,6 +75,7 @@ async function translateOnce(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify([{ Text: text }]),
+    signal: AbortSignal.timeout(15_000),
   });
 
   if (res.status === 401 || res.status === 403) {
@@ -117,7 +119,7 @@ export const microsoftFreeProvider: FreeMtProvider = {
   },
 };
 
-/** Batch translate (same language pair) — one HTTP call. */
+/** Batch translate (same language pair) — chunked to stay within Microsoft API limits. */
 export async function microsoftTranslateBatch(
   texts: string[],
   src: string,
@@ -136,14 +138,15 @@ export async function microsoftTranslateBatch(
   });
   if (from) params.set('from', from);
 
-  const doRequest = async (t: string) => {
+  const doSlice = async (slice: string[], t: string): Promise<string[]> => {
     const res = await fetch(`${TRANSLATE_URL}?${params.toString()}`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${t}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(texts.map((Text) => ({ Text }))),
+      body: JSON.stringify(slice.map((Text) => ({ Text }))),
+      signal: AbortSignal.timeout(20_000),
     });
     if (res.status === 401 || res.status === 403) {
       const err = new Error(`Microsoft MT auth ${res.status}`);
@@ -156,6 +159,11 @@ export async function microsoftTranslateBatch(
     const data = (await res.json()) as Array<{
       translations?: Array<{ text?: string }>;
     }>;
+    if (!Array.isArray(data) || data.length !== slice.length) {
+      throw new Error(
+        `Microsoft MT batch length mismatch: expected ${slice.length}, got ${Array.isArray(data) ? data.length : 'non-array'}`,
+      );
+    }
     return data.map((row, i) => {
       const out = row?.translations?.[0]?.text;
       if (!out) throw new Error(`Microsoft MT batch empty at ${i}`);
@@ -163,15 +171,38 @@ export async function microsoftTranslateBatch(
     });
   };
 
-  try {
-    return await doRequest(token);
-  } catch (err) {
-    if ((err as { code?: string }).code === 'AUTH') {
-      token = await getAuthToken(true);
-      return doRequest(token);
+  // Chunk by <= 50 items and <= 9,000 chars per request
+  const slices: string[][] = [];
+  let current: string[] = [];
+  let currentChars = 0;
+  for (const item of texts) {
+    if (
+      current.length >= 50 ||
+      (current.length > 0 && currentChars + item.length > 9_000)
+    ) {
+      slices.push(current);
+      current = [];
+      currentChars = 0;
     }
-    throw err;
+    current.push(item);
+    currentChars += item.length;
   }
+  if (current.length > 0) slices.push(current);
+
+  const outputs: string[] = [];
+  for (const slice of slices) {
+    try {
+      outputs.push(...(await doSlice(slice, token)));
+    } catch (err) {
+      if ((err as { code?: string }).code === 'AUTH') {
+        token = await getAuthToken(true);
+        outputs.push(...(await doSlice(slice, token)));
+      } else {
+        throw err;
+      }
+    }
+  }
+  return outputs;
 }
 
 /** Test helper: clear token cache */

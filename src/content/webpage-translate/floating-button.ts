@@ -36,8 +36,9 @@ export class WebpageTranslateFloatingButton {
   private progress: TranslationProgress = { total: 0, completed: 0, failed: 0 };
   private viewMode: ViewMode = 'bilingual';
   private scrollHideTimer = 0;
-  private onScroll: (() => void) | null = null;
+  private onScroll: ((e: Event) => void) | null = null;
   private onDocClick: ((e: Event) => void) | null = null;
+  private onKeyDown: ((e: KeyboardEvent) => void) | null = null;
 
   constructor(
     controller: WebpageTranslateController,
@@ -90,8 +91,16 @@ export class WebpageTranslateFloatingButton {
       },
     );
 
-    this.onScroll = () => {
-      if (!this.host) return;
+    this.onScroll = (e: Event) => {
+      if (!this.host || this.menuOpen) return;
+      if (
+        e.target !== document &&
+        e.target !== document.documentElement &&
+        e.target !== document.body &&
+        e.target !== window
+      ) {
+        return;
+      }
       this.host.classList.add('ueh-fab-hidden');
       window.clearTimeout(this.scrollHideTimer);
       this.scrollHideTimer = window.setTimeout(() => {
@@ -108,6 +117,14 @@ export class WebpageTranslateFloatingButton {
       this.render();
     };
     document.addEventListener('click', this.onDocClick, true);
+
+    this.onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && this.menuOpen) {
+        this.menuOpen = false;
+        this.render();
+      }
+    };
+    document.addEventListener('keydown', this.onKeyDown, true);
 
     this.render();
   }
@@ -174,6 +191,7 @@ export class WebpageTranslateFloatingButton {
     pill.setAttribute('role', 'button');
     pill.setAttribute('tabindex', '0');
     pill.setAttribute('aria-label', '网页翻译');
+    pill.setAttribute('aria-expanded', String(this.menuOpen));
 
     let labelText = '翻译';
     if (this.status === 'translating') {
@@ -264,6 +282,10 @@ export class WebpageTranslateFloatingButton {
     if (this.onDocClick) {
       document.removeEventListener('click', this.onDocClick, true);
       this.onDocClick = null;
+    }
+    if (this.onKeyDown) {
+      document.removeEventListener('keydown', this.onKeyDown, true);
+      this.onKeyDown = null;
     }
     window.clearTimeout(this.scrollHideTimer);
   }

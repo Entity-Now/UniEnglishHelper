@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import type { LearningStatus, WordRecord } from '../../db/schema';
 import type { ReviewResult } from '../../shared/domain/types';
 import { PORT_CLIP } from '../../shared/constants';
@@ -7,8 +7,17 @@ import type { ClipPortServerMessage } from '../../shared/messages/ports';
 import { sendRuntime } from '../../shared/messaging/client';
 import { exportWordsJson } from '../../api/dictionary';
 import { DictionaryImportModal } from '../components/DictionaryImportModal';
+import { SafeMarkdown } from '../../components/safe-markdown';
+import { speakTextSmart } from '../../utils/tts-playback/speak';
 
 type FilterMode = 'all' | 'due' | 'new' | 'learning' | 'mature' | 'learned';
+
+const REVIEW_LABELS: Record<ReviewResult, string> = {
+  again: '忘光',
+  hard: '模糊',
+  good: '记得',
+  easy: '熟练',
+};
 
 export function DictionaryPage(props: {
   words: WordRecord[];
@@ -30,12 +39,18 @@ export function DictionaryPage(props: {
   const now = Date.now();
 
   const stats = useMemo(() => {
-    const due = props.words.filter((w) => w.nextReviewAt <= now).length;
-    const learning = props.words.filter(
-      (w) => w.reviewStage > 0 && w.reviewStage < 4,
+    const due = props.words.filter(
+      (w) => (w.learningStatus ?? 'new') !== 'learned' && w.nextReviewAt <= now,
     ).length;
-    const mature = props.words.filter((w) => w.reviewStage >= 4).length;
-    const fresh = props.words.filter((w) => w.reviewStage === 0).length;
+    const learning = props.words.filter(
+      (w) => (w.learningStatus ?? 'new') === 'learning',
+    ).length;
+    const mature = props.words.filter(
+      (w) => (w.learningStatus ?? 'new') === 'learned' || w.reviewStage >= 4,
+    ).length;
+    const fresh = props.words.filter(
+      (w) => (w.learningStatus ?? 'new') === 'new' && w.reviewStage === 0,
+    ).length;
     return {
       total: props.words.length,
       due,
@@ -44,6 +59,15 @@ export function DictionaryPage(props: {
       fresh,
     };
   }, [props.words, now]);
+
+  useEffect(() => {
+    if (!selected) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSelected(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selected]);
 
   const filtered = useMemo(() => {
     let list = props.words.slice();
@@ -59,7 +83,9 @@ export function DictionaryPage(props: {
     }
     switch (filter) {
       case 'due':
-        list = list.filter((w) => w.nextReviewAt <= now);
+        list = list.filter(
+          (w) => (w.learningStatus ?? 'new') !== 'learned' && w.nextReviewAt <= now,
+        );
         break;
       case 'new':
         list = list.filter((w) => (w.learningStatus ?? 'new') === 'new');
@@ -286,7 +312,8 @@ export function DictionaryPage(props: {
         )}
 
         {filtered.map((w) => {
-          const due = w.nextReviewAt <= now;
+          const st = (w.learningStatus ?? 'new') as LearningStatus;
+          const due = st !== 'learned' && w.nextReviewAt <= now;
           return (
             <div
               className="word-item"
@@ -303,11 +330,31 @@ export function DictionaryPage(props: {
                   justifyContent: 'space-between',
                   gap: 8,
                   flexWrap: 'wrap',
+                  alignItems: 'center',
                 }}
               >
-                <strong style={{ fontSize: 17 }}>{w.surface}</strong>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <strong style={{ fontSize: 17 }}>{w.surface}</strong>
+                  <button
+                    type="button"
+                    className="ghost"
+                    title="朗读发音"
+                    aria-label={`朗读 ${w.surface}`}
+                    style={{ padding: '2px 7px', fontSize: 12 }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void speakTextSmart(w.surface, 'options');
+                    }}
+                  >
+                    🔊
+                  </button>
+                </div>
                 <span className="muted" style={{ fontSize: 12 }}>
-                  {due ? '● 待复习' : `stage ${w.reviewStage}`}
+                  {st === 'learned'
+                    ? '✓ 已掌握'
+                    : due
+                      ? '● 待复习'
+                      : `Stage ${w.reviewStage}`}
                 </span>
               </div>
               {w.kind === 'sentence' && (
@@ -369,9 +416,10 @@ export function DictionaryPage(props: {
               <div
                 style={{
                   display: 'flex',
-                  gap: 8,
+                  gap: 6,
                   marginTop: 8,
                   flexWrap: 'wrap',
+                  alignItems: 'center',
                 }}
                 onClick={(e) => e.stopPropagation()}
               >
@@ -381,59 +429,74 @@ export function DictionaryPage(props: {
                     ['learning', '学习中'],
                     ['learned', '已掌握'],
                   ] as const
-                ).map(([st, label]) => (
-                  <button
-                    key={st}
-                    type="button"
-                    className="primary"
-                    disabled={(w.learningStatus ?? 'new') === st}
-                    onClick={async () => {
-                      if (w.id == null) return;
-                      await sendRuntime(
-                        'word.setStatus',
-                        { id: w.id, learningStatus: st as LearningStatus },
-                        'options',
-                      );
-                      await props.onRefresh();
-                    }}
-                  >
-                    {label}
-                  </button>
-                ))}
+                ).map(([stKey, label]) => {
+                  const active = (w.learningStatus ?? 'new') === stKey;
+                  return (
+                    <button
+                      key={stKey}
+                      type="button"
+                      className={active ? 'primary' : 'ghost'}
+                      style={{ padding: '4px 10px', fontSize: 12 }}
+                      disabled={active}
+                      onClick={async () => {
+                        if (w.id == null) return;
+                        await sendRuntime(
+                          'word.setStatus',
+                          { id: w.id, learningStatus: stKey as LearningStatus },
+                          'options',
+                        );
+                        await props.onRefresh();
+                      }}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+                <span className="muted" style={{ margin: '0 2px' }}>|</span>
                 {(['again', 'hard', 'good', 'easy'] as ReviewResult[]).map(
                   (r) => (
                     <button
                       key={r}
                       type="button"
-                      className="primary"
+                      className="ghost"
+                      style={{ padding: '4px 9px', fontSize: 12 }}
+                      title={`间隔复习反馈：${REVIEW_LABELS[r]} (${r})`}
                       onClick={() => w.id != null && props.onReview(w.id, r)}
                     >
-                      {r}
+                      {REVIEW_LABELS[r]}
                     </button>
                   ),
                 )}
                 {w.audioClipId != null && (
                   <button
                     type="button"
-                    className="primary"
+                    className="ghost"
+                    style={{ padding: '4px 10px', fontSize: 12 }}
                     onClick={() => void playClip(w.audioClipId!)}
                   >
-                    播放原声
+                    ▶ 原声
                   </button>
                 )}
                 <button
                   type="button"
-                  className="primary"
+                  className="ghost"
+                  style={{ padding: '4px 10px', fontSize: 12, marginLeft: 'auto' }}
                   disabled={retranslatingId === w.id}
                   onClick={() => void handleRetranslate(w)}
                   title="调用大模型重新获取单词释义并更新"
                 >
-                  {retranslatingId === w.id ? '重译中…' : '重新翻译'}
+                  {retranslatingId === w.id ? '重译中…' : '↻ 重新翻译'}
                 </button>
                 <button
                   type="button"
-                  className="primary"
-                  onClick={() => w.id != null && props.onDelete(w.id)}
+                  className="danger"
+                  style={{ padding: '4px 10px', fontSize: 12 }}
+                  onClick={() => {
+                    if (w.id == null) return;
+                    if (window.confirm(`确定从生词本删除「${w.surface}」吗？`)) {
+                      void props.onDelete(w.id);
+                    }
+                  }}
                 >
                   删除
                 </button>
@@ -447,70 +510,105 @@ export function DictionaryPage(props: {
       </div>
 
       {selected && (
-        <div className="card">
-          <h2>详情 · {selected.surface}</h2>
-          {selected.phonetic && <p className="muted">{selected.phonetic}</p>}
-          {selected.translation && (
-            <pre
-              style={{
-                whiteSpace: 'pre-wrap',
-                fontFamily: 'inherit',
-                fontSize: 13,
-                lineHeight: 1.5,
-                margin: '8px 0',
-              }}
-            >
-              {selected.translation}
-            </pre>
-          )}
-          {selected.explanation && selected.explainEngine === 'llm' && (
-            <pre
-              style={{
-                whiteSpace: 'pre-wrap',
-                fontFamily: 'inherit',
-                fontSize: 12,
-                lineHeight: 1.45,
-                margin: '8px 0',
-                padding: '8px 10px',
-                background: 'rgba(255,255,255,.04)',
-                borderRadius: 6,
-                color: '#ccc',
-              }}
-            >
-              {selected.explanation}
-            </pre>
-          )}
-          <p>
-            <strong>上下文</strong>
-            <br />
-            {selected.context}
-          </p>
-          {selected.contextTranslation && (
-            <p className="muted">{selected.contextTranslation}</p>
-          )}
-          {selected.sourceUrl && (
-            <p className="muted">
-              <a href={selected.sourceUrl} target="_blank" rel="noreferrer">
-                {selected.sourceTitle || selected.sourceUrl}
-              </a>
-            </p>
-          )}
-          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-            <button
-              type="button"
-              className="primary"
-              disabled={retranslatingId === selected.id}
-              onClick={() => void handleRetranslate(selected)}
-            >
-              {retranslatingId === selected.id ? '正在重新翻译…' : '重新翻译 (AI)'}
-            </button>
-            <button
-              type="button"
-              className="primary"
-              onClick={() => setSelected(null)}
-            >
-              关闭详情
-            </button>
+        <div className="modal-backdrop" onClick={() => setSelected(null)}>
+          <div
+            className="modal-dialog"
+            style={{ maxWidth: 600 }}
+            role="dialog"
+            aria-modal="true"
+            aria-label={`词条详情 · ${selected.surface}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <h3 style={{ margin: 0 }}>详情 · {selected.surface}</h3>
+                <button
+                  type="button"
+                  className="ghost"
+                  style={{ padding: '2px 8px', fontSize: 12 }}
+                  onClick={() => void speakTextSmart(selected.surface, 'options')}
+                >
+                  🔊 朗读
+                </button>
+              </div>
+              <button
+                type="button"
+                className="modal-close"
+                aria-label="关闭详情"
+                onClick={() => setSelected(null)}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="modal-body">
+              {selected.phonetic && <p className="muted">{selected.phonetic}</p>}
+              {selected.translation && (
+                <pre
+                  style={{
+                    whiteSpace: 'pre-wrap',
+                    fontFamily: 'inherit',
+                    fontSize: 14,
+                    fontWeight: 600,
+                    lineHeight: 1.5,
+                    margin: '8px 0 12px',
+                  }}
+                >
+                  {selected.translation}
+                </pre>
+              )}
+              {selected.explanation && (
+                <div
+                  style={{
+                    margin: '8px 0 14px',
+                    padding: '10px 12px',
+                    background: 'var(--rf-secondary)',
+                    border: '1px solid var(--rf-border)',
+                    borderRadius: 8,
+                  }}
+                >
+                  <SafeMarkdown
+                    className="study-explanation-container"
+                    markdown={selected.explanation}
+                  />
+                </div>
+              )}
+              {selected.context && (
+                <p style={{ margin: '10px 0 4px' }}>
+                  <strong>上下文</strong>
+                  <br />
+                  {selected.context}
+                </p>
+              )}
+              {selected.contextTranslation && (
+                <p className="muted" style={{ marginTop: 2 }}>
+                  {selected.contextTranslation}
+                </p>
+              )}
+              {selected.sourceUrl && (
+                <p className="muted" style={{ marginTop: 10 }}>
+                  <a href={selected.sourceUrl} target="_blank" rel="noreferrer">
+                    {selected.sourceTitle || selected.sourceUrl}
+                  </a>
+                </p>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="primary"
+                disabled={retranslatingId === selected.id}
+                onClick={() => void handleRetranslate(selected)}
+              >
+                {retranslatingId === selected.id ? '正在重新翻译…' : '↻ 重新翻译 (AI)'}
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => setSelected(null)}
+              >
+                关闭
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -532,16 +630,19 @@ function MiniStat(props: {
 }) {
   return (
     <div
+      className="metric"
       style={{
-        background: props.accent ? 'oklch(30% 0.04 82)' : '#0d1117',
-        borderRadius: 8,
-        padding: 12,
-        border: '1px solid #30363d',
         minWidth: 88,
+        background: props.accent
+          ? 'color-mix(in srgb, var(--rf-brand) 16%, var(--rf-card))'
+          : undefined,
+        borderColor: props.accent
+          ? 'color-mix(in srgb, var(--rf-brand) 50%, var(--rf-border))'
+          : undefined,
       }}
     >
-      <div className="muted">{props.label}</div>
-      <div style={{ fontSize: 22, fontWeight: 600 }}>{props.value}</div>
+      <div className="label">{props.label}</div>
+      <div className="value">{props.value}</div>
     </div>
   );
 }
@@ -567,6 +668,6 @@ function fetchClip(clipId: number): Promise<Blob> {
         port.disconnect();
       }
     });
-    port.postMessage({ type: 'clips.getBlob', requestId, clipId });
+    port.postMessage({ type: 'clips.getBlobChunks', requestId, clipId });
   });
 }

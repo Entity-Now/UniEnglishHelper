@@ -22,6 +22,7 @@ import {
   isQueryEchoLine,
   isSentenceLine,
 } from '../api/ai-provider';
+import { BUILTIN_SKILLS, isBuiltinSkillId } from '../utils/constants/skills';
 
 /** Notify options/popup UIs that the words table changed. */
 async function bumpWordsRevision(): Promise<void> {
@@ -304,69 +305,73 @@ export async function addWord(input: WordCreate): Promise<WordRecord> {
   // Clear any existing machine translation cache for this word
   await deleteTranslationCacheForWord(input.surface).catch(() => 0);
 
-  const existing = await db.words.where('wordKey').equals(wordKey).first();
-  if (existing) {
-    if (!translation) {
-      translation = cleanStoredTranslation(existing.translation, existing.surface);
-    }
-    if (!translation) {
-      const exp = input.explanation || existing.explanation;
-      if (exp && existing.kind !== 'sentence') {
-        const extracted = extractDefinitionFromLlm(exp, existing.surface);
-        translation = cleanStoredTranslation(extracted, existing.surface);
+  const saved = await db.transaction('rw', db.words, async () => {
+    const existing = await db.words.where('wordKey').equals(wordKey).first();
+    if (existing) {
+      let resolvedTr = translation;
+      if (!resolvedTr) {
+        resolvedTr = cleanStoredTranslation(existing.translation, existing.surface);
       }
+      if (!resolvedTr) {
+        const exp = input.explanation || existing.explanation;
+        if (exp && existing.kind !== 'sentence') {
+          const extracted = extractDefinitionFromLlm(exp, existing.surface);
+          resolvedTr = cleanStoredTranslation(extracted, existing.surface);
+        }
+      }
+      const updated: WordRecord = {
+        ...existing,
+        translation: resolvedTr ?? existing.translation,
+        phonetic: input.phonetic ?? existing.phonetic,
+        context: input.context || existing.context,
+        contextTranslation:
+          input.contextTranslation ?? existing.contextTranslation,
+        explanation: input.explanation ?? existing.explanation,
+        explainEngine: input.explainEngine ?? existing.explainEngine,
+        explainProvider: input.explainProvider ?? existing.explainProvider,
+        kind: input.kind ?? existing.kind ?? 'word',
+        sourceUrl: input.sourceUrl ?? existing.sourceUrl,
+        sourceTitle: input.sourceTitle ?? existing.sourceTitle,
+        cueStartMs: input.cueStartMs ?? existing.cueStartMs,
+        cueEndMs: input.cueEndMs ?? existing.cueEndMs,
+        audioClipId: input.audioClipId ?? existing.audioClipId,
+        tags: input.tags ?? existing.tags,
+        learningStatus: existing.learningStatus ?? 'new',
+        updatedAt: now,
+      };
+      await db.words.put(updated);
+      return updated;
     }
-    const updated: WordRecord = {
-      ...existing,
-      translation: translation ?? existing.translation,
-      phonetic: input.phonetic ?? existing.phonetic,
-      context: input.context || existing.context,
-      contextTranslation:
-        input.contextTranslation ?? existing.contextTranslation,
-      explanation: input.explanation ?? existing.explanation,
-      explainEngine: input.explainEngine ?? existing.explainEngine,
-      explainProvider: input.explainProvider ?? existing.explainProvider,
-      kind: input.kind ?? existing.kind ?? 'word',
-      sourceUrl: input.sourceUrl ?? existing.sourceUrl,
-      sourceTitle: input.sourceTitle ?? existing.sourceTitle,
-      cueStartMs: input.cueStartMs ?? existing.cueStartMs,
-      cueEndMs: input.cueEndMs ?? existing.cueEndMs,
-      audioClipId: input.audioClipId ?? existing.audioClipId,
-      tags: input.tags ?? existing.tags,
-      learningStatus: existing.learningStatus ?? 'new',
+    const record: WordRecord = {
+      wordKey,
+      surface: input.surface.trim(),
+      translation,
+      phonetic: input.phonetic,
+      context: input.context,
+      contextTranslation: input.contextTranslation,
+      explanation: input.explanation,
+      explainEngine: input.explainEngine,
+      explainProvider: input.explainProvider,
+      kind: input.kind ?? 'word',
+      sourceUrl: input.sourceUrl,
+      sourceTitle: input.sourceTitle,
+      cueStartMs: input.cueStartMs,
+      cueEndMs: input.cueEndMs,
+      audioClipId: input.audioClipId,
+      tags: input.tags,
+      learningStatus: 'new',
+      reviewStage: 0,
+      nextReviewAt: now,
+      ease: 2.5,
+      createdAt: now,
       updatedAt: now,
     };
-    await db.words.put(updated);
-    await bumpWordsRevision();
-    return updated;
-  }
-  const record: WordRecord = {
-    wordKey,
-    surface: input.surface.trim(),
-    translation,
-    phonetic: input.phonetic,
-    context: input.context,
-    contextTranslation: input.contextTranslation,
-    explanation: input.explanation,
-    explainEngine: input.explainEngine,
-    explainProvider: input.explainProvider,
-    kind: input.kind ?? 'word',
-    sourceUrl: input.sourceUrl,
-    sourceTitle: input.sourceTitle,
-    cueStartMs: input.cueStartMs,
-    cueEndMs: input.cueEndMs,
-    audioClipId: input.audioClipId,
-    tags: input.tags,
-    learningStatus: 'new',
-    reviewStage: 0,
-    nextReviewAt: now,
-    ease: 2.5,
-    createdAt: now,
-    updatedAt: now,
-  };
-  const id = await db.words.add(record);
+    const id = await db.words.add(record);
+    return { ...record, id };
+  });
+
   await bumpWordsRevision();
-  return { ...record, id };
+  return saved;
 }
 
 export async function updateWordTranslation(
@@ -471,9 +476,12 @@ export async function updateReview(
   else stage = Math.min(STAGE_INTERVALS_MS.length - 1, stage + 2);
 
   const now = Date.now();
+  const learningStatus: import('./schema').LearningStatus =
+    stage === 0 ? 'new' : stage >= 4 ? 'learned' : 'learning';
   const updated: WordRecord = {
     ...word,
     reviewStage: stage,
+    learningStatus,
     nextReviewAt: now + STAGE_INTERVALS_MS[stage],
     updatedAt: now,
   };
@@ -500,102 +508,114 @@ export async function importWords(
 ): Promise<{ added: number; updated: number; total: number }> {
   const now = Date.now();
 
-  if (mode === 'overwrite') {
-    await db.words.clear();
-  }
+  const result = await db.transaction('rw', db.words, async () => {
+    let added = 0;
+    let updated = 0;
 
-  let added = 0;
-  let updated = 0;
+    const existingWords = mode === 'overwrite' ? [] : await db.words.toArray();
+    const existingMap = new Map<string, WordRecord>(
+      existingWords.map((w) => [w.wordKey, w]),
+    );
 
-  const existingWords = mode === 'overwrite' ? [] : await db.words.toArray();
-  const existingMap = new Map<string, WordRecord>(
-    existingWords.map((w) => [w.wordKey, w]),
-  );
+    const toPut: WordRecord[] = [];
 
-  const toPut: WordRecord[] = [];
+    for (const item of items) {
+      if (!item.surface || typeof item.surface !== 'string') continue;
+      const surface = item.surface.trim();
+      if (!surface) continue;
+      const wordKey = normalizeWordKey(surface);
+      if (!wordKey) continue;
 
-  for (const item of items) {
-    if (!item.surface || typeof item.surface !== 'string') continue;
-    const surface = item.surface.trim();
-    if (!surface) continue;
-    const wordKey = normalizeWordKey(surface);
-    if (!wordKey) continue;
+      const existing = existingMap.get(wordKey);
 
-    const existing = existingMap.get(wordKey);
-
-    if (existing && mode !== 'overwrite') {
-      let tr = cleanStoredTranslation(item.translation, surface);
-      if (!tr && item.explanation && (item.kind ?? existing.kind) !== 'sentence') {
-        const extracted = extractDefinitionFromLlm(item.explanation, surface);
-        tr = cleanStoredTranslation(extracted, surface);
+      if (existing && mode !== 'overwrite') {
+        let tr = cleanStoredTranslation(item.translation, surface);
+        if (!tr && item.explanation && (item.kind ?? existing.kind) !== 'sentence') {
+          const extracted = extractDefinitionFromLlm(item.explanation, surface);
+          tr = cleanStoredTranslation(extracted, surface);
+        }
+        const updatedRecord: WordRecord = {
+          ...existing,
+          translation: tr ?? existing.translation,
+          phonetic: item.phonetic ?? existing.phonetic,
+          context: item.context || existing.context,
+          contextTranslation:
+            item.contextTranslation ?? existing.contextTranslation,
+          explanation: item.explanation ?? existing.explanation,
+          explainEngine: item.explainEngine ?? existing.explainEngine,
+          explainProvider: item.explainProvider ?? existing.explainProvider,
+          kind: item.kind ?? existing.kind ?? 'word',
+          sourceUrl: item.sourceUrl ?? existing.sourceUrl,
+          sourceTitle: item.sourceTitle ?? existing.sourceTitle,
+          cueStartMs: item.cueStartMs ?? existing.cueStartMs,
+          cueEndMs: item.cueEndMs ?? existing.cueEndMs,
+          tags: item.tags ?? existing.tags,
+          learningStatus: item.learningStatus ?? existing.learningStatus ?? 'new',
+          reviewStage: item.reviewStage ?? existing.reviewStage ?? 0,
+          nextReviewAt: item.nextReviewAt ?? existing.nextReviewAt ?? now,
+          updatedAt: now,
+        };
+        existingMap.set(wordKey, updatedRecord);
+        toPut.push(updatedRecord);
+        updated++;
+      } else {
+        let tr = cleanStoredTranslation(item.translation, surface);
+        if (!tr && item.explanation && item.kind !== 'sentence') {
+          const extracted = extractDefinitionFromLlm(item.explanation, surface);
+          tr = cleanStoredTranslation(extracted, surface);
+        }
+        const status = item.learningStatus ?? 'new';
+        const stage =
+          item.reviewStage ??
+          (status === 'learned' ? 4 : status === 'learning' ? 1 : 0);
+        const defaultNextReview =
+          status === 'learned' ? now + STAGE_INTERVALS_MS[4] : now;
+        const record: WordRecord = {
+          wordKey,
+          surface,
+          translation: tr,
+          phonetic: item.phonetic,
+          context: item.context ?? '',
+          contextTranslation: item.contextTranslation,
+          explanation: item.explanation,
+          explainEngine: item.explainEngine,
+          explainProvider: item.explainProvider,
+          kind: item.kind ?? 'word',
+          sourceUrl: item.sourceUrl,
+          sourceTitle: item.sourceTitle,
+          cueStartMs: item.cueStartMs,
+          cueEndMs: item.cueEndMs,
+          audioClipId: item.audioClipId,
+          tags: item.tags,
+          learningStatus: status,
+          reviewStage: stage,
+          nextReviewAt: item.nextReviewAt ?? defaultNextReview,
+          ease: item.ease ?? 2.5,
+          createdAt: item.createdAt ?? now,
+          updatedAt: now,
+        };
+        existingMap.set(wordKey, record);
+        toPut.push(record);
+        added++;
       }
-      const updatedRecord: WordRecord = {
-        ...existing,
-        translation: tr ?? existing.translation,
-        phonetic: item.phonetic ?? existing.phonetic,
-        context: item.context || existing.context,
-        contextTranslation:
-          item.contextTranslation ?? existing.contextTranslation,
-        explanation: item.explanation ?? existing.explanation,
-        explainEngine: item.explainEngine ?? existing.explainEngine,
-        explainProvider: item.explainProvider ?? existing.explainProvider,
-        kind: item.kind ?? existing.kind ?? 'word',
-        sourceUrl: item.sourceUrl ?? existing.sourceUrl,
-        sourceTitle: item.sourceTitle ?? existing.sourceTitle,
-        cueStartMs: item.cueStartMs ?? existing.cueStartMs,
-        cueEndMs: item.cueEndMs ?? existing.cueEndMs,
-        tags: item.tags ?? existing.tags,
-        learningStatus: item.learningStatus ?? existing.learningStatus ?? 'new',
-        reviewStage: item.reviewStage ?? existing.reviewStage ?? 0,
-        nextReviewAt: item.nextReviewAt ?? existing.nextReviewAt ?? now,
-        updatedAt: now,
-      };
-      existingMap.set(wordKey, updatedRecord);
-      toPut.push(updatedRecord);
-      updated++;
-    } else {
-      let tr = cleanStoredTranslation(item.translation, surface);
-      if (!tr && item.explanation && item.kind !== 'sentence') {
-        const extracted = extractDefinitionFromLlm(item.explanation, surface);
-        tr = cleanStoredTranslation(extracted, surface);
-      }
-      const record: WordRecord = {
-        wordKey,
-        surface,
-        translation: tr,
-        phonetic: item.phonetic,
-        context: item.context ?? '',
-        contextTranslation: item.contextTranslation,
-        explanation: item.explanation,
-        explainEngine: item.explainEngine,
-        explainProvider: item.explainProvider,
-        kind: item.kind ?? 'word',
-        sourceUrl: item.sourceUrl,
-        sourceTitle: item.sourceTitle,
-        cueStartMs: item.cueStartMs,
-        cueEndMs: item.cueEndMs,
-        audioClipId: item.audioClipId,
-        tags: item.tags,
-        learningStatus: item.learningStatus ?? 'new',
-        reviewStage: item.reviewStage ?? 0,
-        nextReviewAt: item.nextReviewAt ?? now,
-        ease: item.ease ?? 2.5,
-        createdAt: item.createdAt ?? now,
-        updatedAt: now,
-      };
-      existingMap.set(wordKey, record);
-      toPut.push(record);
-      added++;
     }
+
+    if (mode === 'overwrite' && toPut.length > 0) {
+      await db.words.clear();
+    }
+
+    if (toPut.length > 0) {
+      await db.words.bulkPut(toPut);
+    }
+
+    return { added, updated, total: added + updated };
+  });
+
+  if (result.total > 0) {
+    await bumpWordsRevision();
   }
 
-  if (toPut.length > 0) {
-    await db.words.bulkPut(toPut);
-  }
-
-  await bumpWordsRevision();
-
-  return { added, updated, total: added + updated };
+  return result;
 }
 
 export async function setLearningStatus(
@@ -604,10 +624,29 @@ export async function setLearningStatus(
 ): Promise<WordRecord> {
   const word = await db.words.get(id);
   if (!word) throw new Error('Word not found');
+  const now = Date.now();
+  let reviewStage = word.reviewStage ?? 0;
+  let nextReviewAt = word.nextReviewAt ?? now;
+
+  if (learningStatus === 'learned') {
+    reviewStage = Math.max(reviewStage, 4);
+    nextReviewAt = Math.max(nextReviewAt, now + STAGE_INTERVALS_MS[4]);
+  } else if (learningStatus === 'learning') {
+    reviewStage = reviewStage === 0 ? 1 : Math.min(reviewStage, 3);
+    if (nextReviewAt <= now) {
+      nextReviewAt = now + STAGE_INTERVALS_MS[1];
+    }
+  } else {
+    reviewStage = 0;
+    nextReviewAt = now;
+  }
+
   const updated: WordRecord = {
     ...word,
     learningStatus,
-    updatedAt: Date.now(),
+    reviewStage,
+    nextReviewAt,
+    updatedAt: now,
   };
   await db.words.put(updated);
   await bumpWordsRevision();
@@ -623,16 +662,22 @@ export async function getVideoVocabRecap(
   return classifyVideoVocab(rows, videoKey, cueWordKeys);
 }
 
-/** Delete machine translation cache for a given word/surface. */
+/** Delete machine translation cache for a given word/surface (exact match only). */
 export async function deleteTranslationCacheForWord(surface: string): Promise<number> {
-  const norm = surface.trim().toLowerCase();
+  const trimmed = surface.trim();
+  const norm = trimmed.toLowerCase();
   if (!norm) return 0;
+  const jsonSuffix = `::${JSON.stringify(trimmed)}`;
+  const jsonLowerSuffix = `::${JSON.stringify(norm)}`;
+  const legacySuffix = `::${norm}`;
   const toDelete: number[] = [];
   await db.translation_cache.each((record) => {
+    if (record.id == null) return;
+    const keyLower = record.key.toLowerCase();
     if (
-      record.id != null &&
-      (record.key.toLowerCase().includes(norm) ||
-        record.text.toLowerCase().includes(norm))
+      record.key.endsWith(jsonSuffix) ||
+      keyLower.endsWith(jsonLowerSuffix) ||
+      keyLower.endsWith(legacySuffix)
     ) {
       toDelete.push(record.id);
     }
@@ -756,13 +801,17 @@ export async function putTranslationCache(
   engine: string,
   text: string,
 ) {
-  await db.translation_cache.put({
-    key,
-    src,
-    dst,
-    engine,
-    text,
-    createdAt: Date.now(),
+  await db.transaction('rw', db.translation_cache, async () => {
+    const existing = await db.translation_cache.where('key').equals(key).first();
+    await db.translation_cache.put({
+      ...(existing?.id != null ? { id: existing.id } : {}),
+      key,
+      src,
+      dst,
+      engine,
+      text,
+      createdAt: Date.now(),
+    });
   });
 }
 
@@ -807,10 +856,6 @@ export async function deleteSkill(id: string): Promise<void> {
  *   user's prompt text.
  */
 export async function ensureDefaultSkills(): Promise<void> {
-  const { BUILTIN_SKILLS, isBuiltinSkillId } = await import(
-    '../utils/constants/skills'
-  );
-
   const existing = await db.skills.toArray();
   const byId = new Map(existing.map((s) => [s.id, s]));
 
@@ -846,9 +891,6 @@ export async function ensureDefaultSkills(): Promise<void> {
 export async function resetBuiltinSkill(
   id: string,
 ): Promise<import('./schema').SkillRecord | null> {
-  const { BUILTIN_SKILLS, isBuiltinSkillId } = await import(
-    '../utils/constants/skills'
-  );
   if (!isBuiltinSkillId(id)) return null;
   const def = BUILTIN_SKILLS.find((s) => s.id === id);
   if (!def) return null;
@@ -879,16 +921,20 @@ export async function clearCaches(scopes: Array<'translation' | 'tts' | 'clips'>
 
 export async function getDashboardStats() {
   const now = Date.now();
-  const [words, due, clips, translations, tts, skills, reviewLogs] =
+  const [allWords, clips, translations, tts, skills, reviewLogs] =
     await Promise.all([
-      db.words.count(),
-      db.words.where('nextReviewAt').belowOrEqual(now).count(),
+      db.words.toArray(),
       db.audio_clips.count(),
       db.translation_cache.count(),
       db.tts_cache.count(),
       db.skills.count(),
       db.review_logs.count(),
     ]);
+
+  const words = allWords.length;
+  const due = allWords.filter(
+    (w) => w.learningStatus !== 'learned' && w.nextReviewAt <= now,
+  ).length;
 
   let clipsBytes = 0;
   const clipRows = await db.audio_clips.toArray();
