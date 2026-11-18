@@ -148,12 +148,12 @@ describe('PiP bottom toolbar markup & styles', () => {
     expect(bar?.contains(toast!)).toBe(false);
 
     // Toggle buttons carry aria-pressed; action buttons do not
-    for (const act of ['mute', 'toggle-en', 'toggle-tr', 'recap', 'list', 'settings']) {
+    for (const act of ['mute', 'toggle-en', 'toggle-tr', 'recap', 'list', 'settings', 'loaf']) {
       const btn = bar?.querySelector(`button[data-act="${act}"]`);
       expect(btn, `missing toggle button ${act}`).not.toBeNull();
       expect(btn?.hasAttribute('aria-pressed')).toBe(true);
     }
-    for (const act of ['play', 'rate', 'prev', 'next', 'translate', 'tts', 'export']) {
+    for (const act of ['play', 'rate', 'prev', 'next', 'translate', 'tts', 'export', 'boss']) {
       const btn = bar?.querySelector(`button[data-act="${act}"]`);
       expect(btn, `missing action button ${act}`).not.toBeNull();
       expect(btn?.hasAttribute('aria-pressed')).toBe(false);
@@ -513,5 +513,60 @@ describe('PipSessionController bottom tools end-to-end interactions', () => {
     });
 
     await ctrl.close();
+  });
+
+  it('supports loafing stealth controls: video/UI opacity, auto-dim on leave, camouflage skins, tab disguise, and Boss Key', async () => {
+    document.title = 'Funny English Vlog - YouTube';
+    const cues: SubtitleCue[] = [
+      { id: 'c1', startMs: 0, endMs: 4000, text: 'Stealth learning mode' },
+    ];
+    const { pipWin, pipDoc, video, adapter } = createPipTestEnv(cues);
+    const ctrl = new PipSessionController(adapter, structuredClone(DEFAULT_APP_CONFIG));
+    await ctrl.openWithUserGesture();
+
+    const root = pipDoc.getElementById('ueh-pip-root')!;
+    const loafBtn = pipDoc.querySelector('button[data-act="loaf"]') as HTMLButtonElement;
+    const presetStealth = pipDoc.getElementById('ueh-loaf-preset-stealth') as HTMLButtonElement;
+
+    // 1. Open loafing panel and activate one-click stealth preset
+    loafBtn.click();
+    expect(loafBtn.getAttribute('aria-pressed')).toBe('true');
+    presetStealth.click();
+
+    expect(root.getAttribute('data-camo')).toBe('ide_dark');
+    expect(root.style.getPropertyValue('--ueh-video-filter')).toContain('grayscale(1)');
+    // Because pointerInsideWindow starts false before pointerenter, autoDimOnLeave dims to 5% (0.05)
+    expect(root.style.getPropertyValue('--ueh-video-opacity')).toBe('0.05');
+    expect(document.title).toBe('TypeScript: Documentation - Everyday Types');
+
+    // 2. Entering window restores configured 18% stealth opacity WITHOUT opening bottom bar
+    root.dispatchEvent(new Event('pointerenter', { bubbles: false }));
+    expect(root.style.getPropertyValue('--ueh-video-opacity')).toBe('0.18');
+
+    // 3. Leaving window dims back to 5% automatically
+    root.dispatchEvent(new Event('pointerleave', { bubbles: false }));
+    expect(root.style.getPropertyValue('--ueh-video-opacity')).toBe('0.05');
+
+    // 4. Press Boss Key (` Backquote) -> pauses & mutes video and activates #ueh-boss-shield
+    expect(video.paused).toBe(false);
+    expect(video.muted).toBe(false);
+    pipWin.dispatchEvent(
+      new KeyboardEvent('keydown', { key: '`', code: 'Backquote', bubbles: true }),
+    );
+    expect(root.classList.contains('ueh-boss-active')).toBe(true);
+    expect(video.paused).toBe(true);
+    expect(video.muted).toBe(true);
+
+    // 5. Double-clicking #ueh-boss-shield exits Boss Mode and restores playback + unmuted audio
+    pipDoc
+      .getElementById('ueh-boss-shield')!
+      .dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    expect(root.classList.contains('ueh-boss-active')).toBe(false);
+    expect(video.paused).toBe(false);
+    expect(video.muted).toBe(false);
+
+    // 6. Closing PiP restores original tab title cleanly
+    await ctrl.close();
+    expect(document.title).toBe('Funny English Vlog - YouTube');
   });
 });

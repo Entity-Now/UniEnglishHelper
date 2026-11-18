@@ -35,6 +35,14 @@ export default defineManifest({
     'tabCapture',
     'contextMenus',
   ],
+  commands: {
+    'pip-boss-key': {
+      suggested_key: {
+        default: 'Alt+Q',
+      },
+      description: 'PiP 老板键：一键静音暂停并伪装/隐藏画中画窗口',
+    },
+  },
   // Granted when the user installs / loads the extension
   host_permissions: ['http://*/*', 'https://*/*'],
   // Extra explicit hosts (subset of above; kept for clarity / future narrowing)

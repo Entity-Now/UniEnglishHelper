@@ -1,6 +1,7 @@
 import {
   DEFAULT_APP_CONFIG,
   DEFAULT_PAGE_SUBTITLES,
+  DEFAULT_PIP_LOAFING,
   DEFAULT_PIP_SUBTITLES,
   type AppConfig,
 } from '../../shared/domain/types';
@@ -265,6 +266,34 @@ export async function getConfig(): Promise<AppConfig> {
     merged.pip.subtitleBgOpacity =
       (merged.pipSubtitles.style.container.backgroundOpacity ?? 55) / 100;
   }
+
+  const rawLoaf = merged.pip?.loafing ?? DEFAULT_PIP_LOAFING;
+  merged.pip.loafing = {
+    ...DEFAULT_PIP_LOAFING,
+    ...rawLoaf,
+    videoOpacity: clampInt(rawLoaf.videoOpacity ?? 100, 0, 100),
+    uiOpacity: clampInt(rawLoaf.uiOpacity ?? 100, 20, 100),
+    leaveOpacity: clampInt(rawLoaf.leaveOpacity ?? 10, 0, 60),
+    grayscale: Boolean(rawLoaf.grayscale),
+    autoDimOnLeave: Boolean(rawLoaf.autoDimOnLeave),
+    camouflageTheme:
+      rawLoaf.camouflageTheme === 'ide_dark' ||
+      rawLoaf.camouflageTheme === 'terminal' ||
+      rawLoaf.camouflageTheme === 'doc_light'
+        ? rawLoaf.camouflageTheme
+        : 'none',
+    bossKeyAction: rawLoaf.bossKeyAction === 'close' ? 'close' : 'camouflage',
+    bossKey:
+      typeof rawLoaf.bossKey === 'string' && rawLoaf.bossKey.trim()
+        ? rawLoaf.bossKey.trim()
+        : 'Backquote',
+    disguiseTab: Boolean(rawLoaf.disguiseTab),
+    disguiseTabTitle:
+      typeof rawLoaf.disguiseTabTitle === 'string' &&
+      rawLoaf.disguiseTabTitle.trim()
+        ? rawLoaf.disguiseTabTitle.trim()
+        : DEFAULT_PIP_LOAFING.disguiseTabTitle,
+  };
 
   return merged;
 }

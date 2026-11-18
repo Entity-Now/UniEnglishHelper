@@ -1105,6 +1105,12 @@ function ensureHotkeys(): void {
       e.preventDefault();
       toggleWebpageTranslate();
     }
+    if (e.altKey && !e.shiftKey && !e.ctrlKey && !e.metaKey && (e.key === 'q' || e.key === 'Q' || e.code === 'KeyQ')) {
+      if (controller && controller.getState() !== 'Idle' && controller.getState() !== 'Closed') {
+        e.preventDefault();
+        controller.triggerBossKey();
+      }
+    }
   });
   window.addEventListener('ueh:open-pip', () => {
     if (siteDisabled) return;
@@ -1235,6 +1241,16 @@ function main(): void {
     if (message.type === 'content.captureStop') {
       controller?.setCaptureIdle();
       sendResponse(ok({}));
+      return true;
+    }
+
+    if (message.type === 'content.bossKey') {
+      if (controller && controller.getState() !== 'Idle' && controller.getState() !== 'Closed') {
+        controller.triggerBossKey();
+        sendResponse(ok({ handled: true }));
+      } else {
+        sendResponse(ok({ handled: false }));
+      }
       return true;
     }
 

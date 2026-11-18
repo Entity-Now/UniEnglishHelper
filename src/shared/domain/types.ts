@@ -204,6 +204,46 @@ export interface PageSubtitlesConfig extends SubtitleSurfaceConfig {
 /** PiP-window subtitle appearance (independent of page overlay). */
 export type PipSubtitlesConfig = SubtitleSurfaceConfig;
 
+export type PipCamouflageTheme = 'none' | 'ide_dark' | 'terminal' | 'doc_light';
+export type PipBossKeyAction = 'camouflage' | 'close';
+
+/** Stealth / loafing ("摸鱼") options for Document PiP. */
+export interface PipLoafingConfig {
+  /** Video picture opacity percent (0–100). 0% = pure audio/text reading mode. */
+  videoOpacity: number;
+  /** Subtitle & UI overall opacity percent (20–100). */
+  uiOpacity: number;
+  /** Desaturate & low-contrast video filter to avoid peripheral eye-catch. */
+  grayscale: boolean;
+  /** Auto-dim video to `leaveOpacity` when pointer leaves PiP window. */
+  autoDimOnLeave: boolean;
+  /** Target video opacity percent (0–60) when pointer is outside PiP window. */
+  leaveOpacity: number;
+  /** Visual camouflage preset for PiP stage and subtitles. */
+  camouflageTheme: PipCamouflageTheme;
+  /** Boss key behavior: toggle fake work screen or close PiP immediately. */
+  bossKeyAction: PipBossKeyAction;
+  /** Single-key shortcut inside PiP (`Backquote` = ` key by default). */
+  bossKey: string;
+  /** Disguise the host video tab's title and favicon while PiP is open. */
+  disguiseTab: boolean;
+  /** Custom disguised tab title. */
+  disguiseTabTitle: string;
+}
+
+export const DEFAULT_PIP_LOAFING: PipLoafingConfig = {
+  videoOpacity: 100,
+  uiOpacity: 100,
+  grayscale: false,
+  autoDimOnLeave: false,
+  leaveOpacity: 10,
+  camouflageTheme: 'none',
+  bossKeyAction: 'camouflage',
+  bossKey: 'Backquote',
+  disguiseTab: false,
+  disguiseTabTitle: 'TypeScript: Documentation - Everyday Types',
+};
+
 export type WebPageTranslateDisplayMode = 'bilingual' | 'translation_only';
 
 export interface WebPageTranslateConfig {
@@ -272,6 +312,7 @@ export interface AppConfig {
     /** @deprecated use pipSubtitles.style.container.backgroundOpacity */
     subtitleBgOpacity: number;
     preferMove: boolean;
+    loafing?: PipLoafingConfig;
   };
   /**
    * Shared engine-level subtitle pipeline (batch, prompts, AI segmentation).
@@ -387,6 +428,7 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
     subtitleFontSize: 18,
     subtitleBgOpacity: 0.55,
     preferMove: true,
+    loafing: structuredClone(DEFAULT_PIP_LOAFING),
   },
   videoSubtitles: structuredClone(DEFAULT_VIDEO_SUBTITLES),
   webPageTranslate: { ...DEFAULT_WEBPAGE_TRANSLATE },

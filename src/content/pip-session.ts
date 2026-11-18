@@ -1,10 +1,15 @@
-import type {
-  AppConfig,
-  CaptureState,
-  PipMode,
-  PipSessionState,
-  SubtitleCue,
+import {
+  DEFAULT_PIP_LOAFING,
+  type AppConfig,
+  type CaptureState,
+  type PipBossKeyAction,
+  type PipCamouflageTheme,
+  type PipLoafingConfig,
+  type PipMode,
+  type PipSessionState,
+  type SubtitleCue,
 } from '../shared/domain/types';
+import { TabDisguiseController } from './tab-disguise';
 import type { SubtitlesDisplayMode } from '../types/config/subtitles';
 import { findActiveCue } from '../utils/subtitles/parser';
 import { sendRuntime } from '../shared/messaging/client';
@@ -142,6 +147,14 @@ export class PipSessionController {
   private ttsBusy = false;
   private translatingBusy = false;
   private activeWordStreamSession: StreamExplainSession | null = null;
+  private tabDisguise = new TabDisguiseController();
+  private pointerInsideWindow = false;
+  private bossActive = false;
+  private bossPrevPaused = true;
+  private bossPrevAudio: { volume: number; muted: boolean } = {
+    volume: 1,
+    muted: false,
+  };
 
   constructor(
     private adapter: PlayerAdapter,
@@ -194,7 +207,10 @@ export class PipSessionController {
       this.cueList?.setHighlightMap(this.highlightMap);
       if (this.pipWindow?.document) {
         this.syncPipSettingsFields(this.pipWindow.document);
+        this.syncPipLoafingFields(this.pipWindow.document);
       }
+      this.applyLoafingVisuals();
+      this.syncTabDisguise();
       // Force cue re-sync so autoTranslate / display mode / word underlines
       // take effect immediately after Settings save (not only on next cue).
       this.syncCue(true);
@@ -673,6 +689,9 @@ export class PipSessionController {
     const settingsOpen = Boolean(
       doc.getElementById('ueh-pip-settings')?.classList.contains('ueh-open'),
     );
+    const loafOpen = Boolean(
+      doc.getElementById('ueh-pip-loafing')?.classList.contains('ueh-open'),
+    );
     const listOpen = Boolean(
       this.cueList?.isOpen() || root?.classList.contains('ueh-cue-list-open'),
     );
@@ -683,6 +702,9 @@ export class PipSessionController {
     doc
       .querySelector('button[data-act="settings"]')
       ?.setAttribute('aria-pressed', settingsOpen ? 'true' : 'false');
+    doc
+      .querySelector('button[data-act="loaf"]')
+      ?.setAttribute('aria-pressed', loafOpen ? 'true' : 'false');
     doc
       .querySelector('button[data-act="list"]')
       ?.setAttribute('aria-pressed', listOpen ? 'true' : 'false');
@@ -1124,6 +1146,9 @@ export class PipSessionController {
     stopAllSpeech(this.pipWindow ?? window);
     this.ttsBusy = false;
     this.translatingBusy = false;
+    this.bossActive = false;
+    this.pointerInsideWindow = false;
+    this.tabDisguise.disable();
     this.unbindHotkeys();
     this.unbindToolbarFallback?.();
     this.unbindToolbarFallback = null;
@@ -1195,6 +1220,10 @@ export class PipSessionController {
     this.bindPipChrome(doc);
     this.bindPipSettingsPanel(doc);
     this.syncPipSettingsFields(doc);
+    this.bindPipLoafingPanel(doc);
+    this.syncPipLoafingFields(doc);
+    this.applyLoafingVisuals();
+    this.syncTabDisguise();
 
     // Final body merge guard
     const allBodies = Array.from(doc.querySelectorAll('body'));
@@ -1262,14 +1291,18 @@ export class PipSessionController {
 
     const scheduleHideChrome = (delayMs = 320) => {
       win.clearTimeout(hideTimer);
-      hideTimer = win.setTimeout(() => {
+      const hideCheck = () => {
         const settingsOpen = doc
           .getElementById('ueh-pip-settings')
           ?.classList.contains('ueh-open');
+        const loafOpen = doc
+          .getElementById('ueh-pip-loafing')
+          ?.classList.contains('ueh-open');
         const focusInside = Boolean(chromeEl?.matches?.(':focus-within'));
-        if (pointerInsideChrome || settingsOpen || focusInside) return;
+        if (pointerInsideChrome || settingsOpen || loafOpen || focusInside) return;
         root?.classList.remove('ueh-show-chrome');
-      }, delayMs);
+      };
+      hideTimer = win.setTimeout(hideCheck, delayMs);
     };
 
     const showChrome = (autoHideMs = 0) => {
@@ -1324,7 +1357,7 @@ export class PipSessionController {
           // Never reveal bottom bar while aiming at or hovering subtitle words / panels
           if (
             target?.closest?.(
-              '#ueh-sub-card, .ueh-word, #ueh-word-panel, #ueh-pip-settings',
+              '#ueh-sub-card, .ueh-word, #ueh-word-panel, #ueh-pip-settings, #ueh-pip-loafing, #ueh-boss-shield',
             )
           ) {
             cancelReveal();
@@ -1379,7 +1412,13 @@ export class PipSessionController {
       { passive: true },
     );
 
+    root?.addEventListener('pointerenter', () => {
+      this.pointerInsideWindow = true;
+      this.applyLoafingVisuals();
+    });
     root?.addEventListener('pointerleave', () => {
+      this.pointerInsideWindow = false;
+      this.applyLoafingVisuals();
       cancelReveal();
       pointerInsideChrome = false;
       scheduleHideChrome(180);
@@ -1402,7 +1441,7 @@ export class PipSessionController {
       { passive: false },
     );
 
-    // Light-dismiss settings panel when clicking outside #ueh-pip-settings and settings button
+    // Light-dismiss settings & loafing panels when clicking outside
     doc.addEventListener('click', (e) => {
       const target = e.target as HTMLElement | null;
       if (!target) return;
@@ -1415,13 +1454,33 @@ export class PipSessionController {
         settingsPanel.classList.remove('ueh-open');
         this.syncPanelToggleButtons();
       }
+      const loafPanel = doc.getElementById('ueh-pip-loafing');
+      if (
+        loafPanel?.classList.contains('ueh-open') &&
+        !loafPanel.contains(target) &&
+        !target.closest('button[data-act="loaf"]')
+      ) {
+        loafPanel.classList.remove('ueh-open');
+        this.syncPanelToggleButtons();
+      }
+    });
+
+    // Double-click Boss Shield to restore playback & exit camouflage
+    doc.getElementById('ueh-boss-shield')?.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      if (this.bossActive) {
+        this.triggerBossKey();
+      }
+    });
+    doc.getElementById('ueh-boss-shield')?.addEventListener('click', (e) => {
+      e.stopPropagation();
     });
 
     // Click video area → play/pause (ignore chrome / panels / buttons)
     doc.getElementById('ueh-video-slot')?.addEventListener('click', (e) => {
       if (
         (e.target as HTMLElement).closest(
-          'button,input,select,a,#ueh-chrome,#ueh-word-panel,#ueh-pip-settings',
+          'button,input,select,a,#ueh-chrome,#ueh-word-panel,#ueh-pip-settings,#ueh-pip-loafing,#ueh-boss-shield',
         )
       ) {
         return;
@@ -1434,7 +1493,7 @@ export class PipSessionController {
     doc.getElementById('ueh-sub-layer')?.addEventListener('click', (e) => {
       if (
         (e.target as HTMLElement).closest(
-          'button,input,select,a,#ueh-chrome,#ueh-word-panel,#ueh-pip-settings,.ueh-word',
+          'button,input,select,a,#ueh-chrome,#ueh-word-panel,#ueh-pip-settings,#ueh-pip-loafing,#ueh-boss-shield,.ueh-word',
         )
       ) {
         return;
@@ -1446,8 +1505,12 @@ export class PipSessionController {
     doc.querySelectorAll('button[data-act]').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        showChrome();
         const act = (btn as HTMLElement).dataset.act;
+        if (act === 'boss') {
+          this.triggerBossKey();
+          return;
+        }
+        showChrome();
         if (act === 'play') {
           this.handleCommandPlayPause();
           this.updatePlayIcon();
@@ -1471,6 +1534,8 @@ export class PipSessionController {
           this.toggleSubtitleLine('tr');
         } else if (act === 'settings') {
           this.togglePipSettingsPanel(doc);
+        } else if (act === 'loaf') {
+          this.togglePipLoafingPanel(doc);
         } else if (act === 'list') {
           this.toggleCueList();
         } else if (act === 'recap') {
@@ -1575,12 +1640,433 @@ export class PipSessionController {
   private togglePipSettingsPanel(doc: Document): void {
     const panel = doc.getElementById('ueh-pip-settings');
     if (!panel) return;
+    doc.getElementById('ueh-pip-loafing')?.classList.remove('ueh-open');
     const open = panel.classList.toggle('ueh-open');
     if (open) {
       this.closeWordPanel();
       this.syncPipSettingsFields(doc);
     }
     this.syncPanelToggleButtons();
+  }
+
+  private loafingConfig(): PipLoafingConfig {
+    return {
+      ...DEFAULT_PIP_LOAFING,
+      ...(this.config.pip?.loafing ?? {}),
+    };
+  }
+
+  private togglePipLoafingPanel(doc: Document): void {
+    const panel = doc.getElementById('ueh-pip-loafing');
+    if (!panel) return;
+    doc.getElementById('ueh-pip-settings')?.classList.remove('ueh-open');
+    const open = panel.classList.toggle('ueh-open');
+    if (open) {
+      this.closeWordPanel();
+      this.syncPipLoafingFields(doc);
+    }
+    this.syncPanelToggleButtons();
+  }
+
+  private syncPipLoafingFields(doc: Document): void {
+    const lf = this.loafingConfig();
+    const videoOp = doc.getElementById(
+      'ueh-loaf-video-op',
+    ) as HTMLInputElement | null;
+    const uiOp = doc.getElementById(
+      'ueh-loaf-ui-op',
+    ) as HTMLInputElement | null;
+    const gray = doc.getElementById(
+      'ueh-loaf-gray',
+    ) as HTMLInputElement | null;
+    const autoDim = doc.getElementById(
+      'ueh-loaf-autodim',
+    ) as HTMLInputElement | null;
+    const leaveOp = doc.getElementById(
+      'ueh-loaf-leave-op',
+    ) as HTMLInputElement | null;
+    const theme = doc.getElementById(
+      'ueh-loaf-theme',
+    ) as HTMLSelectElement | null;
+    const tabDisguise = doc.getElementById(
+      'ueh-loaf-tab-disguise',
+    ) as HTMLInputElement | null;
+    const tabTitle = doc.getElementById(
+      'ueh-loaf-tab-title',
+    ) as HTMLInputElement | null;
+    const bossMode = doc.getElementById(
+      'ueh-loaf-boss-mode',
+    ) as HTMLSelectElement | null;
+
+    if (videoOp) videoOp.value = String(lf.videoOpacity);
+    if (uiOp) uiOp.value = String(lf.uiOpacity);
+    if (gray) gray.checked = Boolean(lf.grayscale);
+    if (autoDim) autoDim.checked = Boolean(lf.autoDimOnLeave);
+    if (leaveOp) leaveOp.value = String(lf.leaveOpacity);
+    if (theme) theme.value = lf.camouflageTheme;
+    if (tabDisguise) tabDisguise.checked = Boolean(lf.disguiseTab);
+    if (tabTitle) {
+      tabTitle.value = lf.disguiseTabTitle;
+      tabTitle.style.display = lf.disguiseTab ? 'block' : 'none';
+    }
+    if (bossMode) bossMode.value = lf.bossKeyAction;
+    this.updateLoafingLabels(doc);
+  }
+
+  private updateLoafingLabels(doc: Document): void {
+    const videoOp = doc.getElementById(
+      'ueh-loaf-video-op',
+    ) as HTMLInputElement | null;
+    const uiOp = doc.getElementById(
+      'ueh-loaf-ui-op',
+    ) as HTMLInputElement | null;
+    const leaveOp = doc.getElementById(
+      'ueh-loaf-leave-op',
+    ) as HTMLInputElement | null;
+    const vv = doc.getElementById('ueh-loaf-video-op-val');
+    const uv = doc.getElementById('ueh-loaf-ui-op-val');
+    const lv = doc.getElementById('ueh-loaf-leave-op-val');
+    if (videoOp && vv) vv.textContent = `${videoOp.value}%`;
+    if (uiOp && uv) uv.textContent = `${uiOp.value}%`;
+    if (leaveOp && lv) lv.textContent = `${leaveOp.value}%`;
+  }
+
+  private bindPipLoafingPanel(doc: Document): void {
+    const apply = (persist: boolean) =>
+      void this.applyPipLoafingFromPanel(doc, persist);
+
+    for (const id of [
+      'ueh-loaf-video-op',
+      'ueh-loaf-ui-op',
+      'ueh-loaf-leave-op',
+    ]) {
+      doc.getElementById(id)?.addEventListener('input', () => {
+        this.updateLoafingLabels(doc);
+        apply(false);
+      });
+    }
+    for (const id of [
+      'ueh-loaf-gray',
+      'ueh-loaf-autodim',
+      'ueh-loaf-theme',
+      'ueh-loaf-tab-disguise',
+      'ueh-loaf-boss-mode',
+    ]) {
+      doc.getElementById(id)?.addEventListener('change', () => apply(false));
+    }
+    doc.getElementById('ueh-loaf-tab-title')?.addEventListener('input', () => {
+      apply(false);
+    });
+
+    // Quick loafing presets
+    doc
+      .getElementById('ueh-loaf-preset-stealth')
+      ?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.applyLoafingPreset(doc, {
+          videoOpacity: 18,
+          uiOpacity: 85,
+          grayscale: true,
+          autoDimOnLeave: true,
+          leaveOpacity: 5,
+          camouflageTheme: 'ide_dark',
+          disguiseTab: true,
+        });
+        this.toast('info', '已启用「一键隐身」模式');
+      });
+
+    doc
+      .getElementById('ueh-loaf-preset-audio')
+      ?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.applyLoafingPreset(doc, {
+          videoOpacity: 0,
+          uiOpacity: 90,
+          grayscale: true,
+          autoDimOnLeave: false,
+          camouflageTheme: 'ide_dark',
+          disguiseTab: true,
+        });
+        this.toast('info', '已切换至「纯听读无画面」伪装模式');
+      });
+
+    doc
+      .getElementById('ueh-loaf-preset-normal')
+      ?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.applyLoafingPreset(doc, {
+          videoOpacity: 100,
+          uiOpacity: 100,
+          grayscale: false,
+          autoDimOnLeave: false,
+          leaveOpacity: 10,
+          camouflageTheme: 'none',
+          disguiseTab: false,
+        });
+        this.toast('info', '已恢复标准原色外观');
+      });
+
+    // Window mini-size presets
+    doc.querySelectorAll<HTMLButtonElement>('[data-size-preset]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const raw = btn.dataset.sizePreset ?? '';
+        const [wStr, hStr] = raw.split('x');
+        const w = Number(wStr);
+        const h = Number(hStr);
+        if (!this.pipWindow || !w || !h) return;
+        this.pipBaseOuterWidth = w;
+        const targetW = w + this.pipPanelExtraPx;
+        this.syncingPipSize = true;
+        try {
+          this.pipWindow.resizeTo(targetW, h);
+          this.toast('info', `窗口已调整为 ${w}×${h}`);
+        } catch {
+          this.toast('warn', '当前浏览器限制了脚本缩放窗口，请拖动边缘缩放');
+        }
+        window.setTimeout(() => {
+          this.syncingPipSize = false;
+        }, 200);
+      });
+    });
+
+    doc.getElementById('ueh-loaf-save')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void this.applyPipLoafingFromPanel(doc, true).then((saved) => {
+        const st = doc.getElementById('ueh-loaf-status');
+        if (st) st.textContent = saved ? '✓ 摸鱼配置已保存' : '保存失败';
+      });
+    });
+
+    doc.getElementById('ueh-loaf-close')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      doc.getElementById('ueh-pip-loafing')?.classList.remove('ueh-open');
+      this.syncPanelToggleButtons();
+    });
+  }
+
+  private applyLoafingPreset(
+    doc: Document,
+    patch: Partial<PipLoafingConfig>,
+  ): void {
+    const nextLoaf: PipLoafingConfig = {
+      ...this.loafingConfig(),
+      ...patch,
+    };
+    this.config = {
+      ...this.config,
+      pip: { ...this.config.pip, loafing: nextLoaf },
+    };
+    this.syncPipLoafingFields(doc);
+    this.applyLoafingVisuals();
+    this.syncTabDisguise();
+    void sendRuntime(
+      'config.set',
+      { pip: { ...this.config.pip, loafing: nextLoaf } },
+      'content',
+    );
+  }
+
+  private async applyPipLoafingFromPanel(
+    doc: Document,
+    persist: boolean,
+  ): Promise<boolean> {
+    const videoOp = doc.getElementById(
+      'ueh-loaf-video-op',
+    ) as HTMLInputElement | null;
+    const uiOp = doc.getElementById(
+      'ueh-loaf-ui-op',
+    ) as HTMLInputElement | null;
+    const gray = doc.getElementById(
+      'ueh-loaf-gray',
+    ) as HTMLInputElement | null;
+    const autoDim = doc.getElementById(
+      'ueh-loaf-autodim',
+    ) as HTMLInputElement | null;
+    const leaveOp = doc.getElementById(
+      'ueh-loaf-leave-op',
+    ) as HTMLInputElement | null;
+    const theme = doc.getElementById(
+      'ueh-loaf-theme',
+    ) as HTMLSelectElement | null;
+    const tabDisguise = doc.getElementById(
+      'ueh-loaf-tab-disguise',
+    ) as HTMLInputElement | null;
+    const tabTitle = doc.getElementById(
+      'ueh-loaf-tab-title',
+    ) as HTMLInputElement | null;
+    const bossMode = doc.getElementById(
+      'ueh-loaf-boss-mode',
+    ) as HTMLSelectElement | null;
+    if (!videoOp || !uiOp || !leaveOp || !theme || !bossMode) return false;
+
+    const nextLoaf: PipLoafingConfig = {
+      ...this.loafingConfig(),
+      videoOpacity: Number.isFinite(Number(videoOp.value))
+        ? Math.max(0, Math.min(100, Number(videoOp.value)))
+        : 100,
+      uiOpacity: Number.isFinite(Number(uiOp.value))
+        ? Math.max(20, Math.min(100, Number(uiOp.value)))
+        : 100,
+      grayscale: Boolean(gray?.checked),
+      autoDimOnLeave: Boolean(autoDim?.checked),
+      leaveOpacity: Number.isFinite(Number(leaveOp.value))
+        ? Math.max(0, Math.min(60, Number(leaveOp.value)))
+        : 10,
+      camouflageTheme: (theme.value === 'ide_dark' ||
+      theme.value === 'terminal' ||
+      theme.value === 'doc_light'
+        ? theme.value
+        : 'none') as PipCamouflageTheme,
+      disguiseTab: Boolean(tabDisguise?.checked),
+      disguiseTabTitle:
+        tabTitle?.value.trim() || DEFAULT_PIP_LOAFING.disguiseTabTitle,
+      bossKeyAction: (bossMode.value === 'close'
+        ? 'close'
+        : 'camouflage') as PipBossKeyAction,
+    };
+
+    if (tabTitle) {
+      tabTitle.style.display = nextLoaf.disguiseTab ? 'block' : 'none';
+    }
+
+    const nextPipCfg = { ...this.config.pip, loafing: nextLoaf };
+    this.config = { ...this.config, pip: nextPipCfg };
+    this.applyLoafingVisuals();
+    this.syncTabDisguise();
+
+    if (!persist) return true;
+
+    const res = await sendRuntime<AppConfig>(
+      'config.set',
+      { pip: nextPipCfg },
+      'content',
+    );
+    if (res.ok) {
+      this.config = res.data;
+      this.applyLoafingVisuals();
+      this.syncTabDisguise();
+      return true;
+    }
+    return false;
+  }
+
+  private applyLoafingVisuals(): void {
+    const doc = this.pipWindow?.document;
+    if (!doc) return;
+    const root = doc.getElementById('ueh-pip-root');
+    if (!root) return;
+    const lf = this.loafingConfig();
+
+    const effectiveVideoPct =
+      lf.autoDimOnLeave && !this.pointerInsideWindow
+        ? Math.min(lf.videoOpacity, lf.leaveOpacity)
+        : lf.videoOpacity;
+
+    root.style.setProperty(
+      '--ueh-video-opacity',
+      (Math.max(0, Math.min(100, effectiveVideoPct)) / 100).toFixed(2),
+    );
+    root.style.setProperty(
+      '--ueh-ui-opacity',
+      (Math.max(20, Math.min(100, lf.uiOpacity)) / 100).toFixed(2),
+    );
+    root.style.setProperty(
+      '--ueh-video-filter',
+      lf.grayscale ? 'grayscale(1) contrast(0.82) brightness(0.92)' : 'none',
+    );
+
+    if (lf.camouflageTheme && lf.camouflageTheme !== 'none') {
+      root.setAttribute('data-camo', lf.camouflageTheme);
+    } else {
+      root.removeAttribute('data-camo');
+    }
+  }
+
+  private syncTabDisguise(): void {
+    if (!this.isPipActive()) {
+      this.tabDisguise.disable();
+      return;
+    }
+    const lf = this.loafingConfig();
+    if (lf.disguiseTab || this.bossActive) {
+      this.tabDisguise.enable(lf.disguiseTabTitle);
+    } else {
+      this.tabDisguise.disable();
+    }
+  }
+
+  /**
+   * Instant Boss Key ("老板键"):
+   * - If `forceClose` or `bossKeyAction === 'close'`: pauses & mutes video and closes PiP.
+   * - Otherwise toggles the realistic work terminal/doc shield + instant pause & mute.
+   */
+  triggerBossKey(forceClose = false): void {
+    if (!this.isPipActive()) return;
+    const lf = this.loafingConfig();
+
+    if (forceClose || lf.bossKeyAction === 'close') {
+      this.pausePlayback();
+      this.applyAudioState({ muted: true }, false);
+      stopAllSpeech(this.pipWindow ?? window);
+      this.clipPlayer.stop();
+      void this.close();
+      return;
+    }
+
+    const doc = this.pipWindow?.document;
+    const root = doc?.getElementById('ueh-pip-root');
+    if (!doc || !root) return;
+
+    if (!this.bossActive) {
+      this.bossPrevPaused = this.isPlaybackPaused();
+      this.bossPrevAudio = this.getEffectiveAudioState();
+      this.bossActive = true;
+
+      this.pausePlayback();
+      this.applyAudioState({ muted: true }, false);
+      stopAllSpeech(this.pipWindow ?? window);
+      this.clipPlayer.stop();
+
+      doc.getElementById('ueh-pip-settings')?.classList.remove('ueh-open');
+      doc.getElementById('ueh-pip-loafing')?.classList.remove('ueh-open');
+      root.classList.remove('ueh-show-chrome');
+      this.closeWordPanel();
+      this.syncPanelToggleButtons();
+
+      const body = doc.getElementById('ueh-boss-shield-body');
+      if (body) {
+        const now = new Date();
+        const pad = (n: number) => String(n).padStart(2, '0');
+        const ts = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+        if (lf.camouflageTheme === 'doc_light') {
+          body.textContent =
+            `RFC-204 · Interface & Runtime Constraints\n` +
+            `Updated ${ts} · Status: Draft Review\n\n` +
+            `1. Ensure idempotent state transitions across async boundaries.\n` +
+            `2. Avoid layout invalidation during incremental stream updates.`;
+        } else {
+          body.textContent =
+            `[${ts}] tsc --noEmit --watch\n` +
+            `// verifying module graph & type declarations\n` +
+            `✓ src/core/pipeline/scheduler.ts — 0 diagnostics\n` +
+            `✓ src/services/transport/session.ts — 0 diagnostics\n` +
+            `[${ts}] Found 0 errors. Watching for file changes.`;
+        }
+      }
+
+      root.classList.add('ueh-boss-active');
+      this.syncTabDisguise();
+    } else {
+      this.bossActive = false;
+      root.classList.remove('ueh-boss-active');
+      this.syncTabDisguise();
+      this.applyAudioState(this.bossPrevAudio, false);
+      if (!this.bossPrevPaused) {
+        this.resumePlayback();
+      }
+      this.toast('info', '已退出老板键伪装');
+    }
   }
 
   private bindPipSettingsPanel(doc: Document): void {
@@ -1777,6 +2263,7 @@ export class PipSessionController {
   private openWordPanel(): void {
     const doc = this.pipWindow?.document;
     doc?.getElementById('ueh-pip-settings')?.classList.remove('ueh-open');
+    doc?.getElementById('ueh-pip-loafing')?.classList.remove('ueh-open');
     this.syncPanelToggleButtons();
     const root = doc?.getElementById('ueh-pip-root');
     const panel = doc?.getElementById('ueh-word-panel');
@@ -1822,10 +2309,29 @@ export class PipSessionController {
   private bindHotkeys(win: Window): void {
     this.unbindHotkeys();
     this.keyHandler = (e: KeyboardEvent) => {
+      // Global Boss Key inside PiP: Alt+Q or Backquote (`)
+      if (
+        e.altKey &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        (e.key === 'q' || e.key === 'Q' || e.code === 'KeyQ')
+      ) {
+        e.preventDefault();
+        this.triggerBossKey(e.shiftKey);
+        return;
+      }
+
       if (e.key === 'Escape') {
         const doc = this.pipWindow?.document;
+        const loafEl = doc?.getElementById('ueh-pip-loafing');
         const settingsEl = doc?.getElementById('ueh-pip-settings');
         const rootEl = doc?.getElementById('ueh-pip-root');
+        if (loafEl?.classList.contains('ueh-open')) {
+          e.preventDefault();
+          loafEl.classList.remove('ueh-open');
+          this.syncPanelToggleButtons();
+          return;
+        }
         if (settingsEl?.classList.contains('ueh-open')) {
           e.preventDefault();
           settingsEl.classList.remove('ueh-open');
@@ -1848,6 +2354,17 @@ export class PipSessionController {
       ) {
         return;
       }
+
+      const bossCode = this.loafingConfig().bossKey || 'Backquote';
+      if (e.code === bossCode || (bossCode === 'Backquote' && (e.key === '`' || e.key === '~'))) {
+        e.preventDefault();
+        this.triggerBossKey(e.shiftKey);
+        return;
+      }
+
+      // While Boss Shield is active, ignore media transport hotkeys so accidental keys don't unmute/play!
+      if (this.bossActive) return;
+
       // Never hijack Space when a toolbar/panel button is focused (let native button click fire)
       if (e.code === 'Space') {
         if (tag === 'BUTTON' || targetEl?.closest?.('button')) return;

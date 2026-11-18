@@ -143,6 +143,23 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   void stopCaptureForTab(tabId).catch(() => undefined);
 });
 
+chrome.commands?.onCommand.addListener((command) => {
+  if (command !== 'pip-boss-key') return;
+  void chrome.tabs.query({}).then((tabs) => {
+    const msg = createEnvelope({
+      channel: 'runtime',
+      type: 'content.bossKey',
+      source: 'background',
+      payload: {},
+    });
+    for (const t of tabs) {
+      if (t.id != null) {
+        chrome.tabs.sendMessage(t.id, msg).catch(() => undefined);
+      }
+    }
+  });
+});
+
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === PORT_CLIP) {
     port.onMessage.addListener((msg: ClipPortClientMessage) => {

@@ -92,12 +92,30 @@ export function buildPipStyles(opts: {
     #ueh-pip-root {
       --ueh-pip-recap-w: ${PIP_RECAP_PANEL_PX}px;
       --ueh-pip-list-w: ${PIP_CUELIST_PANEL_PX}px;
+      --ueh-video-opacity: 1;
+      --ueh-ui-opacity: 1;
+      --ueh-video-filter: none;
       position: relative;
       width: 100%; height: 100%;
       display: flex; flex-direction: row;
       align-items: stretch;
-      background: #000;
+      background: #0a0a0b;
       overflow: hidden;
+    }
+    #ueh-pip-root[data-camo="ide_dark"],
+    #ueh-pip-root[data-camo="ide_dark"] #ueh-pip-stage,
+    #ueh-pip-root[data-camo="ide_dark"] #ueh-video-slot {
+      background: #1e1e1e;
+    }
+    #ueh-pip-root[data-camo="terminal"],
+    #ueh-pip-root[data-camo="terminal"] #ueh-pip-stage,
+    #ueh-pip-root[data-camo="terminal"] #ueh-video-slot {
+      background: #0d1117;
+    }
+    #ueh-pip-root[data-camo="doc_light"],
+    #ueh-pip-root[data-camo="doc_light"] #ueh-pip-stage,
+    #ueh-pip-root[data-camo="doc_light"] #ueh-video-slot {
+      background: #f8fafc;
     }
     #ueh-pip-recap-slot,
     #ueh-pip-cuelist-slot {
@@ -140,6 +158,13 @@ export function buildPipStyles(opts: {
       display: flex; align-items: center; justify-content: center;
       background: #000; overflow: hidden;
       contain: strict;
+      opacity: var(--ueh-video-opacity, 1);
+      filter: var(--ueh-video-filter, none);
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      #ueh-video-slot {
+        transition: opacity .22s ease, filter .22s ease;
+      }
     }
     #ueh-video-slot video, #ueh-video-slot canvas {
       width: 100% !important; height: 100% !important;
@@ -173,6 +198,7 @@ export function buildPipStyles(opts: {
       align-items: center; gap: 0;
       padding: 0 2%; pointer-events: none;
       box-sizing: border-box;
+      opacity: var(--ueh-ui-opacity, 1);
     }
     @media (prefers-reduced-motion: no-preference) {
       #ueh-sub-layer,
@@ -834,14 +860,15 @@ export function buildPipStyles(opts: {
       padding: 3px 7px;
     }
 
-    /* PiP subtitle settings panel */
-    #ueh-pip-settings {
+    /* PiP subtitle & loafing settings panels */
+    #ueh-pip-settings,
+    #ueh-pip-loafing {
       position: absolute;
       right: 10px;
-      bottom: var(--ueh-chrome-h, 78px);
+      bottom: var(--ueh-chrome-h, 54px);
       z-index: 32;
-      width: min(280px, 88vw);
-      max-height: min(70%, 360px);
+      width: min(286px, 90vw);
+      max-height: min(76%, 390px);
       overflow-x: hidden;
       overflow-y: auto;
       overscroll-behavior: contain;
@@ -858,58 +885,230 @@ export function buildPipStyles(opts: {
       scrollbar-width: thin;
       scrollbar-color: transparent transparent;
     }
-    #ueh-pip-settings:hover {
+    #ueh-pip-settings:hover,
+    #ueh-pip-loafing:hover {
       scrollbar-color: rgba(255,255,255,.28) transparent;
     }
-    #ueh-pip-settings::-webkit-scrollbar { width: 5px; }
-    #ueh-pip-settings::-webkit-scrollbar-track { background: transparent; }
-    #ueh-pip-settings::-webkit-scrollbar-thumb {
+    #ueh-pip-settings::-webkit-scrollbar,
+    #ueh-pip-loafing::-webkit-scrollbar { width: 5px; }
+    #ueh-pip-settings::-webkit-scrollbar-track,
+    #ueh-pip-loafing::-webkit-scrollbar-track { background: transparent; }
+    #ueh-pip-settings::-webkit-scrollbar-thumb,
+    #ueh-pip-loafing::-webkit-scrollbar-thumb {
       background: transparent; border-radius: 999px;
     }
-    #ueh-pip-settings:hover::-webkit-scrollbar-thumb {
+    #ueh-pip-settings:hover::-webkit-scrollbar-thumb,
+    #ueh-pip-loafing:hover::-webkit-scrollbar-thumb {
       background: rgba(255,255,255,.22);
     }
-    #ueh-pip-settings.ueh-open { display: block; }
-    #ueh-pip-settings h3 {
+    #ueh-pip-settings.ueh-open,
+    #ueh-pip-loafing.ueh-open { display: block; }
+    #ueh-pip-settings h3,
+    #ueh-pip-loafing h3 {
       margin: 0 0 10px; font-size: 13px; font-weight: 700;
       color: oklch(88% 0.08 82);
     }
-    #ueh-pip-settings label.ueh-row {
+    #ueh-pip-settings label.ueh-row,
+    #ueh-pip-loafing label.ueh-row {
       display: flex; align-items: center; gap: 8px;
       margin: 6px 0; cursor: pointer; user-select: none;
     }
-    #ueh-pip-settings label.ueh-block {
+    #ueh-pip-settings label.ueh-block,
+    #ueh-pip-loafing label.ueh-block {
       display: block; margin: 8px 0 4px;
-      color: rgba(255,255,255,.65); font-size: 11px;
+      color: rgba(255,255,255,.68); font-size: 11px;
     }
     #ueh-pip-settings select,
-    #ueh-pip-settings input[type="range"] {
+    #ueh-pip-settings input[type="range"],
+    #ueh-pip-loafing select,
+    #ueh-pip-loafing input[type="range"],
+    #ueh-pip-loafing input[type="text"] {
       width: 100%; box-sizing: border-box;
     }
-    #ueh-pip-settings select {
+    #ueh-pip-settings select,
+    #ueh-pip-loafing select,
+    #ueh-pip-loafing input[type="text"] {
       background: #0d1117; color: #f5f5f5;
       border: 1px solid #30363d; border-radius: 8px;
       padding: 6px 8px; font-size: 12px;
     }
-    #ueh-pip-settings .ueh-actions {
-      display: flex; gap: 8px; margin-top: 12px;
+    #ueh-pip-settings .ueh-actions,
+    #ueh-pip-loafing .ueh-actions,
+    #ueh-pip-loafing .ueh-preset-row {
+      display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap;
     }
-    #ueh-pip-settings .ueh-actions button {
+    #ueh-pip-settings .ueh-actions button,
+    #ueh-pip-loafing .ueh-actions button {
       flex: 1; border: 0; border-radius: 8px;
-      padding: 8px; font-weight: 700; cursor: pointer; font-size: 12px;
+      padding: 7px 8px; font-weight: 700; cursor: pointer; font-size: 12px;
     }
-    #ueh-pip-settings .ueh-save {
+    #ueh-pip-loafing .ueh-preset-row button {
+      flex: 1 1 auto;
+      border: 1px solid rgba(255,255,255,.16);
+      border-radius: 7px;
+      padding: 5px 7px;
+      background: rgba(255,255,255,.07);
+      color: rgba(255,255,255,.88);
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    @media (hover: hover) {
+      #ueh-pip-loafing .ueh-preset-row button:hover {
+        background: rgba(255,255,255,.15);
+      }
+    }
+    #ueh-pip-settings .ueh-save,
+    #ueh-pip-loafing .ueh-save {
       background: oklch(76% 0.12 82); color: #1a1a1a;
     }
-    #ueh-pip-settings .ueh-close-btn {
+    #ueh-pip-settings .ueh-close-btn,
+    #ueh-pip-loafing .ueh-close-btn {
       background: rgba(255,255,255,.1); color: #fff;
     }
-    #ueh-pip-settings .ueh-status {
+    #ueh-pip-settings .ueh-status,
+    #ueh-pip-loafing .ueh-status {
       margin-top: 8px; font-size: 11px; color: oklch(80% 0.1 145);
       min-height: 1.2em;
     }
-    #ueh-pip-settings .ueh-hint {
-      margin: 8px 0 0; font-size: 10px; color: rgba(255,255,255,.5);
+    #ueh-pip-settings .ueh-hint,
+    #ueh-pip-loafing .ueh-hint {
+      margin: 8px 0 0; font-size: 10px; color: rgba(255,255,255,.52); line-height: 1.4;
+    }
+
+    /* Camouflage subtitle skins (IDE comment / Terminal log / Light doc) */
+    #ueh-pip-root[data-camo="ide_dark"] #ueh-sub-layer,
+    #ueh-pip-root[data-camo="terminal"] #ueh-sub-layer {
+      align-items: flex-start !important;
+      padding: 0 10px !important;
+    }
+    #ueh-pip-root[data-camo="ide_dark"] #ueh-sub-card,
+    #ueh-pip-root[data-camo="terminal"] #ueh-sub-card,
+    #ueh-pip-root[data-camo="doc_light"] #ueh-sub-card {
+      align-items: flex-start;
+      border: none !important;
+      box-shadow: none !important;
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
+      border-radius: 4px;
+      padding: 3px 6px;
+    }
+    #ueh-pip-root[data-camo="ide_dark"] #ueh-sub-card {
+      background: rgba(30, 30, 30, 0.82) !important;
+    }
+    #ueh-pip-root[data-camo="terminal"] #ueh-sub-card {
+      background: rgba(13, 17, 23, 0.84) !important;
+    }
+    #ueh-pip-root[data-camo="doc_light"] #ueh-sub-card {
+      background: rgba(248, 250, 252, 0.88) !important;
+    }
+    #ueh-pip-root[data-camo="ide_dark"] #ueh-sub-en,
+    #ueh-pip-root[data-camo="ide_dark"] #ueh-sub-tr,
+    #ueh-pip-root[data-camo="terminal"] #ueh-sub-en,
+    #ueh-pip-root[data-camo="terminal"] #ueh-sub-tr {
+      font-family: Consolas, "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace !important;
+      text-align: left !important;
+      text-shadow: none !important;
+      font-weight: 400 !important;
+    }
+    #ueh-pip-root[data-camo="ide_dark"] #ueh-sub-en {
+      color: #6a9955 !important;
+    }
+    #ueh-pip-root[data-camo="ide_dark"] #ueh-sub-en:not(:empty)::before {
+      content: "// ";
+      opacity: 0.75;
+    }
+    #ueh-pip-root[data-camo="ide_dark"] #ueh-sub-tr {
+      color: #858585 !important;
+    }
+    #ueh-pip-root[data-camo="ide_dark"] #ueh-sub-tr:not(:empty)::before {
+      content: "// ";
+      opacity: 0.65;
+    }
+    #ueh-pip-root[data-camo="terminal"] #ueh-sub-en {
+      color: #8b949e !important;
+    }
+    #ueh-pip-root[data-camo="terminal"] #ueh-sub-en:not(:empty)::before {
+      content: "[INFO] ";
+      color: #58a6ff;
+      opacity: 0.85;
+    }
+    #ueh-pip-root[data-camo="terminal"] #ueh-sub-tr {
+      color: #6e7681 !important;
+    }
+    #ueh-pip-root[data-camo="terminal"] #ueh-sub-tr:not(:empty)::before {
+      content: "       ";
+    }
+    #ueh-pip-root[data-camo="doc_light"] #ueh-sub-en {
+      color: #334155 !important;
+      text-shadow: none !important;
+      font-weight: 500 !important;
+    }
+    #ueh-pip-root[data-camo="doc_light"] #ueh-sub-tr {
+      color: #64748b !important;
+      text-shadow: none !important;
+      font-weight: 400 !important;
+    }
+    #ueh-pip-root[data-camo="ide_dark"] .ueh-word,
+    #ueh-pip-root[data-camo="terminal"] .ueh-word,
+    #ueh-pip-root[data-camo="doc_light"] .ueh-word {
+      border-bottom-color: transparent !important;
+      box-shadow: none !important;
+    }
+    @media (hover: hover) {
+      #ueh-pip-root[data-camo] .ueh-word:hover {
+        border-bottom: 1px dashed currentColor !important;
+      }
+    }
+
+    /* Boss Key fake work shield (#ueh-boss-shield) */
+    #ueh-boss-shield {
+      position: absolute;
+      inset: 0;
+      z-index: 60;
+      display: none;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 12px 14px;
+      box-sizing: border-box;
+      background: #1e1e1e;
+      color: #9cdcfe;
+      font-family: Consolas, "Cascadia Mono", "SFMono-Regular", ui-monospace, monospace;
+      font-size: 11px;
+      line-height: 1.55;
+      pointer-events: auto;
+      cursor: default;
+      user-select: text;
+      overflow: hidden;
+    }
+    #ueh-pip-root[data-camo="doc_light"] #ueh-boss-shield {
+      background: #ffffff;
+      color: #334155;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    #ueh-pip-root.ueh-boss-active #ueh-boss-shield {
+      display: flex;
+    }
+    #ueh-pip-root.ueh-boss-active #ueh-pip-recap-slot,
+    #ueh-pip-root.ueh-boss-active #ueh-pip-cuelist-slot {
+      display: none !important;
+    }
+    #ueh-boss-shield .boss-lines {
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    #ueh-boss-shield .boss-muted {
+      color: #6a9955;
+    }
+    #ueh-pip-root[data-camo="doc_light"] #ueh-boss-shield .boss-muted {
+      color: #64748b;
+    }
+    #ueh-boss-shield .boss-foot {
+      font-size: 10px;
+      opacity: 0.42;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
     }
   `;
 }
@@ -942,6 +1141,12 @@ export const ICONS = {
     '<path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3"/>',
   mic: '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/>',
   save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>',
+  /** Eye-off stealth icon for loafing / camouflage settings */
+  loaf:
+    '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="m1 1 22 22"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/>',
+  /** Instant Boss Key shield/zap icon */
+  boss:
+    '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="13 7 9 12 12 12 11 17 15 12 12 12 13 7"/>',
 } as const;
 
 export function iconButton(
@@ -1040,6 +1245,59 @@ export function buildPipMarkup(): string {
         <div class="ueh-status" id="ueh-pip-settings-status"></div>
         <p class="ueh-hint">仅影响 PiP，与页内全屏字幕配置独立。</p>
       </div>
+      <div id="ueh-pip-loafing" aria-label="摸鱼隐身设置">
+        <h3>🐟 摸鱼与防窥设置</h3>
+        <div class="ueh-preset-row">
+          <button type="button" id="ueh-loaf-preset-stealth" title="画面降为15%灰度 + VSCode注释风字幕 + 离窗自动隐身">一键隐身</button>
+          <button type="button" id="ueh-loaf-preset-audio" title="0%纯背景无画面，仅显示伪装代码注释字幕">纯听读无画</button>
+          <button type="button" id="ueh-loaf-preset-normal" title="恢复100%正常画面与原始样式">恢复正常</button>
+        </div>
+        <label class="ueh-block" for="ueh-loaf-video-op">画面显影度（0% = 纯文字听读） <span id="ueh-loaf-video-op-val">100%</span></label>
+        <input type="range" id="ueh-loaf-video-op" min="0" max="100" step="5" value="100" />
+        <label class="ueh-block" for="ueh-loaf-ui-op">字幕透明度 <span id="ueh-loaf-ui-op-val">100%</span></label>
+        <input type="range" id="ueh-loaf-ui-op" min="20" max="100" step="5" value="100" />
+        <label class="ueh-row"><input type="checkbox" id="ueh-loaf-gray" /> 去色低对比滤镜（消除鲜艳画面反差）</label>
+        <label class="ueh-row"><input type="checkbox" id="ueh-loaf-autodim" /> 鼠标移出小窗自动隐身</label>
+        <label class="ueh-block" for="ueh-loaf-leave-op">离窗后画面显影度 <span id="ueh-loaf-leave-op-val">10%</span></label>
+        <input type="range" id="ueh-loaf-leave-op" min="0" max="60" step="5" value="10" />
+        <label class="ueh-block" for="ueh-loaf-theme">伪装皮肤（与编辑器/文档融为一体）</label>
+        <select id="ueh-loaf-theme">
+          <option value="none">默认样式</option>
+          <option value="ide_dark">VS Code 暗色代码注释 (//)</option>
+          <option value="terminal">终端日志输出风 ([INFO])</option>
+          <option value="doc_light">浅色文档风（适配白底网页/文档）</option>
+        </select>
+        <label class="ueh-row"><input type="checkbox" id="ueh-loaf-tab-disguise" /> 伪装原网页标签标题与图标</label>
+        <input type="text" id="ueh-loaf-tab-title" placeholder="例如：TypeScript: Documentation" />
+        <label class="ueh-block" for="ueh-loaf-boss-mode">老板键动作（小窗内按 \` 键 或 全局 Alt+Q）</label>
+        <select id="ueh-loaf-boss-mode">
+          <option value="camouflage">瞬间切为终端/文档伪装屏并静音暂停</option>
+          <option value="close">直接关闭画中画小窗并静音暂停</option>
+        </select>
+        <label class="ueh-block">一键窗口缩微尺寸</label>
+        <div class="ueh-preset-row">
+          <button type="button" data-size-preset="280x160">极小 280×160</button>
+          <button type="button" data-size-preset="360x205">迷你 360×205</button>
+          <button type="button" data-size-preset="640x360">标准 640×360</button>
+        </div>
+        <div class="ueh-actions">
+          <button type="button" class="ueh-save" id="ueh-loaf-save">保存配置</button>
+          <button type="button" class="ueh-close-btn" id="ueh-loaf-close">关闭</button>
+        </div>
+        <div class="ueh-status" id="ueh-loaf-status"></div>
+        <p class="ueh-hint">提示：小窗内按左上角 <code>\`</code> 键或全局 <code>Alt+Q</code> 即可瞬间触发老板键；处于伪装屏时双击或再按一次即可恢复。</p>
+      </div>
+      <div id="ueh-boss-shield" aria-label="工作终端视图" title="双击或按 &#96; / Alt+Q 恢复学习画面">
+        <div class="boss-lines" id="ueh-boss-shield-body">[14:02:18] Starting incremental compilation...
+<span class="boss-muted">// verifying module graph &amp; type declarations</span>
+✓ src/core/pipeline/scheduler.ts — 0 diagnostics
+✓ src/services/transport/session.ts — 0 diagnostics
+[14:02:19] Found 0 errors. Watching for file changes.</div>
+        <div class="boss-foot">
+          <span>TS 5.7.2 · UTF-8 · LF</span>
+          <span>Ln 42, Col 18</span>
+        </div>
+      </div>
       <p id="ueh-pip-toast" role="status" aria-live="polite"></p>
       <div id="ueh-bottom-trigger" aria-hidden="true"></div>
       <div id="ueh-chrome">
@@ -1087,6 +1345,13 @@ export function buildPipMarkup(): string {
             ${iconButton('settings', ICONS.settings, 'PiP 字幕设置', '', {
               pressed: false,
               ariaLabel: '字幕设置面板',
+            })}
+            ${iconButton('loaf', ICONS.loaf, '摸鱼隐身与透明度设置', '', {
+              pressed: false,
+              ariaLabel: '摸鱼隐身设置面板',
+            })}
+            ${iconButton('boss', ICONS.boss, '老板键 (` 或 Alt+Q)：瞬间静音暂停并伪装', '', {
+              ariaLabel: '触发老板键',
             })}
           </div>
         </div>
