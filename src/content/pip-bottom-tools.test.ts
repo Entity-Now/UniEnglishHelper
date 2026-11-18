@@ -164,10 +164,11 @@ describe('PiP bottom toolbar markup & styles', () => {
     expect(doc.getElementById('ueh-volume')).not.toBeNull();
     const css = buildPipStyles({ fontSize: 16, bgOpacity: 0.5 });
     expect(css).toContain('#ueh-chrome {\n      position: absolute; left: 0; right: 0; bottom: 0; z-index: 24;');
-    expect(css).toContain('--ueh-sub-bottom-safe: 6px;');
+    expect(css).toContain('--ueh-sub-bottom-safe: 10px;');
     expect(css).toContain('#ueh-pip-root.ueh-show-chrome #ueh-pip-stage');
-    expect(css).toContain('bottom: max(var(--ueh-sub-bottom-safe, 6px), var(--ueh-sub-pct, 5%));');
+    expect(css).toContain('bottom: max(var(--ueh-sub-bottom-safe, 10px), var(--ueh-sub-pct, 5%));');
     expect(css).not.toContain('#ueh-pip-root:hover #ueh-chrome');
+    expect(doc.getElementById('ueh-bottom-trigger')).not.toBeNull();
   });
 
   it('provides roving-tabindex arrow/Home/End navigation when native focusGroup is absent', () => {
@@ -449,6 +450,67 @@ describe('PipSessionController bottom tools end-to-end interactions', () => {
     offsetSlider.value = '0';
     offsetSlider.dispatchEvent(new Event('input', { bubbles: true }));
     expect(subLayer.style.getPropertyValue('--ueh-sub-pct')).toBe('0%');
+
+    await ctrl.close();
+  });
+
+  it('keeps bottom bar hidden when entering window or hovering subtitle words, revealing ONLY at bottom edge', async () => {
+    const cues: SubtitleCue[] = [
+      { id: 'c1', startMs: 0, endMs: 4000, text: 'Click unfamiliar vocabulary easily' },
+    ];
+    const { pipDoc, adapter } = createPipTestEnv(cues);
+    const ctrl = new PipSessionController(adapter, structuredClone(DEFAULT_APP_CONFIG));
+    await ctrl.openWithUserGesture();
+
+    const root = pipDoc.getElementById('ueh-pip-root')!;
+    const stage = pipDoc.getElementById('ueh-pip-stage')!;
+    const subCard = pipDoc.getElementById('ueh-sub-card')!;
+    const bottomTrigger = pipDoc.getElementById('ueh-bottom-trigger')!;
+
+    // Mock small PiP window stage rect (320x180)
+    stage.getBoundingClientRect = () =>
+      ({
+        top: 0,
+        left: 0,
+        right: 320,
+        bottom: 180,
+        width: 320,
+        height: 180,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect;
+
+    // 1. Initially hidden on open (no unsolicited subtitle jump)
+    expect(root.classList.contains('ueh-show-chrome')).toBe(false);
+
+    // 2. Moving pointer into upper/middle video area does NOT reveal bottom bar
+    stage.dispatchEvent(
+      new MouseEvent('pointermove', { clientX: 160, clientY: 90, bubbles: true }),
+    );
+    await new Promise((r) => setTimeout(r, 90));
+    expect(root.classList.contains('ueh-show-chrome')).toBe(false);
+
+    // 3. Hovering over subtitle card / clickable word near bottom (y=168) STILL does NOT reveal bottom bar!
+    const wordSpan = subCard.querySelector('.ueh-word') as HTMLElement;
+    expect(wordSpan).not.toBeNull();
+    wordSpan.dispatchEvent(
+      new MouseEvent('pointermove', { clientX: 160, clientY: 168, bubbles: true }),
+    );
+    await new Promise((r) => setTimeout(r, 90));
+    expect(root.classList.contains('ueh-show-chrome')).toBe(false);
+
+    // 4. Moving pointer onto bottom-edge trigger reveals bottom bar after short hover intent
+    bottomTrigger.dispatchEvent(new Event('pointerenter', { bubbles: false }));
+    await vi.waitFor(() => {
+      expect(root.classList.contains('ueh-show-chrome')).toBe(true);
+    });
+
+    // 5. Leaving PiP window hides bottom bar promptly
+    root.dispatchEvent(new Event('pointerleave', { bubbles: false }));
+    await vi.waitFor(() => {
+      expect(root.classList.contains('ueh-show-chrome')).toBe(false);
+    });
 
     await ctrl.close();
   });

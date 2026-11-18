@@ -120,8 +120,8 @@ export function buildPipStyles(opts: {
       border-left: 1px solid rgba(255,255,255,.1);
     }
     #ueh-pip-stage {
-      --ueh-chrome-h: 54px;
-      --ueh-sub-bottom-safe: 6px;
+      --ueh-chrome-h: 50px;
+      --ueh-sub-bottom-safe: 10px;
       position: relative;
       flex: 1 1 auto;
       min-width: 200px;
@@ -132,7 +132,7 @@ export function buildPipStyles(opts: {
     }
     #ueh-pip-root.ueh-show-chrome #ueh-pip-stage,
     #ueh-pip-stage:has(#ueh-chrome:focus-within) {
-      --ueh-sub-bottom-safe: var(--ueh-chrome-h, 54px);
+      --ueh-sub-bottom-safe: var(--ueh-chrome-h, 50px);
     }
     #ueh-video-slot {
       position: absolute;
@@ -168,7 +168,7 @@ export function buildPipStyles(opts: {
     /* Bilingual subtitle layer */
     #ueh-sub-layer {
       position: absolute; left: 0; right: 0;
-      bottom: max(var(--ueh-sub-bottom-safe, 6px), var(--ueh-sub-pct, 5%));
+      bottom: max(var(--ueh-sub-bottom-safe, 10px), var(--ueh-sub-pct, 5%));
       z-index: 10; display: flex; flex-direction: column;
       align-items: center; gap: 0;
       padding: 0 2%; pointer-events: none;
@@ -352,22 +352,64 @@ export function buildPipStyles(opts: {
       }
     }
 
-    /* Bottom chrome — strictly above #ueh-sub-layer (z-index: 10); auto-hides cleanly on idle */
+    @media (max-height: 260px) {
+      #ueh-sub-card {
+        padding: 3px 10px 4px;
+        border-radius: 9px;
+      }
+    }
+
+    /* Bottom-edge hover sensor strip — reveals tools bar ONLY when pointer visits bottom edge */
+    #ueh-bottom-trigger {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 10px;
+      z-index: 23;
+      pointer-events: auto;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      padding-bottom: 2px;
+      box-sizing: border-box;
+    }
+    #ueh-bottom-trigger::after {
+      content: "";
+      width: 34px;
+      height: 3px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.36);
+      opacity: 0;
+    }
+    @media (hover: hover) {
+      #ueh-bottom-trigger:hover::after {
+        opacity: 1;
+      }
+    }
+    #ueh-pip-root.ueh-show-chrome #ueh-bottom-trigger {
+      pointer-events: none;
+      opacity: 0;
+    }
+
+    /* Bottom chrome — strictly above #ueh-sub-layer (z-index: 10); revealed only from bottom zone */
     #ueh-chrome {
       position: absolute; left: 0; right: 0; bottom: 0; z-index: 24;
       padding: 5px 8px 6px;
-      background: linear-gradient(180deg, transparent, rgba(0,0,0,.84) 38%);
+      background: linear-gradient(180deg, transparent, rgba(0,0,0,.86) 34%);
       opacity: 0;
+      transform: translateY(6px);
       pointer-events: none;
     }
     @media (prefers-reduced-motion: no-preference) {
       #ueh-chrome {
-        transition: opacity .18s ease;
+        transition: opacity .16s ease, transform .16s cubic-bezier(0.22, 1, 0.36, 1);
       }
     }
     #ueh-pip-root.ueh-show-chrome #ueh-chrome,
     #ueh-chrome:focus-within {
       opacity: 1;
+      transform: translateY(0);
       pointer-events: auto;
     }
     #ueh-progress {
@@ -386,7 +428,17 @@ export function buildPipStyles(opts: {
       background: oklch(76% 0.12 82); border: 0; cursor: pointer;
     }
     #ueh-bar {
-      display: flex; align-items: center; gap: 4px; flex-wrap: wrap; row-gap: 4px;
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scrollbar-width: none;
+      scroll-snap-type: x proximity;
+    }
+    #ueh-bar::-webkit-scrollbar {
+      display: none;
     }
     .ueh-bar-group {
       display: inline-flex; align-items: center; gap: 3px; flex-wrap: nowrap;
@@ -989,6 +1041,7 @@ export function buildPipMarkup(): string {
         <p class="ueh-hint">仅影响 PiP，与页内全屏字幕配置独立。</p>
       </div>
       <p id="ueh-pip-toast" role="status" aria-live="polite"></p>
+      <div id="ueh-bottom-trigger" aria-hidden="true"></div>
       <div id="ueh-chrome">
         <input id="ueh-progress" type="range" min="0" max="1000" value="0" step="1" aria-label="播放进度" />
         <div id="ueh-bar" role="toolbar" focusgroup="toolbar wrap" aria-label="画中画播放与学习工具栏">

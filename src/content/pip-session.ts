@@ -395,16 +395,18 @@ export class PipSessionController {
       cueListOpen: root?.classList.contains('ueh-cue-list-open'),
     });
     if (!this.pipBaseOuterWidth) {
-      this.pipBaseOuterWidth = Math.max(480, win.outerWidth - this.pipPanelExtraPx);
+      this.pipBaseOuterWidth = Math.max(260, win.outerWidth - this.pipPanelExtraPx);
     }
     const availW = (win.screen.availWidth || win.screen.width || 1280) - 16;
     const availH = (win.screen.availHeight || win.screen.height || 720) - 16;
     const opening = extra > this.pipPanelExtraPx;
     const next = clampPipOuterSize({
       width: this.pipBaseOuterWidth + extra,
-      height: opening ? Math.max(win.outerHeight, 420) : win.outerHeight,
+      height: opening ? Math.max(win.outerHeight, 360) : win.outerHeight,
       availWidth: availW,
       availHeight: availH,
+      minWidth: Math.min(480, this.pipBaseOuterWidth),
+      minHeight: Math.min(320, win.outerHeight || 200),
     });
     this.syncingPipSize = true;
     this.pipPanelExtraPx = extra;
@@ -775,7 +777,7 @@ export class PipSessionController {
       this.pipWindow.addEventListener('resize', () => {
         if (this.syncingPipSize || !this.pipWindow) return;
         this.pipBaseOuterWidth = Math.max(
-          480,
+          260,
           this.pipWindow.outerWidth - this.pipPanelExtraPx,
         );
       });
@@ -1226,7 +1228,7 @@ export class PipSessionController {
     const updateChromeClearance = () => {
       if (!chromeEl || !stage) return;
       const h = Math.round(chromeEl.getBoundingClientRect().height || chromeEl.offsetHeight || 0);
-      const nextClearance = h > 0 ? Math.max(46, h + 5) : 54;
+      const nextClearance = h > 0 ? Math.max(44, h + 4) : 50;
       if (nextClearance !== this.chromeClearancePx) {
         this.chromeClearancePx = nextClearance;
         stage.style.setProperty('--ueh-chrome-h', `${nextClearance}px`);
@@ -1242,63 +1244,163 @@ export class PipSessionController {
     }
     updateChromeClearance();
 
-    // Show chrome on real pointer activity; auto-hide promptly on idle or pointer leave
-    // so subtitles stay near the bottom edge during normal viewing.
+    // Bottom-zone-only reveal:
+    // Entering the PiP window or hovering/clicking words in #ueh-sub-card NEVER opens
+    // #ueh-chrome (preventing subtitles from jumping away from the cursor in small PiP windows).
+    // #ueh-chrome reveals ONLY when the pointer visits the bottom edge strip.
     let hideTimer = 0;
+    let revealTimer = 0;
     let pointerInsideChrome = false;
-    let lastMoveX = -999;
-    let lastMoveY = -999;
+    const bottomTrigger = doc.getElementById('ueh-bottom-trigger');
 
-    chromeEl?.addEventListener('pointerenter', () => {
-      pointerInsideChrome = true;
-      win.clearTimeout(hideTimer);
-      root?.classList.add('ueh-show-chrome');
-    });
-    chromeEl?.addEventListener('pointerleave', () => {
-      pointerInsideChrome = false;
-      scheduleHideChrome(1600);
-    });
+    const cancelReveal = () => {
+      if (revealTimer) {
+        win.clearTimeout(revealTimer);
+        revealTimer = 0;
+      }
+    };
 
-    const scheduleHideChrome = (delayMs = 2000) => {
+    const scheduleHideChrome = (delayMs = 320) => {
       win.clearTimeout(hideTimer);
       hideTimer = win.setTimeout(() => {
         const settingsOpen = doc
           .getElementById('ueh-pip-settings')
           ?.classList.contains('ueh-open');
-        if (pointerInsideChrome || settingsOpen) return;
+        const focusInside = Boolean(chromeEl?.matches?.(':focus-within'));
+        if (pointerInsideChrome || settingsOpen || focusInside) return;
         root?.classList.remove('ueh-show-chrome');
       }, delayMs);
     };
 
-    const showChrome = (delayMs = 2000) => {
-      const now = performance.now();
-      if (now - this.lastChromeShowMs >= 90 || !root?.classList.contains('ueh-show-chrome')) {
-        this.lastChromeShowMs = now;
-        root?.classList.add('ueh-show-chrome');
+    const showChrome = (autoHideMs = 0) => {
+      cancelReveal();
+      win.clearTimeout(hideTimer);
+      this.lastChromeShowMs = performance.now();
+      root?.classList.add('ueh-show-chrome');
+      if (autoHideMs > 0) {
+        scheduleHideChrome(autoHideMs);
       }
-      scheduleHideChrome(delayMs);
     };
 
-    root?.addEventListener(
+    const scheduleRevealFromBottom = (delayMs = 65) => {
+      if (root?.classList.contains('ueh-show-chrome')) {
+        win.clearTimeout(hideTimer);
+        return;
+      }
+      if (revealTimer) return;
+      revealTimer = win.setTimeout(() => {
+        revealTimer = 0;
+        showChrome(0);
+      }, delayMs);
+    };
+
+    bottomTrigger?.addEventListener('pointerenter', () => {
+      scheduleRevealFromBottom(50);
+    });
+    bottomTrigger?.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      showChrome(2600);
+    });
+
+    chromeEl?.addEventListener('pointerenter', () => {
+      pointerInsideChrome = true;
+      cancelReveal();
+      win.clearTimeout(hideTimer);
+      root?.classList.add('ueh-show-chrome');
+    });
+    chromeEl?.addEventListener('pointerleave', () => {
+      pointerInsideChrome = false;
+      scheduleHideChrome(320);
+    });
+
+    stage?.addEventListener(
       'pointermove',
       (e) => {
         const pe = e as PointerEvent;
-        if (Math.abs(pe.clientX - lastMoveX) + Math.abs(pe.clientY - lastMoveY) < 2) {
+        const target = pe.target as HTMLElement | null;
+        const isOpen = Boolean(root?.classList.contains('ueh-show-chrome'));
+
+        if (!isOpen) {
+          // Never reveal bottom bar while aiming at or hovering subtitle words / panels
+          if (
+            target?.closest?.(
+              '#ueh-sub-card, .ueh-word, #ueh-word-panel, #ueh-pip-settings',
+            )
+          ) {
+            cancelReveal();
+            return;
+          }
+          const rect = stage.getBoundingClientRect();
+          if (rect.height <= 0) return;
+          const distFromBottom = rect.bottom - pe.clientY;
+          const bottomZonePx = Math.min(
+            24,
+            Math.max(12, Math.round(rect.height * 0.09)),
+          );
+          if (distFromBottom >= 0 && distFromBottom <= bottomZonePx) {
+            scheduleRevealFromBottom(65);
+          } else {
+            cancelReveal();
+          }
           return;
         }
-        lastMoveX = pe.clientX;
-        lastMoveY = pe.clientY;
-        showChrome(2000);
+
+        // Already open: if pointer moved clearly above the bottom chrome into the video/subtitles, tuck away
+        if (!pointerInsideChrome && !chromeEl?.contains(target)) {
+          const rect = stage.getBoundingClientRect();
+          const distFromBottom = rect.bottom - pe.clientY;
+          if (rect.height <= 0 || distFromBottom > this.chromeClearancePx + 8) {
+            scheduleHideChrome(300);
+          }
+        }
       },
       { passive: true },
     );
-    root?.addEventListener('pointerdown', () => showChrome(2400), { passive: true });
+
+    stage?.addEventListener(
+      'pointerdown',
+      (e) => {
+        const pe = e as PointerEvent;
+        if (pe.pointerType !== 'touch') return;
+        const target = pe.target as HTMLElement | null;
+        if (
+          target?.closest?.(
+            '#ueh-sub-card, .ueh-word, #ueh-word-panel, #ueh-pip-settings',
+          )
+        ) {
+          return;
+        }
+        const rect = stage.getBoundingClientRect();
+        const distFromBottom = rect.bottom - pe.clientY;
+        if (rect.height > 0 && distFromBottom <= Math.max(28, rect.height * 0.14)) {
+          showChrome(3000);
+        }
+      },
+      { passive: true },
+    );
+
     root?.addEventListener('pointerleave', () => {
+      cancelReveal();
       pointerInsideChrome = false;
-      scheduleHideChrome(250);
+      scheduleHideChrome(180);
     });
-    root?.addEventListener('focusin', () => showChrome(2600));
-    showChrome(1800);
+    chromeEl?.addEventListener('focusin', () => showChrome(0));
+    chromeEl?.addEventListener('focusout', () => scheduleHideChrome(350));
+
+    // Allow horizontal wheel scrolling on #ueh-bar in ultra-small PiP windows
+    bar?.addEventListener(
+      'wheel',
+      (e) => {
+        const we = e as WheelEvent;
+        if ((we.target as HTMLElement | null)?.closest?.('.ueh-vol-wrap')) return;
+        if (!bar || bar.scrollWidth <= bar.clientWidth + 2) return;
+        const delta = Math.abs(we.deltaX) > Math.abs(we.deltaY) ? we.deltaX : we.deltaY;
+        if (delta === 0) return;
+        we.preventDefault();
+        bar.scrollLeft += delta;
+      },
+      { passive: false },
+    );
 
     // Light-dismiss settings panel when clicking outside #ueh-pip-settings and settings button
     doc.addEventListener('click', (e) => {
@@ -2355,7 +2457,7 @@ export class PipSessionController {
     // low and natural during viewing and smoothly lift only when controls appear.
     applySubtitleLayerLayout(layer, en, tr, {
       placement,
-      bottomFloorCss: 'var(--ueh-sub-bottom-safe, 6px)',
+      bottomFloorCss: 'var(--ueh-sub-bottom-safe, 10px)',
     });
   }
 
