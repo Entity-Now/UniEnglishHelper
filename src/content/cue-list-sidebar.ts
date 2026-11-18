@@ -729,8 +729,12 @@ function scrollChildIntoListView(
   }
   if (delta === 0) return;
 
-  list.scrollBy({
-    top: delta,
-    behavior: Math.abs(delta) < list.clientHeight * 1.5 ? 'smooth' : 'auto',
-  });
+  if (typeof list.scrollBy === 'function') {
+    list.scrollBy({
+      top: delta,
+      behavior: Math.abs(delta) < list.clientHeight * 1.5 ? 'smooth' : 'auto',
+    });
+  } else {
+    list.scrollTop += delta;
+  }
 }

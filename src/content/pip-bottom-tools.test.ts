@@ -159,11 +159,15 @@ describe('PiP bottom toolbar markup & styles', () => {
       expect(btn?.hasAttribute('aria-pressed')).toBe(false);
     }
 
-    // Volume slider exists and #ueh-chrome stacks strictly above #ueh-sub-layer
+    // Volume slider exists and #ueh-chrome stacks strictly above #ueh-sub-layer,
+    // while #ueh-sub-layer stays low (6px floor) when idle and lifts only when .ueh-show-chrome is active
     expect(doc.getElementById('ueh-volume')).not.toBeNull();
     const css = buildPipStyles({ fontSize: 16, bgOpacity: 0.5 });
     expect(css).toContain('#ueh-chrome {\n      position: absolute; left: 0; right: 0; bottom: 0; z-index: 24;');
-    expect(css).toContain('#ueh-sub-layer {\n      position: absolute; left: 0; right: 0; bottom: var(--ueh-chrome-h, 78px);\n      z-index: 10;');
+    expect(css).toContain('--ueh-sub-bottom-safe: 6px;');
+    expect(css).toContain('#ueh-pip-root.ueh-show-chrome #ueh-pip-stage');
+    expect(css).toContain('bottom: max(var(--ueh-sub-bottom-safe, 6px), var(--ueh-sub-pct, 5%));');
+    expect(css).not.toContain('#ueh-pip-root:hover #ueh-chrome');
   });
 
   it('provides roving-tabindex arrow/Home/End navigation when native focusGroup is absent', () => {
@@ -432,9 +436,19 @@ describe('PipSessionController bottom tools end-to-end interactions', () => {
     listBtn.click();
     expect(listBtn.getAttribute('aria-pressed')).toBe('true');
     const cueListHost = pipDoc.getElementById('ueh-pip-cue-list')!;
-    const innerClose = cueListHost.shadowRoot?.querySelector('button.close') as HTMLButtonElement | null;
+    const innerClose = cueListHost.shadowRoot?.getElementById('close') as HTMLButtonElement | null;
+    expect(innerClose).not.toBeNull();
     innerClose?.click();
     expect(listBtn.getAttribute('aria-pressed')).toBe('false');
+
+    // 5. Bottom-anchored subtitle uses dynamic --ueh-sub-bottom-safe floor and supports 0% offset without resetting to 12%
+    const subLayer = pipDoc.getElementById('ueh-sub-layer')!;
+    expect(subLayer.style.getPropertyValue('--ueh-sub-pct')).toBe('5%');
+
+    const offsetSlider = pipDoc.getElementById('ueh-pip-offset') as HTMLInputElement;
+    offsetSlider.value = '0';
+    offsetSlider.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(subLayer.style.getPropertyValue('--ueh-sub-pct')).toBe('0%');
 
     await ctrl.close();
   });

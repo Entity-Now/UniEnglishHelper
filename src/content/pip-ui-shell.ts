@@ -120,7 +120,8 @@ export function buildPipStyles(opts: {
       border-left: 1px solid rgba(255,255,255,.1);
     }
     #ueh-pip-stage {
-      --ueh-chrome-h: 78px;
+      --ueh-chrome-h: 54px;
+      --ueh-sub-bottom-safe: 6px;
       position: relative;
       flex: 1 1 auto;
       min-width: 200px;
@@ -128,6 +129,10 @@ export function buildPipStyles(opts: {
       height: 100%;
       background: #000;
       contain: layout style;
+    }
+    #ueh-pip-root.ueh-show-chrome #ueh-pip-stage,
+    #ueh-pip-stage:has(#ueh-chrome:focus-within) {
+      --ueh-sub-bottom-safe: var(--ueh-chrome-h, 54px);
     }
     #ueh-video-slot {
       position: absolute;
@@ -162,15 +167,18 @@ export function buildPipStyles(opts: {
 
     /* Bilingual subtitle layer */
     #ueh-sub-layer {
-      position: absolute; left: 0; right: 0; bottom: var(--ueh-chrome-h, 78px);
+      position: absolute; left: 0; right: 0;
+      bottom: max(var(--ueh-sub-bottom-safe, 6px), var(--ueh-sub-pct, 5%));
       z-index: 10; display: flex; flex-direction: column;
       align-items: center; gap: 0;
       padding: 0 2%; pointer-events: none;
       box-sizing: border-box;
     }
     @media (prefers-reduced-motion: no-preference) {
-      #ueh-sub-layer {
-        transition: padding-right .2s ease, padding-left .2s ease, bottom .15s ease;
+      #ueh-sub-layer,
+      #ueh-sub-en,
+      #ueh-sub-tr {
+        transition: bottom .2s cubic-bezier(0.22, 1, 0.36, 1), padding-right .2s ease, padding-left .2s ease;
       }
     }
     #ueh-pip-root.ueh-word-open #ueh-sub-layer {
@@ -344,11 +352,11 @@ export function buildPipStyles(opts: {
       }
     }
 
-    /* Bottom chrome — strictly above #ueh-sub-layer (z-index: 10) so wrapped rows never lose clicks */
+    /* Bottom chrome — strictly above #ueh-sub-layer (z-index: 10); auto-hides cleanly on idle */
     #ueh-chrome {
       position: absolute; left: 0; right: 0; bottom: 0; z-index: 24;
-      padding: 8px 10px 10px;
-      background: linear-gradient(180deg, transparent, rgba(0,0,0,.86) 36%);
+      padding: 5px 8px 6px;
+      background: linear-gradient(180deg, transparent, rgba(0,0,0,.84) 38%);
       opacity: 0;
       pointer-events: none;
     }
@@ -357,18 +365,16 @@ export function buildPipStyles(opts: {
         transition: opacity .18s ease;
       }
     }
-    #ueh-pip-root:hover #ueh-chrome,
     #ueh-pip-root.ueh-show-chrome #ueh-chrome,
-    #ueh-pip-root.ueh-paused #ueh-chrome,
     #ueh-chrome:focus-within {
       opacity: 1;
       pointer-events: auto;
     }
     #ueh-progress {
       -webkit-appearance: none; appearance: none;
-      width: 100%; height: 5px; border-radius: 999px;
+      width: 100%; height: 4px; border-radius: 999px;
       background: rgba(255,255,255,.24); cursor: pointer;
-      margin: 0 0 8px;
+      margin: 0 0 5px;
       accent-color: oklch(76% 0.12 82);
     }
     #ueh-progress:focus-visible {
@@ -457,9 +463,9 @@ export function buildPipStyles(opts: {
     .ueh-spacer { flex: 1 1 4px; min-inline-size: 4px; }
     .ueh-ico {
       position: relative;
-      min-inline-size: 32px; min-block-size: 32px;
-      padding: 4px;
-      border: 1px solid transparent; border-radius: 8px;
+      min-inline-size: 29px; min-block-size: 29px;
+      padding: 3px;
+      border: 1px solid transparent; border-radius: 7px;
       background: transparent; color: #fff; cursor: pointer;
       display: inline-flex; align-items: center; justify-content: center;
       box-sizing: border-box;

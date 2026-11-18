@@ -130,8 +130,8 @@ export class PipSessionController {
   private lastChromeShowMs = 0;
   /** Avoid rewriting play SVG every UI tick */
   private lastPlayIconPaused: boolean | null = null;
-  /** Measured height of #ueh-chrome + gap so subtitles never sit behind wrapped toolbar rows */
-  private chromeClearancePx = 78;
+  /** Measured height of #ueh-chrome + small breathing room (applied only while chrome is visible) */
+  private chromeClearancePx = 54;
   private chromeResizeObserver: ResizeObserver | null = null;
   private unbindToolbarFallback: (() => void) | null = null;
   private unbindVideoEvents: (() => void) | null = null;
@@ -1129,7 +1129,7 @@ export class PipSessionController {
     this.unbindVideoEvents = null;
     this.chromeResizeObserver?.disconnect();
     this.chromeResizeObserver = null;
-    this.chromeClearancePx = 78;
+    this.chromeClearancePx = 54;
     window.clearTimeout(this.toastHideTimer);
     this.toastHideTimer = 0;
     window.clearTimeout(this.togglePersistTimer);
@@ -1222,20 +1222,14 @@ export class PipSessionController {
       this.unbindToolbarFallback = bindToolbarFocusgroupFallback(bar, win);
     }
 
-    // Dynamically track #ueh-chrome height so wrapped toolbar rows never cover subtitles or popovers
+    // Dynamically track #ueh-chrome height so when visible it lifts subtitles just enough to clear it
     const updateChromeClearance = () => {
       if (!chromeEl || !stage) return;
       const h = Math.round(chromeEl.getBoundingClientRect().height || chromeEl.offsetHeight || 0);
-      const nextClearance = Math.max(78, h + 10);
+      const nextClearance = h > 0 ? Math.max(46, h + 5) : 54;
       if (nextClearance !== this.chromeClearancePx) {
         this.chromeClearancePx = nextClearance;
         stage.style.setProperty('--ueh-chrome-h', `${nextClearance}px`);
-        const layer = doc.getElementById('ueh-sub-layer');
-        const en = doc.getElementById('ueh-sub-en');
-        const tr = doc.getElementById('ueh-sub-tr');
-        if (layer && en && tr && this.getRenderedCue()) {
-          this.applyPipSubtitleLayout(layer, en, tr);
-        }
       }
     };
     this.chromeResizeObserver?.disconnect();
@@ -1248,9 +1242,13 @@ export class PipSessionController {
     }
     updateChromeClearance();
 
-    // Show chrome while interacting (use PiP window timers so backgrounded opener tab never stalls it)
+    // Show chrome on real pointer activity; auto-hide promptly on idle or pointer leave
+    // so subtitles stay near the bottom edge during normal viewing.
     let hideTimer = 0;
     let pointerInsideChrome = false;
+    let lastMoveX = -999;
+    let lastMoveY = -999;
+
     chromeEl?.addEventListener('pointerenter', () => {
       pointerInsideChrome = true;
       win.clearTimeout(hideTimer);
@@ -1258,32 +1256,49 @@ export class PipSessionController {
     });
     chromeEl?.addEventListener('pointerleave', () => {
       pointerInsideChrome = false;
-      scheduleHideChrome();
+      scheduleHideChrome(1600);
     });
 
-    const scheduleHideChrome = () => {
+    const scheduleHideChrome = (delayMs = 2000) => {
       win.clearTimeout(hideTimer);
       hideTimer = win.setTimeout(() => {
         const settingsOpen = doc
           .getElementById('ueh-pip-settings')
           ?.classList.contains('ueh-open');
-        if (pointerInsideChrome || settingsOpen || this.video?.paused) return;
+        if (pointerInsideChrome || settingsOpen) return;
         root?.classList.remove('ueh-show-chrome');
-      }, 2800);
+      }, delayMs);
     };
 
-    const showChrome = () => {
+    const showChrome = (delayMs = 2000) => {
       const now = performance.now();
-      if (now - this.lastChromeShowMs >= 100) {
+      if (now - this.lastChromeShowMs >= 90 || !root?.classList.contains('ueh-show-chrome')) {
         this.lastChromeShowMs = now;
         root?.classList.add('ueh-show-chrome');
       }
-      scheduleHideChrome();
+      scheduleHideChrome(delayMs);
     };
-    root?.addEventListener('pointermove', showChrome, { passive: true });
-    root?.addEventListener('pointerdown', showChrome, { passive: true });
-    root?.addEventListener('focusin', showChrome);
-    showChrome();
+
+    root?.addEventListener(
+      'pointermove',
+      (e) => {
+        const pe = e as PointerEvent;
+        if (Math.abs(pe.clientX - lastMoveX) + Math.abs(pe.clientY - lastMoveY) < 2) {
+          return;
+        }
+        lastMoveX = pe.clientX;
+        lastMoveY = pe.clientY;
+        showChrome(2000);
+      },
+      { passive: true },
+    );
+    root?.addEventListener('pointerdown', () => showChrome(2400), { passive: true });
+    root?.addEventListener('pointerleave', () => {
+      pointerInsideChrome = false;
+      scheduleHideChrome(250);
+    });
+    root?.addEventListener('focusin', () => showChrome(2600));
+    showChrome(1800);
 
     // Light-dismiss settings panel when clicking outside #ueh-pip-settings and settings button
     doc.addEventListener('click', (e) => {
@@ -1545,7 +1560,7 @@ export class PipSessionController {
     if (layout) layout.value = ps.style?.layout ?? 'stacked';
     if (pos) pos.value = ps.style?.translationPosition ?? 'below';
     if (anchor) anchor.value = ps.position?.anchor ?? 'bottom';
-    if (offset) offset.value = String(ps.position?.percent ?? 12);
+    if (offset) offset.value = String(ps.position?.percent ?? 5);
     if (scale) scale.value = String(ps.style?.main.fontScale ?? 85);
     if (bg) bg.value = String(ps.style?.container.backgroundOpacity ?? 60);
     this.updatePipScaleLabels(doc);
@@ -1619,11 +1634,15 @@ export class PipSessionController {
         },
         container: {
           ...prev.style.container,
-          backgroundOpacity: Number(bg.value) || 60,
+          backgroundOpacity: Number.isFinite(Number(bg.value))
+            ? Number(bg.value)
+            : 60,
         },
       },
       position: {
-        percent: Number(offset?.value) || 12,
+        percent: Number.isFinite(Number(offset?.value))
+          ? Number(offset!.value)
+          : 5,
         anchor: (anchor?.value === 'top' ? 'top' : 'bottom') as 'top' | 'bottom',
       },
     };
@@ -2331,15 +2350,12 @@ export class PipSessionController {
       translationPosition: surface.style?.translationPosition,
       position: surface.position,
     });
-    const baseBottomPx = Math.max(78, this.chromeClearancePx);
-    const stackedBottomPx =
-      placement.layout === 'stacked' && placement.stackAnchor === 'bottom'
-        ? Math.max(baseBottomPx, baseBottomPx + placement.percent * 1.2)
-        : null;
+    // Use CSS variable `--ueh-sub-bottom-safe` (6px when bottom bar is hidden,
+    // `--ueh-chrome-h` when bottom bar is visible) so bottom subtitles stay
+    // low and natural during viewing and smoothly lift only when controls appear.
     applySubtitleLayerLayout(layer, en, tr, {
       placement,
-      bottomExtraPx: baseBottomPx,
-      stackedBottomPx,
+      bottomFloorCss: 'var(--ueh-sub-bottom-safe, 6px)',
     });
   }
 

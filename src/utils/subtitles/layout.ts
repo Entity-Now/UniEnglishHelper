@@ -98,9 +98,13 @@ export interface ApplySubtitleLayerLayoutOpts {
    */
   bottomExtraPx?: number;
   /**
-   * Prefer % for page overlay; PiP may pass true to use px for stacked bottom.
-   * When true and stacked+bottom: bottom = max(bottomExtraPx, bottomExtraPx - 8 + percent*1.2) style.
-   * Keep simple: stacked bottom uses `bottom: max(bottomExtraPx, percent as soft)`.
+   * Optional CSS length/var expression used as dynamic minimum bottom clearance
+   * (e.g. `var(--ueh-sub-bottom-safe, 6px)` so CSS transitions smoothly lift
+   * subtitles only while auto-hiding controls are visible).
+   */
+  bottomFloorCss?: string;
+  /**
+   * Explicit px override for stacked bottom anchor when needed.
    */
   stackedBottomPx?: number | null;
 }
@@ -108,6 +112,7 @@ export interface ApplySubtitleLayerLayoutOpts {
 function clearEdge(el: HTMLElement): void {
   el.style.top = '';
   el.style.bottom = '';
+  el.style.removeProperty('--ueh-sub-pct');
   el.style.left = '';
   el.style.right = '';
   el.style.position = '';
@@ -120,6 +125,7 @@ function pinEdge(
   edge: SubtitleEdge,
   percent: number,
   bottomExtraPx: number,
+  bottomFloorCss?: string,
 ): void {
   el.style.position = 'absolute';
   el.style.left = '50%';
@@ -131,8 +137,11 @@ function pinEdge(
     el.style.bottom = 'auto';
   } else {
     el.style.top = 'auto';
-    // Keep clear of player chrome when bottomExtraPx is set
-    if (bottomExtraPx > 0) {
+    if (bottomFloorCss) {
+      const clampedPct = Math.max(0, percent);
+      el.style.setProperty('--ueh-sub-pct', `${clampedPct}%`);
+      el.style.bottom = `max(${bottomFloorCss}, ${clampedPct}%)`;
+    } else if (bottomExtraPx > 0) {
       el.style.bottom = `max(${bottomExtraPx}px, ${percent}%)`;
     } else {
       el.style.bottom = `${percent}%`;
@@ -152,6 +161,7 @@ export function applySubtitleLayerLayout(
 ): void {
   const { placement } = opts;
   const bottomExtraPx = Math.max(0, opts.bottomExtraPx ?? 0);
+  const bottomFloorCss = opts.bottomFloorCss?.trim() || '';
   const stackedBottomPx =
     opts.stackedBottomPx != null && Number.isFinite(opts.stackedBottomPx)
       ? Math.max(0, opts.stackedBottomPx)
@@ -204,12 +214,14 @@ export function applySubtitleLayerLayout(
       placement.originalEdge,
       placement.percent,
       placement.originalEdge === 'bottom' ? bottomExtraPx : 0,
+      placement.originalEdge === 'bottom' ? bottomFloorCss : undefined,
     );
     pinEdge(
       translationEl,
       placement.translationEdge,
       placement.percent,
       placement.translationEdge === 'bottom' ? bottomExtraPx : 0,
+      placement.translationEdge === 'bottom' ? bottomFloorCss : undefined,
     );
     originalEl.style.pointerEvents = 'auto';
     translationEl.style.pointerEvents = 'auto';
@@ -236,8 +248,14 @@ export function applySubtitleLayerLayout(
   layer.style.transform = '';
 
   if (placement.stackAnchor === 'top') {
+    layer.style.removeProperty('--ueh-sub-pct');
     layer.style.top = `${placement.percent}%`;
     layer.style.bottom = 'auto';
+  } else if (bottomFloorCss) {
+    const clampedPct = Math.max(0, placement.percent);
+    layer.style.top = 'auto';
+    layer.style.setProperty('--ueh-sub-pct', `${clampedPct}%`);
+    layer.style.bottom = `max(${bottomFloorCss}, ${clampedPct}%)`;
   } else if (stackedBottomPx != null) {
     layer.style.top = 'auto';
     layer.style.bottom = `${stackedBottomPx}px`;

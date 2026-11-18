@@ -845,7 +845,7 @@ function PipStyleSubtitlePreview(props: {
                 bottom: 'auto',
               }
             : {
-                bottom: `${Math.max(10, Math.min(46, 8 + appearance.placement.percent))}%`,
+                bottom: `${Math.max(2, appearance.placement.percent)}%`,
                 top: 'auto',
               }),
         };

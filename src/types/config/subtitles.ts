@@ -146,7 +146,7 @@ export const DEFAULT_PIP_SUBTITLE_SURFACE: SubtitleSurfaceConfig = {
     },
     container: { backgroundOpacity: 48 },
   },
-  position: { percent: 12, anchor: 'bottom' },
+  position: { percent: 5, anchor: 'bottom' },
 };
 
 export const DEFAULT_SUBTITLES_STYLE: SubtitlesStyle = {
