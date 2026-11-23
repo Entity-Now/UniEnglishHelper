@@ -36,7 +36,7 @@ export function TranslationPage(props: {
           }
         >
           <option value="free_mt">免费 MT（推荐）</option>
-          <option value="official_llm">LLM（OpenAI 兼容）</option>
+          <option value="official_llm">LLM（OpenAI / Anthropic / 本地模型）</option>
           <option value="google_free">仅 Google</option>
           <option value="microsoft_free">仅 Microsoft</option>
           <option value="mymemory_free">仅 MyMemory</option>

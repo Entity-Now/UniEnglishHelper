@@ -266,6 +266,8 @@ export const DEFAULT_WEBPAGE_TRANSLATE: WebPageTranslateConfig = {
   translationColor: '',
 };
 
+export type LlmProtocol = 'openai' | 'anthropic' | 'ollama';
+
 export interface AppConfig {
   configVersion: number;
   targetLang: string;
@@ -293,6 +295,8 @@ export interface AppConfig {
     translationProviderId?: string;
     apiKeys: Record<string, string>;
     baseUrls?: Record<string, string>;
+    /** Per-provider wire protocol override ('openai' | 'anthropic' | 'ollama'). */
+    protocols?: Record<string, LlmProtocol>;
     /** Disable thinking/reasoning mode by default (e.g. Gemma, DeepSeek, Gemini). Defaults to true. */
     disableThinking?: boolean;
   };
@@ -414,6 +418,7 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
     translationProviderId: '',
     apiKeys: {},
     baseUrls: {},
+    protocols: {},
     disableThinking: true,
   },
   tts: {

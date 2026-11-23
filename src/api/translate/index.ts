@@ -1,7 +1,12 @@
 import { getTranslationCache, putTranslationCache } from '../../db';
 import { simpleKey } from '../../utils/hash';
 import type { AppConfig } from '../../shared/domain/types';
-import { chatCompletion, hasLlmCredentials } from '../ai-provider';
+import {
+  chatCompletion,
+  hasLlmCredentials,
+  isLocalLlmEndpoint,
+  resolveBaseUrl,
+} from '../ai-provider';
 import type { FreeMtProviderId } from './types';
 import {
   FREE_MT_PROVIDERS,
@@ -64,14 +69,23 @@ function resolveFreeProvider(config: AppConfig): FreeMtProviderId {
   }
 }
 
-function engineCacheTag(config: AppConfig): string {
-  if (config.translateEngine === 'official_llm' && !freeMtEnabled(config)) {
+function engineCacheTag(config: AppConfig, useLlm: boolean): string {
+  if (useLlm) {
     const effectiveModel = config.ai.translationModel?.trim() || config.ai.model;
     const effectiveProviderId = config.ai.translationProviderId?.trim() || config.ai.providerId;
     return `llm:${effectiveProviderId}:${effectiveModel}`;
   }
   return `free:${resolveFreeProvider(config)}`;
 }
+
+/**
+ * In-flight deduplication map for concurrent LLM translation requests
+ * (e.g. rapid video seek + prefetch requesting the same cue simultaneously).
+ */
+const inFlightLlmTranslations = new Map<
+  string,
+  Promise<{ text: string; cached: boolean; engine: string }>
+>();
 
 /**
  * Translate one string with free providers (failover).
@@ -244,13 +258,21 @@ export async function translateTexts(
 
   const srcKey = src.toLowerCase();
   const dstKey = dst.toLowerCase();
-  const tag = engineCacheTag(config).toLowerCase();
+  const willUseLlm = useLlm && hasLlmKey && !(preferFree || forceFree);
+  const tag = engineCacheTag(config, willUseLlm).toLowerCase();
   const results: { id: string; text: string; provider?: string }[] = [];
   const miss: TranslateItem[] = [];
 
-  for (const item of texts) {
-    const key = simpleKey(srcKey, dstKey, tag, item.text);
-    const cached = await getTranslationCache(key);
+  // Parallelize IndexedDB cache lookups instead of sequential awaits
+  const cacheEntries = await Promise.all(
+    texts.map(async (item) => {
+      const key = simpleKey(srcKey, dstKey, tag, item.text);
+      const cached = await getTranslationCache(key);
+      return { item, cached };
+    }),
+  );
+
+  for (const { item, cached } of cacheEntries) {
     if (cached && cached.engine !== 'passthrough') {
       results.push({
         id: item.id,
@@ -268,12 +290,14 @@ export async function translateTexts(
     const preferred = resolveFreeProvider(config);
     try {
       const batch = await translateFreeBatch(miss, src, dst, preferred);
+      const writes: Promise<unknown>[] = [];
       for (const item of batch) {
         const origText = miss.find((m) => m.id === item.id)?.text ?? '';
         const key = simpleKey(srcKey, dstKey, tag, origText);
-        await putTranslationCache(key, src, dst, item.provider, item.text);
+        writes.push(putTranslationCache(key, src, dst, item.provider, item.text));
         results.push(item);
       }
+      await Promise.all(writes);
       return orderLike(texts, results);
     } catch (err) {
       // If free failed and LLM is available, fall through
@@ -283,24 +307,59 @@ export async function translateTexts(
     }
   }
 
-  // LLM path (bounded concurrency = 3 to avoid head-of-line blocking without flooding local/API servers)
-  const CONCURRENCY = 3;
+  // LLM path: deduplicate identical texts in the batch + in-flight requests,
+  // and adapt concurrency (2 for local single-GPU servers, 4 for cloud APIs).
+  const activeProviderId = hasLlmCredentials(config, effectiveProviderId)
+    ? effectiveProviderId
+    : config.ai.providerId;
+  const isLocal = isLocalLlmEndpoint(resolveBaseUrl(config, activeProviderId));
+  const CONCURRENCY = isLocal ? 2 : 4;
+
+  // Group miss items by identical text so duplicates only trigger 1 LLM request
+  const textGroups = new Map<string, TranslateItem[]>();
+  for (const item of miss) {
+    const group = textGroups.get(item.text);
+    if (group) {
+      group.push(item);
+    } else {
+      textGroups.set(item.text, [item]);
+    }
+  }
+  const uniqueTexts = Array.from(textGroups.keys());
+  const llmTag = engineCacheTag(config, true).toLowerCase();
+  const cacheWrites: Promise<unknown>[] = [];
+
   let cursor = 0;
   const runWorker = async () => {
-    while (cursor < miss.length) {
+    while (cursor < uniqueTexts.length) {
       const idx = cursor++;
-      const item = miss[idx]!;
-      const res = await translateWithLlm(item.text, src, dst, config);
-      if (res.cached && res.engine !== 'passthrough') {
-        const key = simpleKey(srcKey, dstKey, tag, item.text);
-        await putTranslationCache(key, src, dst, res.engine, res.text);
+      const text = uniqueTexts[idx]!;
+      const cacheKey = simpleKey(srcKey, dstKey, llmTag, text);
+
+      let promise = inFlightLlmTranslations.get(cacheKey);
+      if (!promise) {
+        promise = translateWithLlm(text, src, dst, config).finally(() => {
+          inFlightLlmTranslations.delete(cacheKey);
+        });
+        inFlightLlmTranslations.set(cacheKey, promise);
       }
-      results.push({ id: item.id, text: res.text, provider: res.engine });
+
+      const res = await promise;
+      if (res.cached && res.engine !== 'passthrough') {
+        cacheWrites.push(putTranslationCache(cacheKey, src, dst, res.engine, res.text));
+      }
+      const group = textGroups.get(text) ?? [];
+      for (const item of group) {
+        results.push({ id: item.id, text: res.text, provider: res.engine });
+      }
     }
   };
   await Promise.all(
-    Array.from({ length: Math.min(CONCURRENCY, miss.length) }, () => runWorker()),
+    Array.from({ length: Math.min(CONCURRENCY, uniqueTexts.length) }, () => runWorker()),
   );
+  if (cacheWrites.length > 0) {
+    await Promise.all(cacheWrites);
+  }
 
   return orderLike(texts, results);
 }

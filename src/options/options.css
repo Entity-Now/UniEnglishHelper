@@ -950,8 +950,13 @@ input[type='number'] {
   border: 1px solid color-mix(in srgb, #3ddc97 38%, transparent);
 }
 
-.llm-model-card input {
+.llm-model-card input,
+.llm-model-card select {
   margin-bottom: 0;
+}
+
+.llm-model-select {
+  font-size: 13px;
 }
 
 .llm-model-desc {
@@ -984,7 +989,57 @@ input[type='number'] {
   font-size: 12px;
 }
 
-.llm-connection-field input {
+.llm-connection-field input,
+.llm-connection-field select {
   margin-bottom: 0;
+}
+
+.llm-scan-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: var(--rf-radius);
+  background: color-mix(in srgb, var(--rf-card) 55%, var(--rf-background));
+  border: 1px dashed var(--rf-border);
+}
+
+.llm-scan-status {
+  min-width: 0;
+  flex: 1;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.llm-scan-badge {
+  display: inline-block;
+  word-break: break-word;
+}
+
+.llm-scan-badge.success {
+  color: #3ddc97;
+}
+
+.llm-scan-badge.error {
+  color: #ff6b6b;
+}
+
+.llm-scan-badge.scanning,
+.llm-scan-badge.idle {
+  color: var(--rf-muted-foreground);
+}
+
+.llm-scan-btn {
+  flex-shrink: 0;
+  padding: 5px 12px;
+  font-size: 12px;
+  margin: 0;
+}
+
+.llm-subprovider-box {
+  padding-top: 4px;
+  border-top: 1px solid color-mix(in srgb, var(--rf-border) 60%, transparent);
 }
 

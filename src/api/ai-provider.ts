@@ -1,72 +1,96 @@
-import type { AppConfig, WordExplainResult } from '../shared/domain/types';
+import type { AppConfig, LlmProtocol, WordExplainResult } from '../shared/domain/types';
 import { AppError } from '../shared/messages/errors';
 import { getWordExplainPrompt } from '../utils/prompts/word-explain';
 import { translateFree } from './translate';
 import {
+  combineAbortSignals,
   isLlmCircuitOpen,
   LLM_RETRY_TIMEOUT_MS,
   LLM_WORD_EXPLAIN_TIMEOUT_MS,
   recordLlmFailure,
   recordLlmSuccess,
   resetLlmCircuit,
-  withAbortTimeout,
   withStreamingTimeout,
 } from './llm-circuit';
+import {
+  buildChatEndpointUrl,
+  buildProtocolHeaders,
+  buildProtocolRequestBody,
+  extractNonStreamText,
+  isLocalLlmEndpoint,
+  parseStreamLine,
+  resolveBaseUrl,
+  resolveProtocol,
+} from './llm-protocols';
+
+export {
+  clearModelScanCache,
+  fetchProviderModels,
+  getProviderPreset,
+  isLocalLlmEndpoint,
+  LLM_PROTOCOL_LABELS,
+  LLM_PROVIDER_PRESETS,
+  resolveBaseUrl,
+  resolveProtocol,
+} from './llm-protocols';
+export type {
+  DiscoveredModel,
+  LlmProviderPreset,
+  ModelScanResult,
+} from './llm-protocols';
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
 }
 
-const KNOWN_PROVIDER_BASE_URLS: Record<string, string> = {
-  openai: 'https://api.openai.com/v1',
-  'openai-compatible': 'https://api.openai.com/v1',
-  deepseek: 'https://api.deepseek.com/v1',
-  siliconflow: 'https://api.siliconflow.cn/v1',
-  openrouter: 'https://openrouter.ai/api/v1',
-  gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
-  ollama: 'http://localhost:11434/v1',
-  local: 'http://localhost:11434/v1',
-};
+/**
+ * Capability caches to avoid paying repeat 400/422 or broken-SSE round-trips
+ * on every single request for the same endpoint + model.
+ */
+const MAX_CAPABILITY_CACHE_SIZE = 128;
+const NON_STREAM_FALLBACK_TTL_MS = 10 * 60_000;
+const thinkingParamRejectedCache = new Set<string>();
+const nonStreamFallbackCache = new Map<string, number>();
 
-export function resolveBaseUrl(config: AppConfig, providerId: string): string {
-  const configured = config.ai.baseUrls?.[providerId]?.trim().replace(/\/$/, '');
-  const fallback =
-    KNOWN_PROVIDER_BASE_URLS[providerId.trim().toLowerCase()] ||
-    'https://api.openai.com/v1';
-  let baseUrl = configured || fallback;
-
-  // Auto-correct common baseUrls missing /v1
-  if (baseUrl.includes('api.deepseek.com') && !baseUrl.endsWith('/v1')) {
-    baseUrl += '/v1';
-  } else if (baseUrl.includes('api.openai.com') && !baseUrl.endsWith('/v1')) {
-    baseUrl += '/v1';
-  } else if (baseUrl.includes('api.anthropic.com') && !baseUrl.endsWith('/v1')) {
-    baseUrl += '/v1';
-  } else if (
-    (baseUrl.includes('localhost') ||
-      baseUrl.includes('127.0.0.1') ||
-      baseUrl.includes('0.0.0.0')) &&
-    !baseUrl.endsWith('/v1') &&
-    !baseUrl.endsWith('/api')
-  ) {
-    baseUrl += '/v1';
-  }
-  return baseUrl;
+function makeCapabilityKey(protocol: LlmProtocol, baseUrl: string, model: string): string {
+  return `${protocol}|${baseUrl.toLowerCase()}|${model.toLowerCase()}`;
 }
 
-export function isLocalLlmEndpoint(baseUrl: string): boolean {
-  const lower = baseUrl.toLowerCase();
-  return (
-    lower.includes('localhost') ||
-    lower.includes('127.0.0.1') ||
-    lower.includes('0.0.0.0')
-  );
+function rememberThinkingRejected(key: string): void {
+  if (thinkingParamRejectedCache.size >= MAX_CAPABILITY_CACHE_SIZE) {
+    const oldest = thinkingParamRejectedCache.values().next().value;
+    if (oldest) thinkingParamRejectedCache.delete(oldest);
+  }
+  thinkingParamRejectedCache.add(key);
+}
+
+function rememberNonStreamFallback(key: string): void {
+  if (nonStreamFallbackCache.size >= MAX_CAPABILITY_CACHE_SIZE) {
+    const oldest = nonStreamFallbackCache.keys().next().value;
+    if (oldest) nonStreamFallbackCache.delete(oldest);
+  }
+  nonStreamFallbackCache.set(key, Date.now() + NON_STREAM_FALLBACK_TTL_MS);
+}
+
+function shouldSkipStream(key: string): boolean {
+  const until = nonStreamFallbackCache.get(key);
+  if (!until) return false;
+  if (until <= Date.now()) {
+    nonStreamFallbackCache.delete(key);
+    return false;
+  }
+  return true;
+}
+
+export function clearLlmCapabilityCaches(): void {
+  thinkingParamRejectedCache.clear();
+  nonStreamFallbackCache.clear();
 }
 
 /**
  * True when the provider either has a configured API key or targets a local
- * OpenAI-compatible server (Ollama, LM Studio, vLLM, LiteRT-LM) that needs no key.
+ * inference server (Ollama, LM Studio, Splash, vLLM, LiteRT-LM) that needs no key.
  */
 export function hasLlmCredentials(
   config: AppConfig,
@@ -80,10 +104,11 @@ export function hasLlmCredentials(
 
 /**
  * Strip thinking tags (<think>...</think>, <thought>...</thought>) and internal reasoning blocks
- * from model outputs.
+ * from model outputs. Uses a fast-path check to skip regex work when no tags are present.
  */
 export function stripThinkingTags(text: string): string {
   if (!text) return '';
+  if (!text.includes('<')) return text.trim();
   return text
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
     .replace(/<thought>[\s\S]*?<\/thought>/gi, '')
@@ -101,67 +126,12 @@ export function buildChatRequestBody(
     disableThinking?: boolean;
     model?: string;
     providerId?: string;
+    protocol?: LlmProtocol;
+    maxTokens?: number;
   },
   omitThinkingParams = false,
 ): Record<string, unknown> {
-  const providerId = opts?.providerId || config.ai.providerId;
-  const baseUrl = resolveBaseUrl(config, providerId).toLowerCase();
-  const effectiveModel = opts?.model || config.ai.model || '';
-  const model = effectiveModel.toLowerCase();
-  const stream = opts?.stream ?? true;
-  const disableThinking =
-    opts?.disableThinking ?? (config.ai.disableThinking !== false);
-
-  const body: Record<string, unknown> = {
-    model: effectiveModel,
-    messages,
-    stream,
-  };
-
-  if (!model.startsWith('o1') && !model.startsWith('o3')) {
-    body.temperature = opts?.temperature ?? 0.3;
-  }
-
-  if (disableThinking && !omitThinkingParams) {
-    // 1. Google Gemini official API endpoint
-    if (
-      baseUrl.includes('generativelanguage.googleapis.com') ||
-      (providerId === 'gemini' && !baseUrl.includes('localhost') && !baseUrl.includes('127.0.0.1'))
-    ) {
-      body.thinking_config = { thinking_budget: 0 };
-    }
-
-    // 2. OpenRouter
-    if (baseUrl.includes('openrouter.ai')) {
-      body.reasoning = { effort: 'none' };
-      body.include_reasoning = false;
-    }
-
-    // 3. Ollama / LiteRT-LM / Local / vLLM / SiliconFlow / DeepSeek / Qwen / Gemma
-    if (
-      baseUrl.includes('localhost') ||
-      baseUrl.includes('127.0.0.1') ||
-      baseUrl.includes('siliconflow') ||
-      baseUrl.includes('deepseek') ||
-      model.includes('r1') ||
-      model.includes('reasoner') ||
-      model.includes('qwen') ||
-      model.includes('gemma')
-    ) {
-      // LiteRT-LM (openai_handler.py) and OpenAI-compatible endpoints recognize reasoning_effort == "none"
-      body.reasoning_effort = 'none';
-      if (baseUrl.includes('deepseek') || baseUrl.includes('siliconflow')) {
-        body.chat_template_kwargs = { thinking: false };
-      }
-    }
-
-    // 4. OpenAI o-series
-    if (model.startsWith('o1') || model.startsWith('o3') || model.startsWith('o4')) {
-      body.reasoning_effort = 'low';
-    }
-  }
-
-  return body;
+  return buildProtocolRequestBody(config, messages, opts, omitThinkingParams);
 }
 
 export function resolveEffectiveTimeoutMs(
@@ -171,13 +141,8 @@ export function resolveEffectiveTimeoutMs(
 ): number {
   const providerId = providerIdOverride || config.ai.providerId;
   const baseUrl = resolveBaseUrl(config, providerId).toLowerCase();
-  const isLocal =
-    baseUrl.includes('localhost') ||
-    baseUrl.includes('127.0.0.1') ||
-    baseUrl.includes('0.0.0.0');
-
-  if (isLocal) {
-    // Local endpoints on user computer (CPU/GPU) need more time
+  if (isLocalLlmEndpoint(baseUrl)) {
+    // Local endpoints on user computer (CPU/GPU) need more time for cold model loads
     return Math.max(requestedMs ?? 0, 60_000);
   }
   return requestedMs ?? LLM_WORD_EXPLAIN_TIMEOUT_MS;
@@ -192,6 +157,23 @@ export interface ChatCompletionOptions {
   disableThinking?: boolean;
   model?: string;
   providerId?: string;
+  protocol?: LlmProtocol;
+  maxTokens?: number;
+}
+
+function isThinkingParamRejectError(errText: string): boolean {
+  const lower = errText.toLowerCase();
+  return (
+    lower.includes('thinking') ||
+    lower.includes('think') ||
+    lower.includes('reasoning') ||
+    lower.includes('chat_template_kwargs') ||
+    lower.includes('unexpected') ||
+    lower.includes('unrecognized') ||
+    lower.includes('extra fields') ||
+    lower.includes('unknown field') ||
+    lower.includes('validation')
+  );
 }
 
 export async function* chatCompletionStream(
@@ -203,50 +185,53 @@ export async function* chatCompletionStream(
     disableThinking?: boolean;
     model?: string;
     providerId?: string;
+    protocol?: LlmProtocol;
+    maxTokens?: number;
   },
 ): AsyncGenerator<string> {
   const providerId = opts?.providerId || config.ai.providerId;
-  const baseUrl = resolveBaseUrl(config, providerId);
-  const isLocal =
-    baseUrl.includes('localhost') ||
-    baseUrl.includes('127.0.0.1') ||
-    baseUrl.includes('0.0.0.0');
-  const apiKey = config.ai.apiKeys[providerId] || (isLocal ? 'local-key' : '');
-  if (!apiKey) {
+  const protocol = opts?.protocol ?? resolveProtocol(config, providerId);
+  const baseUrl = resolveBaseUrl(config, providerId, protocol);
+  const isLocal = isLocalLlmEndpoint(baseUrl);
+  const rawApiKey = (config.ai.apiKeys?.[providerId] || '').trim();
+  if (!rawApiKey && !isLocal) {
     throw new AppError('AI_FAILED', 'API key not configured for provider: ' + providerId);
   }
+
+  const effectiveModel = opts?.model || config.ai.model || '';
+  const capKey = makeCapabilityKey(protocol, baseUrl, effectiveModel);
+  const endpoint = buildChatEndpointUrl(baseUrl, protocol);
+  const headers = buildProtocolHeaders(protocol, rawApiKey, isLocal);
   const signal = opts?.signal;
 
-  let requestBody = buildChatRequestBody(config, messages, {
-    temperature: opts?.temperature,
-    stream: true,
-    disableThinking: opts?.disableThinking,
-    model: opts?.model,
-    providerId,
-  });
-
-  let res = await fetch(`${baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
+  const initiallyOmitThinking = thinkingParamRejectedCache.has(capKey);
+  let requestBody = buildChatRequestBody(
+    config,
+    messages,
+    {
+      temperature: opts?.temperature,
+      stream: true,
+      disableThinking: opts?.disableThinking,
+      model: effectiveModel,
+      providerId,
+      protocol,
+      maxTokens: opts?.maxTokens,
     },
+    initiallyOmitThinking,
+  );
+
+  let res = await fetch(endpoint, {
+    method: 'POST',
+    headers,
     body: JSON.stringify(requestBody),
     signal,
   });
 
-  // If server rejected thinking parameters (HTTP 400 or 422), retry once cleanly
-  if (!res.ok && (res.status === 400 || res.status === 422)) {
+  // If server rejected thinking parameters (HTTP 400 or 422), retry once cleanly and remember
+  if (!res.ok && (res.status === 400 || res.status === 422) && !initiallyOmitThinking) {
     const errText = await res.text().catch(() => '');
-    const isParamReject =
-      errText.includes('thinking') ||
-      errText.includes('reasoning') ||
-      errText.includes('chat_template_kwargs') ||
-      errText.includes('unexpected') ||
-      errText.includes('unrecognized') ||
-      errText.includes('extra fields') ||
-      errText.includes('validation');
-    if (isParamReject) {
+    if (isThinkingParamRejectError(errText)) {
+      rememberThinkingRejected(capKey);
       requestBody = buildChatRequestBody(
         config,
         messages,
@@ -254,17 +239,16 @@ export async function* chatCompletionStream(
           temperature: opts?.temperature,
           stream: true,
           disableThinking: false,
-          model: opts?.model,
+          model: effectiveModel,
           providerId,
+          protocol,
+          maxTokens: opts?.maxTokens,
         },
         true,
       );
-      res = await fetch(`${baseUrl}/chat/completions`, {
+      res = await fetch(endpoint, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
-        },
+        headers,
         body: JSON.stringify(requestBody),
         signal,
       });
@@ -282,49 +266,28 @@ export async function* chatCompletionStream(
   const decoder = new TextDecoder();
   let buffer = '';
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() ?? '';
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith('data:')) continue;
-      const data = trimmed.slice(5).trim();
-      if (data === '[DONE]') return;
-      try {
-        const json = JSON.parse(data) as {
-          choices?: {
-            delta?: {
-              content?: string;
-              reasoning_content?: string;
-              text?: string;
-            };
-            text?: string;
-          }[];
-        };
-        const delta = json.choices?.[0]?.delta;
-        const chunk = delta?.content ?? delta?.text ?? json.choices?.[0]?.text;
-        if (!chunk) continue;
-
-        yield chunk;
-      } catch {
-        // ignore partial JSON
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      for (const line of lines) {
+        const parsed = parseStreamLine(protocol, line);
+        if (parsed.text) yield parsed.text;
+        if (parsed.done) return;
       }
     }
-  }
 
-  // Process remaining buffer chunk if present
-  if (buffer.trim().startsWith('data:')) {
-    const data = buffer.trim().slice(5).trim();
-    if (data && data !== '[DONE]') {
-      try {
-        const json = JSON.parse(data) as { choices?: { delta?: { content?: string } }[] };
-        const chunk = json.choices?.[0]?.delta?.content;
-        if (chunk) yield chunk;
-      } catch {}
+    // Flush any remaining decoder bytes and trailing buffer line
+    buffer += decoder.decode();
+    if (buffer.trim()) {
+      const parsed = parseStreamLine(protocol, buffer);
+      if (parsed.text) yield parsed.text;
     }
+  } finally {
+    reader.releaseLock();
   }
 }
 
@@ -334,33 +297,42 @@ export async function chatCompletion(
   opts?: ChatCompletionOptions,
 ): Promise<string> {
   const providerId = opts?.providerId || config.ai.providerId;
-  const baseUrl = resolveBaseUrl(config, providerId);
-  const isLocal =
-    baseUrl.includes('localhost') ||
-    baseUrl.includes('127.0.0.1') ||
-    baseUrl.includes('0.0.0.0');
-  const apiKey = config.ai.apiKeys[providerId] || (isLocal ? 'local-key' : '');
-  if (!apiKey) {
+  const protocol = opts?.protocol ?? resolveProtocol(config, providerId);
+  const baseUrl = resolveBaseUrl(config, providerId, protocol);
+  const isLocal = isLocalLlmEndpoint(baseUrl);
+  const rawApiKey = (config.ai.apiKeys?.[providerId] || '').trim();
+  if (!rawApiKey && !isLocal) {
     throw new AppError('AI_FAILED', 'API key not configured for provider: ' + providerId);
   }
 
+  const effectiveModel = opts?.model || config.ai.model || '';
+  const capKey = makeCapabilityKey(protocol, baseUrl, effectiveModel);
+  const endpoint = buildChatEndpointUrl(baseUrl, protocol);
+  const headers = buildProtocolHeaders(protocol, rawApiKey, isLocal);
+
   const run = async (signal?: AbortSignal, notifyActivity?: () => void) => {
-    // By default, use streaming SSE so response starts immediately (avoiding proxy buffer timeouts)
-    const useStream = opts?.stream !== false;
+    // By default, use streaming SSE/NDJSON so response starts immediately (avoiding proxy buffer timeouts),
+    // unless this endpoint previously failed streaming and is in non-stream fallback cache.
+    const useStream = opts?.stream !== false && !shouldSkipStream(capKey);
     if (useStream) {
       try {
         let fullText = '';
+        const hasChunkListener = typeof opts?.onChunk === 'function';
         for await (const chunk of chatCompletionStream(config, messages, {
           temperature: opts?.temperature,
           signal,
           disableThinking: opts?.disableThinking,
-          model: opts?.model,
+          model: effectiveModel,
           providerId,
+          protocol,
+          maxTokens: opts?.maxTokens,
         })) {
           fullText += chunk;
           notifyActivity?.();
-          const visibleText = stripThinkingTags(fullText);
-          opts?.onChunk?.(chunk, visibleText);
+          if (hasChunkListener) {
+            const visibleText = stripThinkingTags(fullText);
+            opts.onChunk!(chunk, visibleText);
+          }
         }
         const cleaned = stripThinkingTags(fullText).trim();
         if (cleaned) return cleaned;
@@ -372,38 +344,40 @@ export async function chatCompletion(
           throw streamErr;
         }
         // If streaming fails due to proxy/SSE incompatibility, fall back to non-stream fetch
+        // and remember briefly so subsequent requests avoid wasted stream round-trips
+        rememberNonStreamFallback(capKey);
         console.warn('[UEH] stream chat failed, falling back to non-stream', streamErr);
       }
     }
 
-    // Non-streaming fallback
-    let requestBody = buildChatRequestBody(config, messages, {
-      temperature: opts?.temperature,
-      stream: false,
-      disableThinking: opts?.disableThinking,
-      model: opts?.model,
-      providerId,
-    });
-
-    let res = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
+    // Non-streaming path
+    const initiallyOmitThinking = thinkingParamRejectedCache.has(capKey);
+    let requestBody = buildChatRequestBody(
+      config,
+      messages,
+      {
+        temperature: opts?.temperature,
+        stream: false,
+        disableThinking: opts?.disableThinking,
+        model: effectiveModel,
+        providerId,
+        protocol,
+        maxTokens: opts?.maxTokens,
       },
+      initiallyOmitThinking,
+    );
+
+    let res = await fetch(endpoint, {
+      method: 'POST',
+      headers,
       body: JSON.stringify(requestBody),
       signal,
     });
 
-    if (!res.ok && res.status === 400) {
+    if (!res.ok && (res.status === 400 || res.status === 422) && !initiallyOmitThinking) {
       const errText = await res.text().catch(() => '');
-      if (
-        errText.includes('thinking') ||
-        errText.includes('reasoning') ||
-        errText.includes('chat_template_kwargs') ||
-        errText.includes('unexpected') ||
-        errText.includes('unrecognized')
-      ) {
+      if (isThinkingParamRejectError(errText)) {
+        rememberThinkingRejected(capKey);
         requestBody = buildChatRequestBody(
           config,
           messages,
@@ -411,20 +385,24 @@ export async function chatCompletion(
             temperature: opts?.temperature,
             stream: false,
             disableThinking: false,
-            model: opts?.model,
+            model: effectiveModel,
             providerId,
+            protocol,
+            maxTokens: opts?.maxTokens,
           },
           true,
         );
-        res = await fetch(`${baseUrl}/chat/completions`, {
+        res = await fetch(endpoint, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${apiKey}`,
-          },
+          headers,
           body: JSON.stringify(requestBody),
           signal,
         });
+      } else {
+        throw new AppError(
+          'AI_FAILED',
+          `LLM HTTP ${res.status}: ${errText.slice(0, 200)}`,
+        );
       }
     }
 
@@ -436,11 +414,9 @@ export async function chatCompletion(
       );
     }
 
-    const json = (await res.json()) as {
-      choices?: { message?: { content?: string } }[];
-    };
-    const rawText = json.choices?.[0]?.message?.content?.trim();
-    const text = stripThinkingTags(rawText || '');
+    const json = (await res.json()) as unknown;
+    const rawText = extractNonStreamText(protocol, json);
+    const text = stripThinkingTags(rawText);
     if (!text) throw new AppError('AI_FAILED', 'Empty LLM response');
     opts?.onChunk?.(text, text);
     return text;
@@ -449,7 +425,14 @@ export async function chatCompletion(
   if (opts?.timeoutMs && opts.timeoutMs > 0) {
     return withStreamingTimeout(
       opts.timeoutMs,
-      (signal, notifyActivity) => run(opts.signal ?? signal, notifyActivity),
+      async (timeoutSignal, notifyActivity) => {
+        const { signal, cleanup } = combineAbortSignals(opts.signal, timeoutSignal);
+        try {
+          return await run(signal, notifyActivity);
+        } finally {
+          cleanup();
+        }
+      },
       Math.max(25_000, Math.floor(opts.timeoutMs / 2)),
     );
   }
@@ -832,11 +815,12 @@ export async function explainWord(
   context: string,
   options?: ExplainWordOptions,
 ): Promise<WordExplainResult> {
+  const providerId = config.ai.providerId || '__default__';
   const hasKey = hasLlmCredentials(config);
   if (options?.resetCircuit || options?.forceLlm) {
-    resetLlmCircuit();
+    resetLlmCircuit(providerId);
   }
-  const circuitOpen = options?.forceLlm ? false : isLlmCircuitOpen();
+  const circuitOpen = options?.forceLlm ? false : isLlmCircuitOpen(Date.now(), providerId);
 
   const freeNoteNoKey = '未配置 AI API Key，已使用免费翻译';
   const freeNoteCircuit = 'AI 暂时不可用（已熔断），已使用免费翻译';
@@ -887,12 +871,12 @@ export async function explainWord(
       signal: options?.signal,
       onChunk: options?.onChunk,
     });
-    recordLlmSuccess();
+    recordLlmSuccess(providerId);
     return res;
   } catch (err) {
     if (options?.signal?.aborted) throw err;
     const llmErr = err instanceof Error ? err : new Error(String(err));
-    recordLlmFailure();
+    recordLlmFailure(Date.now(), providerId);
     console.warn('[UEH] AI explain failed, falling back to free MT', llmErr.message);
 
     const free = await tryFreeFallback(freeNoteFail);

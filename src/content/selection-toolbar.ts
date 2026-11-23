@@ -1,6 +1,9 @@
 /**
  * Floating selection toolbar (translate / TTS / dictionary / add word / AI Skills).
- * Compact icon bar anchored under the selection start.
+ * Compact icon bar anchored under the selection start, with Doubao-inspired UX:
+ * - Pin / unpin window (stays open across outside clicks & scrolls; updates in-place on new selections)
+ * - Drag-to-move handle + viewport-safe clamping
+ * - Result panel with quick Copy, Retry, TTS, collapsible long source text, and Markdown rendering
  * Skills reuse the shared Skill 体系 (skill.list / skill.run).
  */
 
@@ -33,13 +36,28 @@ const DEFAULT_EXCLUDED_SKILL_IDS = new Set<string>([
 /** Max skill chips on the bar before folding into 「更多」 */
 const MAX_SKILL_CHIPS = 4;
 
+/** Collapse source text preview when longer than this many characters */
+const LONG_ORIG_THRESHOLD = 120;
+
 const EXTRA_SVG = {
   translate:
     '<path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/>',
   close:
     '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
   more: '<circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/>',
+  pin: '<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>',
+  grip: '<circle cx="9" cy="6" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="6" r="1.2" fill="currentColor" stroke="none"/><circle cx="9" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="9" cy="18" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="18" r="1.2" fill="currentColor" stroke="none"/>',
+  copy: '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  check: '<polyline points="20 6 9 17 4 12"/>',
+  retry: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
 } as const;
+
+type ActivePanelMode =
+  | { type: 'translate' }
+  | { type: 'explain' }
+  | { type: 'addWord' }
+  | { type: 'skill'; skill: SkillRecord }
+  | null;
 
 export class SelectionToolbar {
   private host: HTMLElement | null = null;
@@ -50,24 +68,60 @@ export class SelectionToolbar {
   private skills: SkillRecord[] = [];
   private skillsLoadedAt = 0;
   private skillMenuOpen = false;
+  private isPinned = false;
+  private userPositioned = false;
+  private activeMode: ActivePanelMode = null;
+  private lastResultText = '';
+  private boundMouseDown: (e: MouseEvent) => void;
   private boundMouseUp: (e: MouseEvent) => void;
   private boundKeyDown: (e: KeyboardEvent) => void;
   private boundScroll: (e: Event) => void;
+  private boundResize: () => void;
   private unbindFullscreen: (() => void) | null = null;
   private activeExplainSession: StreamExplainSession | null = null;
+  private dragCleanup: (() => void) | null = null;
 
   constructor(config: AppConfig) {
     this.config = config;
+    this.boundMouseDown = (e) => this.onMouseDown(e);
     this.boundMouseUp = (e) => this.onMouseUp(e);
     this.boundKeyDown = (e) => this.onKeyDown(e);
     this.boundScroll = (e) => this.onScroll(e);
+    this.boundResize = () => this.clampWrapInViewport();
+  }
+
+  private isVisible(): boolean {
+    const wrap = this.shadow?.getElementById('wrap') as HTMLElement | null;
+    return Boolean(wrap && wrap.style.display !== 'none' && wrap.style.display !== '');
+  }
+
+  private isEventInsideHost(e: Event): boolean {
+    if (!this.host) return false;
+    const path = e.composedPath?.() ?? [];
+    if (path.includes(this.host)) return true;
+    const target = e.target as Node | null;
+    if (target && this.host.contains(target)) return true;
+    if ((target as Element | null)?.closest?.(`#${HOST_ID}`)) return true;
+    return false;
+  }
+
+  private onMouseDown(e: MouseEvent): void {
+    if (!this.isVisible()) return;
+    if (this.isEventInsideHost(e)) return;
+    if (this.skillMenuOpen) {
+      this.closeSkillMenu();
+    }
+    // Unpinned window auto-dismisses immediately when clicking anywhere outside
+    if (!this.isPinned) {
+      this.hide();
+    }
   }
 
   private onScroll(e: Event): void {
-    if (!this.shadow) return;
+    if (!this.shadow || !this.isVisible()) return;
+    if (this.isPinned) return;
     // Never dismiss when scrolling inside the toolbar's own panel / skill menu
-    const path = e.composedPath?.() ?? [];
-    if (this.host && path.includes(this.host)) return;
+    if (this.isEventInsideHost(e)) return;
     // Keep open while user is actively reading an open result panel or skill menu
     const panel = this.shadow.getElementById('panel');
     if (panel?.classList.contains('open') || this.skillMenuOpen) return;
@@ -83,16 +137,22 @@ export class SelectionToolbar {
   }
 
   start(): void {
+    document.addEventListener('mousedown', this.boundMouseDown, true);
     document.addEventListener('mouseup', this.boundMouseUp, true);
     document.addEventListener('keydown', this.boundKeyDown, true);
     window.addEventListener('scroll', this.boundScroll, true);
+    window.addEventListener('resize', this.boundResize);
     void this.refreshSkills();
   }
 
   stop(): void {
+    document.removeEventListener('mousedown', this.boundMouseDown, true);
     document.removeEventListener('mouseup', this.boundMouseUp, true);
     document.removeEventListener('keydown', this.boundKeyDown, true);
     window.removeEventListener('scroll', this.boundScroll, true);
+    window.removeEventListener('resize', this.boundResize);
+    this.dragCleanup?.();
+    this.dragCleanup = null;
     this.activeExplainSession?.abort();
     this.activeExplainSession = null;
     this.unbindFullscreen?.();
@@ -100,6 +160,10 @@ export class SelectionToolbar {
     this.host?.remove();
     this.host = null;
     this.shadow = null;
+    this.isPinned = false;
+    this.userPositioned = false;
+    this.activeMode = null;
+    this.lastResultText = '';
   }
 
   triggerTranslateForSelection(text?: string): void {
@@ -220,56 +284,137 @@ export class SelectionToolbar {
     this.shadow.innerHTML = `
       <style>
         :host { all: initial; }
+        @keyframes ueh-pop-in {
+          from {
+            opacity: 0;
+            transform: translateY(-3px) scale(0.97);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+          }
+        }
         .wrap {
           position: fixed;
           pointer-events: none;
           display: none;
           flex-direction: column;
           align-items: flex-start;
-          gap: 4px;
-          max-width: min(340px, 94vw);
+          gap: 5px;
+          max-width: min(380px, 94vw);
           opacity: var(--ueh-sel-opacity, 1);
+          animation: ueh-pop-in 0.14s ease-out;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .wrap { animation: none; }
+        }
+        .wrap.dragging {
+          user-select: none;
+          cursor: grabbing;
+        }
+        .wrap.pinned .bar,
+        .wrap.pinned .panel {
+          border-color: color-mix(in srgb, oklch(76% 0.12 82) 48%, rgba(255,255,255,.16));
+          box-shadow: 0 10px 28px rgba(0,0,0,.46), 0 0 0 1px color-mix(in srgb, oklch(76% 0.12 82) 18%, transparent);
         }
         .bar {
           pointer-events: auto;
           display: inline-flex;
           gap: 2px;
           align-items: center;
-          padding: 2px;
-          border-radius: 8px;
-          background: rgba(16,17,22,.96);
-          border: 1px solid rgba(255,255,255,.12);
-          box-shadow: 0 8px 24px rgba(0,0,0,.38);
+          padding: 3px 4px;
+          border-radius: 10px;
+          background: rgba(16,17,22,.94);
+          backdrop-filter: blur(12px);
+          -webkit-backdrop-filter: blur(12px);
+          border: 1px solid rgba(255,255,255,.13);
+          box-shadow: 0 8px 24px rgba(0,0,0,.4);
           font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
           color: #f5f5f5;
-          max-width: min(340px, 94vw);
+          max-width: min(380px, 94vw);
           overflow-x: auto;
           scrollbar-width: none;
+          transition: border-color 0.15s ease, box-shadow 0.15s ease;
         }
         .bar::-webkit-scrollbar { display: none; }
-        ${ICON_BTN_CSS}
-        .bar .ueh-ibtn {
-          width: 22px;
+        .drag-handle {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 14px;
           height: 22px;
-          border-radius: 6px;
+          cursor: grab;
+          color: rgba(255,255,255,.35);
+          flex-shrink: 0;
+          border-radius: 4px;
+          transition: color 0.12s ease, background 0.12s ease;
+        }
+        .drag-handle:hover {
+          color: rgba(255,255,255,.75);
           background: rgba(255,255,255,.08);
         }
+        .drag-handle:active { cursor: grabbing; }
+        .drag-handle svg {
+          width: 12px;
+          height: 12px;
+        }
+        .bar-sep {
+          width: 1px;
+          height: 14px;
+          background: rgba(255,255,255,.12);
+          margin: 0 2px;
+          flex-shrink: 0;
+        }
+        ${ICON_BTN_CSS}
+        .bar .ueh-ibtn {
+          width: 24px;
+          height: 24px;
+          border-radius: 6px;
+          background: rgba(255,255,255,.07);
+          transition: background 0.12s ease, color 0.12s ease, transform 0.1s ease;
+        }
         .bar .ueh-ibtn:hover { background: rgba(255,255,255,.16); }
+        .bar .ueh-ibtn:active { transform: scale(0.94); }
         .bar .ueh-ibtn svg {
-          width: 11px;
-          height: 11px;
-          stroke-width: 2.25;
+          width: 12px;
+          height: 12px;
+          stroke-width: 2.2;
         }
         .bar .ueh-ibtn.primary {
           background: oklch(76% 0.12 82);
           color: #1a1a1a;
         }
+        .bar .ueh-ibtn.primary:hover {
+          background: oklch(81% 0.13 82);
+        }
+        .bar .ueh-ibtn.active:not(.primary):not(.pin) {
+          background: color-mix(in srgb, oklch(76% 0.12 82) 32%, rgba(255,255,255,.12));
+          color: oklch(92% 0.08 82);
+          box-shadow: inset 0 0 0 1px color-mix(in srgb, oklch(76% 0.12 82) 55%, transparent);
+        }
         .bar .ueh-ibtn.skill {
-          background: color-mix(in srgb, oklch(76% 0.12 82) 28%, rgba(255,255,255,.06));
+          background: color-mix(in srgb, oklch(76% 0.12 82) 22%, rgba(255,255,255,.06));
           color: oklch(90% 0.06 82);
         }
         .bar .ueh-ibtn.skill:hover {
-          background: color-mix(in srgb, oklch(76% 0.12 82) 45%, transparent);
+          background: color-mix(in srgb, oklch(76% 0.12 82) 40%, transparent);
+        }
+        .bar .ueh-ibtn.pin {
+          background: transparent;
+          color: rgba(255,255,255,.65);
+        }
+        .bar .ueh-ibtn.pin:hover {
+          color: #fff;
+          background: rgba(255,255,255,.12);
+        }
+        .bar .ueh-ibtn.pin.pinned {
+          background: color-mix(in srgb, oklch(76% 0.12 82) 28%, transparent);
+          color: oklch(84% 0.13 82);
+          box-shadow: inset 0 0 0 1px color-mix(in srgb, oklch(76% 0.12 82) 55%, transparent);
+        }
+        .bar .ueh-ibtn.pin.pinned svg {
+          fill: color-mix(in srgb, oklch(84% 0.13 82) 35%, transparent);
+          transform: rotate(-28deg);
         }
         .bar .ueh-ibtn.close {
           background: transparent;
@@ -277,19 +422,20 @@ export class SelectionToolbar {
         }
         .bar .ueh-ibtn.close:hover {
           opacity: 1;
-          background: rgba(255,255,255,.12);
+          background: rgba(255,90,90,.2);
+          color: #ff9b9b;
         }
         .bar .ueh-ibtn.chip {
           width: auto;
-          min-width: 22px;
-          height: 22px;
-          padding: 0 5px;
-          font-size: 10px;
+          min-width: 24px;
+          height: 24px;
+          padding: 0 6px;
+          font-size: 10.5px;
           font-weight: 700;
           gap: 3px;
         }
         .bar .ueh-ibtn.chip span {
-          max-width: 64px;
+          max-width: 68px;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
@@ -299,15 +445,17 @@ export class SelectionToolbar {
           display: none;
           flex-direction: column;
           gap: 2px;
-          min-width: 148px;
+          min-width: 152px;
           max-width: min(260px, 90vw);
           max-height: 220px;
           overflow: auto;
-          padding: 3px;
-          border-radius: 8px;
-          background: rgba(16,17,22,.98);
-          border: 1px solid rgba(255,255,255,.12);
-          box-shadow: 0 8px 24px rgba(0,0,0,.4);
+          padding: 4px;
+          border-radius: 10px;
+          background: rgba(16,17,22,.96);
+          backdrop-filter: blur(12px);
+          -webkit-backdrop-filter: blur(12px);
+          border: 1px solid rgba(255,255,255,.13);
+          box-shadow: 0 10px 26px rgba(0,0,0,.44);
           font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
         }
         .skill-menu.open { display: flex; }
@@ -318,7 +466,7 @@ export class SelectionToolbar {
           color: #f0f0f0;
           text-align: left;
           padding: 5px 8px;
-          font-size: 11px;
+          font-size: 11.5px;
           font-weight: 600;
           cursor: pointer;
           display: flex;
@@ -342,47 +490,153 @@ export class SelectionToolbar {
         .panel {
           pointer-events: auto;
           display: none;
-          width: max-content;
-          max-width: min(340px, 94vw);
-          max-height: min(280px, 48vh);
-          overflow: auto;
-          padding: 8px 10px;
-          border-radius: 10px;
-          background: rgba(16,17,22,.97);
-          border: 1px solid rgba(255,255,255,.12);
-          box-shadow: 0 8px 24px rgba(0,0,0,.38);
-          font-size: 12px;
-          line-height: 1.45;
+          width: min(360px, 92vw);
+          max-width: min(380px, 94vw);
+          max-height: min(320px, 52vh);
+          overflow: hidden;
+          flex-direction: column;
+          border-radius: 12px;
+          background: rgba(16,17,22,.95);
+          backdrop-filter: blur(14px);
+          -webkit-backdrop-filter: blur(14px);
+          border: 1px solid rgba(255,255,255,.13);
+          box-shadow: 0 12px 32px rgba(0,0,0,.44);
+          font-size: 12.5px;
+          line-height: 1.5;
           color: #f0f0f0;
           font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
           overscroll-behavior: contain;
+          transition: border-color 0.15s ease, box-shadow 0.15s ease;
         }
-        .panel.open { display: block; }
+        .panel.open { display: flex; }
+        .panel-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          padding: 6px 10px;
+          border-bottom: 1px solid rgba(255,255,255,.08);
+          background: rgba(255,255,255,.03);
+          cursor: grab;
+          flex-shrink: 0;
+        }
+        .panel-head:active { cursor: grabbing; }
+        .panel-title-wrap {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          min-width: 0;
+        }
+        .panel-title {
+          font-size: 11.5px;
+          font-weight: 700;
+          color: rgba(255,255,255,.88);
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .panel-pin-tag {
+          display: none;
+          font-size: 10px;
+          font-weight: 600;
+          padding: 1px 5px;
+          border-radius: 999px;
+          background: color-mix(in srgb, oklch(76% 0.12 82) 22%, transparent);
+          color: oklch(86% 0.11 82);
+          white-space: nowrap;
+        }
+        .wrap.pinned .panel-pin-tag { display: inline-block; }
+        .panel-actions {
+          display: inline-flex;
+          align-items: center;
+          gap: 3px;
+          flex-shrink: 0;
+        }
+        .panel-act-btn {
+          border: 0;
+          background: rgba(255,255,255,.06);
+          color: rgba(255,255,255,.76);
+          border-radius: 6px;
+          height: 22px;
+          padding: 0 6px;
+          display: inline-flex;
+          align-items: center;
+          gap: 3px;
+          font-size: 10.5px;
+          font-weight: 600;
+          cursor: pointer;
+          font-family: inherit;
+          transition: background 0.12s ease, color 0.12s ease;
+        }
+        .panel-act-btn:hover {
+          background: rgba(255,255,255,.15);
+          color: #fff;
+        }
+        .panel-act-btn.copied {
+          background: rgba(61, 220, 151, 0.2);
+          color: #5ee6ad;
+        }
+        .panel-act-btn svg {
+          width: 11px;
+          height: 11px;
+          fill: none;
+          stroke: currentColor;
+          stroke-width: 2.2;
+          stroke-linecap: round;
+          stroke-linejoin: round;
+        }
+        .panel-scroll {
+          padding: 9px 11px 11px;
+          overflow: auto;
+          overscroll-behavior: contain;
+        }
         .panel .label {
           font-size: 10px;
           font-weight: 700;
           letter-spacing: .02em;
           opacity: .5;
           margin-bottom: 2px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+        }
+        .panel .orig-wrap {
+          margin-bottom: 6px;
         }
         .panel .orig {
           white-space: pre-wrap;
           word-break: break-word;
-          color: rgba(255,255,255,.88);
-          margin-bottom: 6px;
+          color: rgba(255,255,255,.82);
+          font-size: 12px;
         }
+        .panel .orig.clamped {
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
+          overflow: hidden;
+        }
+        .panel .orig-toggle {
+          border: 0;
+          background: transparent;
+          color: oklch(82% 0.1 82);
+          font-size: 10.5px;
+          padding: 2px 0 0;
+          cursor: pointer;
+          font-family: inherit;
+        }
+        .panel .orig-toggle:hover { text-decoration: underline; }
         .panel .tr, .panel .result {
           white-space: pre-wrap;
           word-break: break-word;
-          color: oklch(88% 0.08 82);
+          color: oklch(89% 0.08 82);
           font-weight: 500;
         }
         .panel .body {
           word-break: break-word;
         }
         .panel .md-body {
-          font: 12px/1.5 system-ui, -apple-system, sans-serif;
-          color: #e0e0e0;
+          font: 12.5px/1.55 system-ui, -apple-system, sans-serif;
+          color: #e6e6e6;
           word-break: break-word;
         }
         .panel .md-body h1,
@@ -399,7 +653,7 @@ export class SelectionToolbar {
         .panel .md-body strong { color: #fff; font-weight: 600; }
         .panel .md-body em { color: oklch(88% 0.08 82); }
         .panel .md-body ul, .panel .md-body ol { margin: 3px 0; padding-left: 16px; }
-        .panel .md-body li { margin: 1px 0; }
+        .panel .md-body li { margin: 2px 0; }
         .panel .md-body code {
           font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
           font-size: 11px;
@@ -410,16 +664,16 @@ export class SelectionToolbar {
         }
         .panel .loading-hint {
           color: #aaa;
-          font-size: 11px;
+          font-size: 11.5px;
           display: flex;
           align-items: center;
           gap: 5px;
         }
-        .panel .muted { opacity: .55; font-size: 11px; }
+        .panel .muted { opacity: .55; font-size: 11.5px; }
         .panel .divider {
           height: 1px;
           background: rgba(255,255,255,.08);
-          margin: 6px 0;
+          margin: 7px 0;
         }
       </style>
       <div class="wrap" id="wrap">
@@ -432,13 +686,98 @@ export class SelectionToolbar {
     return this.shadow;
   }
 
+  private setPinned(next: boolean): void {
+    this.isPinned = next;
+    const wrap = this.shadow?.getElementById('wrap');
+    wrap?.classList.toggle('pinned', next);
+    const pinBtn = this.shadow?.querySelector('.ueh-ibtn.pin') as HTMLButtonElement | null;
+    if (pinBtn) {
+      pinBtn.classList.toggle('pinned', next);
+      pinBtn.setAttribute('aria-pressed', next ? 'true' : 'false');
+      pinBtn.title = next
+        ? '取消固定（点击其他区域自动关闭）'
+        : '固定窗口（点击其他区域不消失）';
+      pinBtn.setAttribute('aria-label', pinBtn.title);
+    }
+  }
+
+  private togglePin(): void {
+    this.setPinned(!this.isPinned);
+  }
+
+  private startDrag(e: MouseEvent): void {
+    if (e.button !== 0) return;
+    const target = e.target as Element | null;
+    if (target?.closest?.('button')) return;
+    const wrap = this.shadow?.getElementById('wrap') as HTMLElement | null;
+    if (!wrap) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const rect = wrap.getBoundingClientRect();
+    const origLeft = rect.left;
+    const origTop = rect.top;
+
+    wrap.classList.add('dragging');
+    this.userPositioned = true;
+
+    const onMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      const w = wrap.offsetWidth || rect.width;
+      const h = wrap.offsetHeight || rect.height;
+      const nextLeft = Math.max(8, Math.min(window.innerWidth - w - 8, origLeft + dx));
+      const nextTop = Math.max(8, Math.min(window.innerHeight - h - 8, origTop + dy));
+      wrap.style.left = `${nextLeft}px`;
+      wrap.style.top = `${nextTop}px`;
+    };
+
+    const cleanup = () => {
+      wrap.classList.remove('dragging');
+      window.removeEventListener('mousemove', onMove, true);
+      window.removeEventListener('mouseup', cleanup, true);
+      this.dragCleanup = null;
+    };
+
+    this.dragCleanup?.();
+    this.dragCleanup = cleanup;
+    window.addEventListener('mousemove', onMove, true);
+    window.addEventListener('mouseup', cleanup, true);
+  }
+
+  private updateActiveButtonHighlight(): void {
+    const bar = this.shadow?.getElementById('bar');
+    if (!bar) return;
+    const btns = bar.querySelectorAll<HTMLButtonElement>('[data-mode]');
+    for (const btn of btns) {
+      const mode = btn.getAttribute('data-mode');
+      let isActive = false;
+      if (this.activeMode?.type === 'translate' && mode === 'translate') isActive = true;
+      else if (this.activeMode?.type === 'explain' && mode === 'explain') isActive = true;
+      else if (this.activeMode?.type === 'addWord' && mode === 'addWord') isActive = true;
+      else if (
+        this.activeMode?.type === 'skill' &&
+        mode === `skill:${this.activeMode.skill.id}`
+      ) {
+        isActive = true;
+      }
+      btn.classList.toggle('active', isActive);
+    }
+  }
+
   private onKeyDown(e: KeyboardEvent): void {
     if (e.key === 'Escape') {
       if (this.skillMenuOpen) {
         this.closeSkillMenu();
         return;
       }
-      this.hide();
+      // Pinned window ignores Escape so it stays anchored until unpinned or explicitly closed
+      if (!this.isPinned) {
+        this.hide();
+      }
       return;
     }
     if (!this.isToolbarAllowed()) return;
@@ -468,19 +807,17 @@ export class SelectionToolbar {
 
   private onMouseUp(e: MouseEvent): void {
     if (!this.isToolbarAllowed()) return;
-    if ((e.target as Element)?.closest?.(`#${HOST_ID}`)) return;
-    if (this.host?.contains(e.target as Node)) return;
+    if (this.isEventInsideHost(e)) return;
 
     window.clearTimeout(this.hideTimer);
     this.hideTimer = window.setTimeout(() => {
       const sel = window.getSelection();
       const text = sel?.toString().trim() ?? '';
-      if (!text || text.length > 2000) {
-        this.hide();
-        return;
-      }
-      if (!/\S/.test(text)) {
-        this.hide();
+      if (!text || text.length > 2000 || !/\S/.test(text)) {
+        // When pinned, clicking elsewhere with empty selection keeps the window open
+        if (!this.isPinned) {
+          this.hide();
+        }
         return;
       }
       const tb = this.tb();
@@ -491,22 +828,49 @@ export class SelectionToolbar {
         tb.showAddWord ||
         tb.showSkills;
       if (!hasCore) {
-        this.hide();
+        if (!this.isPinned) this.hide();
         return;
       }
+
+      const textChanged = text !== this.selectedText;
       this.selectedText = text;
+
+      // Doubao-style pinned workflow: keep window anchored in place and auto-refresh active panel
+      if (this.isPinned && this.isVisible()) {
+        if (textChanged) {
+          const panel = this.shadow?.getElementById('panel');
+          if (panel?.classList.contains('open') && this.activeMode) {
+            this.rerunActiveMode(panel);
+          }
+        }
+        return;
+      }
+
       const range = sel?.rangeCount ? sel.getRangeAt(0) : null;
       if (!range) {
-        this.hide();
+        if (!this.isPinned) this.hide();
         return;
       }
       const startRect = getSelectionStartRect(range);
       if (!startRect) {
-        this.hide();
+        if (!this.isPinned) this.hide();
         return;
       }
       void this.showAtAsync(startRect.left, startRect.bottom);
     }, 10);
+  }
+
+  private rerunActiveMode(panel: HTMLElement): void {
+    if (!this.activeMode) return;
+    if (this.activeMode.type === 'translate') {
+      void this.runTranslate(panel);
+    } else if (this.activeMode.type === 'explain') {
+      void this.runExplain(panel);
+    } else if (this.activeMode.type === 'skill') {
+      void this.runSkill(panel, this.activeMode.skill);
+    } else if (this.activeMode.type === 'addWord') {
+      void this.runAddWord(panel);
+    }
   }
 
   private async showAtAsync(x: number, y: number): Promise<void> {
@@ -530,25 +894,34 @@ export class SelectionToolbar {
     skillMenu.classList.remove('open');
     skillMenu.innerHTML = '';
 
+    // Drag handle for effortless repositioning (especially when pinned)
+    const grip = document.createElement('span');
+    grip.className = 'drag-handle';
+    grip.title = '拖动移动窗口';
+    grip.setAttribute('aria-label', '拖动移动窗口');
+    grip.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${EXTRA_SVG.grip}</svg>`;
+    grip.addEventListener('mousedown', (e) => this.startDrag(e));
+    bar.appendChild(grip);
+
     if (tb.showTranslate) {
-      bar.appendChild(
-        this.mkIconBtn(
-          EXTRA_SVG.translate,
-          '翻译',
-          'primary',
-          () => void this.runTranslate(panel),
-        ),
+      const btn = this.mkIconBtn(
+        EXTRA_SVG.translate,
+        '翻译',
+        'primary',
+        () => void this.runTranslate(panel),
       );
+      btn.setAttribute('data-mode', 'translate');
+      bar.appendChild(btn);
     }
     if (tb.showDictionary) {
-      bar.appendChild(
-        this.mkIconBtn(
-          UI_ICON_SVG.explain,
-          '词典',
-          '',
-          () => void this.runExplain(panel),
-        ),
+      const btn = this.mkIconBtn(
+        UI_ICON_SVG.explain,
+        '词典 / 释义',
+        '',
+        () => void this.runExplain(panel),
       );
+      btn.setAttribute('data-mode', 'explain');
+      bar.appendChild(btn);
     }
     if (tb.showTts) {
       bar.appendChild(
@@ -556,14 +929,14 @@ export class SelectionToolbar {
       );
     }
     if (tb.showAddWord) {
-      bar.appendChild(
-        this.mkIconBtn(
-          UI_ICON_SVG.add,
-          '生词',
-          '',
-          () => void this.runAddWord(panel),
-        ),
+      const btn = this.mkIconBtn(
+        UI_ICON_SVG.add,
+        '加入生词本',
+        '',
+        () => void this.runAddWord(panel),
       );
+      btn.setAttribute('data-mode', 'addWord');
+      bar.appendChild(btn);
     }
 
     // AI Skills (inherit Skill 体系)
@@ -573,12 +946,12 @@ export class SelectionToolbar {
       const rest = toolbarSkills.slice(MAX_SKILL_CHIPS);
 
       for (const skill of head) {
-        bar.appendChild(
-          this.mkSkillChip(skill, () => {
-            this.closeSkillMenu();
-            void this.runSkill(panel, skill);
-          }),
-        );
+        const chip = this.mkSkillChip(skill, () => {
+          this.closeSkillMenu();
+          void this.runSkill(panel, skill);
+        });
+        chip.setAttribute('data-mode', `skill:${skill.id}`);
+        bar.appendChild(chip);
       }
 
       if (rest.length > 0) {
@@ -587,12 +960,8 @@ export class SelectionToolbar {
             this.toggleSkillMenu(skillMenu, rest, panel);
           }),
         );
-        // Prebuild overflow items when opened
-      } else if (toolbarSkills.length > 1) {
-        // Optional overflow still useful for long names — skip if all shown
       }
     } else if (tb.showSkills) {
-      // No skills loaded yet — entry to open menu with empty state
       bar.appendChild(
         this.mkIconBtn(
           UI_ICON_SVG.skill,
@@ -608,32 +977,62 @@ export class SelectionToolbar {
       );
     }
 
+    // Visual divider before window controls (Pin + Close)
+    const sep = document.createElement('span');
+    sep.className = 'bar-sep';
+    sep.setAttribute('aria-hidden', 'true');
+    bar.appendChild(sep);
+
+    const pinBtn = this.mkIconBtn(
+      EXTRA_SVG.pin,
+      this.isPinned
+        ? '取消固定（点击其他区域自动关闭）'
+        : '固定窗口（点击其他区域不消失）',
+      `pin${this.isPinned ? ' pinned' : ''}`,
+      () => this.togglePin(),
+    );
+    pinBtn.setAttribute('aria-pressed', this.isPinned ? 'true' : 'false');
+    bar.appendChild(pinBtn);
+
     bar.appendChild(
       this.mkIconBtn(EXTRA_SVG.close, '关闭', 'close', () => this.hide()),
     );
 
-    panel.classList.remove('open');
-    panel.innerHTML = '';
-
-    const gap = 4;
-    wrap.style.display = 'flex';
-    wrap.style.left = '0px';
-    wrap.style.top = '0px';
-    const barW = Math.max(bar.offsetWidth || 120, 120);
-    const left = Math.max(8, Math.min(window.innerWidth - barW - 8, x));
-    let top = y + gap;
-    const approxH = 36;
-    if (top + approxH > window.innerHeight - 8) {
-      top = Math.max(8, y - approxH - gap);
+    if (!this.isPinned) {
+      panel.classList.remove('open');
+      panel.innerHTML = '';
+      this.activeMode = null;
+      this.lastResultText = '';
+    } else {
+      this.updateActiveButtonHighlight();
     }
-    wrap.style.left = `${left}px`;
-    wrap.style.top = `${top}px`;
+
+    wrap.classList.toggle('pinned', this.isPinned);
+    wrap.style.display = 'flex';
+
+    // Preserve user's dragged/pinned coordinates when already positioned
+    if (!this.isPinned || !this.userPositioned) {
+      const gap = 6;
+      wrap.style.left = '0px';
+      wrap.style.top = '0px';
+      const barW = Math.max(bar.offsetWidth || 160, 160);
+      const left = Math.max(8, Math.min(window.innerWidth - barW - 8, x));
+      let top = y + gap;
+      const approxH = 38;
+      if (top + approxH > window.innerHeight - 8) {
+        top = Math.max(8, y - approxH - gap);
+      }
+      wrap.style.left = `${left}px`;
+      wrap.style.top = `${top}px`;
+    } else {
+      this.clampWrapInViewport();
+    }
   }
 
-  /** Keep #wrap inside the viewport when .panel or .skill-menu expands downward. */
+  /** Keep #wrap inside the viewport when .panel or .skill-menu expands downward or window resizes. */
   private clampWrapInViewport(): void {
     const wrap = this.shadow?.getElementById('wrap') as HTMLElement | null;
-    if (!wrap || wrap.style.display === 'none') return;
+    if (!wrap || wrap.style.display === 'none' || wrap.style.display === '') return;
     const rect = wrap.getBoundingClientRect();
     const vw = window.innerWidth;
     const vh = window.innerHeight;
@@ -744,13 +1143,179 @@ export class SelectionToolbar {
     return b;
   }
 
+  private mkPanelActionBtn(
+    svgInner: string,
+    text: string,
+    title: string,
+    onClick: (btn: HTMLButtonElement) => void,
+  ): HTMLButtonElement {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'panel-act-btn';
+    b.title = title;
+    b.setAttribute('aria-label', title);
+    b.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${svgInner}</svg><span>${text}</span>`;
+    b.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    b.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      onClick(b);
+    });
+    return b;
+  }
+
+  private async copyText(text: string, btn: HTMLButtonElement): Promise<void> {
+    const value = text.trim();
+    if (!value) return;
+    let ok = false;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+        ok = true;
+      }
+    } catch {
+      ok = false;
+    }
+    if (!ok) {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = value;
+        ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none;';
+        document.body.appendChild(ta);
+        ta.select();
+        ok = document.execCommand('copy');
+        ta.remove();
+      } catch {
+        ok = false;
+      }
+    }
+    if (ok) {
+      btn.classList.add('copied');
+      const origHtml = btn.innerHTML;
+      btn.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${EXTRA_SVG.check}</svg><span>已复制</span>`;
+      window.setTimeout(() => {
+        btn.classList.remove('copied');
+        btn.innerHTML = origHtml;
+      }, 1400);
+    }
+  }
+
+  /**
+   * Build the standardized result panel chrome: draggable header with title + Copy/Retry/TTS actions,
+   * collapsible original text preview, and body container.
+   */
+  private mountPanelShell(
+    panel: HTMLElement,
+    opts: {
+      title: string;
+      origText: string;
+      showCopy?: boolean;
+      showRetry?: boolean;
+      onRetry?: () => void;
+    },
+  ): HTMLElement {
+    panel.classList.add('open');
+    panel.innerHTML = '';
+
+    const head = document.createElement('div');
+    head.className = 'panel-head';
+    head.addEventListener('mousedown', (e) => this.startDrag(e));
+
+    const titleWrap = document.createElement('div');
+    titleWrap.className = 'panel-title-wrap';
+    const titleEl = document.createElement('span');
+    titleEl.className = 'panel-title';
+    titleEl.textContent = opts.title;
+    const pinTag = document.createElement('span');
+    pinTag.className = 'panel-pin-tag';
+    pinTag.textContent = '已固定';
+    titleWrap.append(titleEl, pinTag);
+
+    const actions = document.createElement('div');
+    actions.className = 'panel-actions';
+
+    if (opts.showCopy !== false) {
+      actions.appendChild(
+        this.mkPanelActionBtn(EXTRA_SVG.copy, '复制', '复制结果', (btn) => {
+          void this.copyText(this.lastResultText, btn);
+        }),
+      );
+    }
+    if (opts.showRetry && opts.onRetry) {
+      actions.appendChild(
+        this.mkPanelActionBtn(EXTRA_SVG.retry, '重试', '重新生成', () => {
+          opts.onRetry?.();
+        }),
+      );
+    }
+
+    head.append(titleWrap, actions);
+
+    const scroll = document.createElement('div');
+    scroll.className = 'panel-scroll';
+
+    const origLabel = document.createElement('div');
+    origLabel.className = 'label';
+    origLabel.textContent = '原文';
+
+    const origWrap = document.createElement('div');
+    origWrap.className = 'orig-wrap';
+    const origEl = document.createElement('div');
+    origEl.className = 'orig';
+    origEl.textContent = opts.origText;
+    origWrap.appendChild(origEl);
+
+    if (opts.origText.length > LONG_ORIG_THRESHOLD) {
+      origEl.classList.add('clamped');
+      const toggleBtn = document.createElement('button');
+      toggleBtn.type = 'button';
+      toggleBtn.className = 'orig-toggle';
+      toggleBtn.textContent = '展开全文';
+      toggleBtn.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      });
+      toggleBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const clamped = origEl.classList.toggle('clamped');
+        toggleBtn.textContent = clamped ? '展开全文' : '收起';
+        this.clampWrapInViewport();
+      });
+      origWrap.appendChild(toggleBtn);
+    }
+
+    const divider = document.createElement('div');
+    divider.className = 'divider';
+
+    const body = document.createElement('div');
+    body.className = 'body';
+
+    scroll.append(origLabel, origWrap, divider, body);
+    panel.append(head, scroll);
+    this.clampWrapInViewport();
+    return body;
+  }
+
   private hide(): void {
+    this.dragCleanup?.();
+    this.dragCleanup = null;
     this.activeExplainSession?.abort();
     this.activeExplainSession = null;
+    this.isPinned = false;
+    this.userPositioned = false;
+    this.activeMode = null;
+    this.lastResultText = '';
     if (!this.shadow) return;
     this.skillMenuOpen = false;
     const wrap = this.shadow.getElementById('wrap');
-    if (wrap) wrap.style.display = 'none';
+    if (wrap) {
+      wrap.classList.remove('pinned', 'dragging');
+      wrap.style.display = 'none';
+    }
   }
 
   private async runSkill(
@@ -759,6 +1324,10 @@ export class SelectionToolbar {
   ): Promise<void> {
     this.activeExplainSession?.abort();
     this.activeExplainSession = null;
+    this.activeMode = { type: 'skill', skill };
+    this.lastResultText = '';
+    this.updateActiveButtonHighlight();
+
     const orig = this.selectedText;
     const context = [
       document.title ? `页面：${document.title}` : '',
@@ -767,19 +1336,14 @@ export class SelectionToolbar {
       .filter(Boolean)
       .join('\n');
 
-    panel.classList.add('open');
-    panel.innerHTML = `
-      <div class="label">原文</div>
-      <div class="orig"></div>
-      <div class="divider"></div>
-      <div class="label"></div>
-      <div class="result muted">运行中…</div>
-    `;
-    const origEl = panel.querySelector('.orig') as HTMLElement;
-    const labelEl = panel.querySelectorAll('.label')[1] as HTMLElement;
-    const resultEl = panel.querySelector('.result') as HTMLElement;
-    if (origEl) origEl.textContent = orig;
-    if (labelEl) labelEl.textContent = skill.name;
+    const body = this.mountPanelShell(panel, {
+      title: skill.name,
+      origText: orig,
+      showCopy: true,
+      showRetry: true,
+      onRetry: () => void this.runSkill(panel, skill),
+    });
+    body.innerHTML = '<div class="loading-hint"><span>⏳</span> AI 指令运行中…</div>';
 
     const res = await sendRuntime<{ text: string }>(
       'skill.run',
@@ -791,12 +1355,16 @@ export class SelectionToolbar {
       'content',
     );
 
-    if (!resultEl) return;
-    resultEl.classList.remove('muted');
+    if (!body.isConnected) return;
     if (res.ok) {
-      resultEl.textContent = res.data.text?.trim() || '（空结果）';
+      const text = res.data.text?.trim() || '（空结果）';
+      this.lastResultText = text;
+      const md = document.createElement('div');
+      md.className = 'md-body';
+      renderSafeMarkdownToElement(md, text);
+      body.replaceChildren(md);
     } else {
-      resultEl.textContent = res.error.message;
+      body.textContent = res.error.message;
     }
     this.clampWrapInViewport();
   }
@@ -804,18 +1372,19 @@ export class SelectionToolbar {
   private async runTranslate(panel: HTMLElement): Promise<void> {
     this.activeExplainSession?.abort();
     this.activeExplainSession = null;
+    this.activeMode = { type: 'translate' };
+    this.lastResultText = '';
+    this.updateActiveButtonHighlight();
+
     const orig = this.selectedText;
-    panel.classList.add('open');
-    panel.innerHTML = `
-      <div class="label">原文</div>
-      <div class="orig"></div>
-      <div class="divider"></div>
-      <div class="label">译文</div>
-      <div class="tr muted">翻译中…</div>
-    `;
-    const origEl = panel.querySelector('.orig') as HTMLElement;
-    const trEl = panel.querySelector('.tr') as HTMLElement;
-    if (origEl) origEl.textContent = orig;
+    const body = this.mountPanelShell(panel, {
+      title: '译文',
+      origText: orig,
+      showCopy: true,
+      showRetry: true,
+      onRetry: () => void this.runTranslate(panel),
+    });
+    body.innerHTML = '<div class="tr muted">翻译中…</div>';
 
     const res = await sendRuntime<{ items: { id: string; text: string }[] }>(
       'translate.cues',
@@ -827,32 +1396,35 @@ export class SelectionToolbar {
       },
       'content',
     );
-    if (!trEl) return;
-    trEl.classList.remove('muted');
+    if (!body.isConnected) return;
+    const trEl = document.createElement('div');
+    trEl.className = 'tr';
     if (res.ok) {
-      trEl.textContent = res.data.items[0]?.text || '（空结果）';
+      const text = res.data.items[0]?.text || '（空结果）';
+      this.lastResultText = text;
+      trEl.textContent = text;
     } else {
       trEl.textContent = res.error.message;
     }
+    body.replaceChildren(trEl);
     this.clampWrapInViewport();
   }
 
   private async runExplain(panel: HTMLElement): Promise<void> {
     this.activeExplainSession?.abort();
+    this.activeMode = { type: 'explain' };
+    this.lastResultText = '';
+    this.updateActiveButtonHighlight();
+
     const orig = this.selectedText;
-    panel.classList.add('open');
-    panel.innerHTML = `
-      <div class="label">原文</div>
-      <div class="orig"></div>
-      <div class="divider"></div>
-      <div class="body">
-        <div class="loading-hint"><span>⏳</span> 正在连接 AI 生成释义…</div>
-      </div>
-    `;
-    const origEl = panel.querySelector('.orig') as HTMLElement;
-    const body = panel.querySelector('.body') as HTMLElement;
-    if (origEl) origEl.textContent = orig;
-    this.clampWrapInViewport();
+    const body = this.mountPanelShell(panel, {
+      title: '词典 / 释义',
+      origText: orig,
+      showCopy: true,
+      showRetry: true,
+      onRetry: () => void this.runExplain(panel),
+    });
+    body.innerHTML = '<div class="loading-hint"><span>⏳</span> 正在连接 AI 生成释义…</div>';
 
     let mdContainer: HTMLElement | null = null;
 
@@ -863,12 +1435,13 @@ export class SelectionToolbar {
         context: orig,
       },
       (_chunk, accumulated) => {
-        if (!body) return;
+        if (!body.isConnected) return;
         const clean = accumulated.trim();
         if (!clean) {
           body.innerHTML = '<div class="loading-hint"><span>🧠</span> AI 正在思考中…</div>';
           return;
         }
+        this.lastResultText = clean;
         if (!mdContainer || !body.contains(mdContainer)) {
           body.replaceChildren();
           mdContainer = document.createElement('div');
@@ -883,9 +1456,10 @@ export class SelectionToolbar {
 
     try {
       const d = await session.promise;
-      if (!body) return;
+      if (!body.isConnected) return;
       const rawMarkdown = d.explanation || (!d.definition ? d.text : '');
       if (rawMarkdown) {
+        this.lastResultText = rawMarkdown;
         const md = document.createElement('div');
         md.className = 'md-body';
         renderSafeMarkdownToElement(md, rawMarkdown);
@@ -896,11 +1470,13 @@ export class SelectionToolbar {
           d.contextTranslation ? `句子译文：${d.contextTranslation}` : '',
           d.note ? `（${d.note}）` : '',
         ].filter(Boolean);
-        body.textContent = lines.join('\n\n') || d.text || orig;
+        const text = lines.join('\n\n') || d.text || orig;
+        this.lastResultText = text;
+        body.textContent = text;
       }
       this.clampWrapInViewport();
     } catch (err: unknown) {
-      if (!body) return;
+      if (!body.isConnected) return;
       body.textContent = `查询异常: ${err instanceof Error ? err.message : String(err)}`;
     }
   }
@@ -912,7 +1488,19 @@ export class SelectionToolbar {
   private async runAddWord(panel: HTMLElement): Promise<void> {
     this.activeExplainSession?.abort();
     this.activeExplainSession = null;
+    this.activeMode = { type: 'addWord' };
+    this.lastResultText = '';
+    this.updateActiveButtonHighlight();
+
     const surface = this.selectedText.split(/\s+/).slice(0, 6).join(' ');
+    const body = this.mountPanelShell(panel, {
+      title: '生词本',
+      origText: surface,
+      showCopy: false,
+      showRetry: false,
+    });
+    body.innerHTML = '<div class="loading-hint"><span>⏳</span> 正在加入生词本…</div>';
+
     const exp = await sendRuntime<{
       definition?: string;
       contextTranslation?: string;
@@ -947,20 +1535,9 @@ export class SelectionToolbar {
       },
       'content',
     );
-    panel.classList.add('open');
-    panel.innerHTML = `
-      <div class="label">原文</div>
-      <div class="orig"></div>
-      <div class="divider"></div>
-      <div class="body"></div>
-    `;
-    const origEl = panel.querySelector('.orig') as HTMLElement;
-    const body = panel.querySelector('.body') as HTMLElement;
-    if (origEl) origEl.textContent = surface;
-    if (body) {
-      body.textContent = res.ok ? '已加入生词本' : res.error.message;
-      if (res.ok) body.style.color = 'oklch(80% 0.1 145)';
-    }
+    if (!body.isConnected) return;
+    body.textContent = res.ok ? '✓ 已加入生词本' : res.error.message;
+    if (res.ok) body.style.color = 'oklch(80% 0.1 145)';
     this.clampWrapInViewport();
   }
 }
